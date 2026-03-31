@@ -1,0 +1,122 @@
+/* Official Dracula colour palette — https://draculatheme.com/spec */
+:root {
+  /* Backgrounds */
+  --bg:         #282A36;   /* Background */
+  --bg-card:    #44475A;   /* Current Line — cards, panels, sidebar */
+  --bg-input:   #565869;   /* Slightly lighter than Current Line — inputs */
+
+  /* Dracula colours */
+  --green:      #50FA7B;
+  --pink:       #FF79C6;
+  --cyan:       #8BE9FD;
+  --purple:     #BD93F9;
+  --yellow:     #F1FA8C;
+  --white:      #F8F8F2;   /* Foreground */
+  --muted:      #6272A4;   /* Comment */
+  --red:        #FF5555;
+  --orange:     #FFB86C;
+
+  /* Semantic aliases */
+  --border:     #44475A;   /* Current Line — dividers, borders */
+
+  /* Typography */
+  --font-sans:  'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Radii */
+  --radius:     8px;
+  --radius-lg:  12px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--white);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--cyan);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+input, select, textarea {
+  font-family: inherit;
+}
+
+/* ── Responsive helpers ──────────────────────────────────────────────────── */
+
+/* Transactions table → card stack on small screens */
+@media (max-width: 700px) {
+  .tx-table-header { display: none !important; }
+  .tx-table-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+    padding: 14px 16px !important;
+  }
+  .tx-row-amount  { font-size: 17px !important; font-weight: 700 !important; }
+  .tx-row-actions { margin-top: 6px; }
+}
+
+/* Sidebar collapse on small screens */
+@media (max-width: 600px) {
+  .app-sidebar { display: none !important; }
+  .app-main    { padding: 16px !important; }
+}
+
+/* FAB quick-add button — always visible, pulls to bottom-right on mobile */
+.fab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--green);
+  color: #282A36;
+  font-size: 26px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(80, 250, 123, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.fab:hover  { transform: scale(1.08); box-shadow: 0 6px 20px rgba(80, 250, 123, 0.45); }
+.fab:active { transform: scale(0.96); }
+
+/* ── Scrollbar ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}

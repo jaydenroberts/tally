@@ -1,0 +1,16 @@
+services:
+  tally:
+    build: .
+    image: tally:latest
+    container_name: tally
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./data:/data
+      - /mnt/user/ROBEUR01-DOCS/financial-tracking:/financial-data:ro
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - ACCESS_TOKEN_EXPIRE_DAYS=${ACCESS_TOKEN_EXPIRE_DAYS:-30}
+      - FIRST_RUN_OWNER_USERNAME=${FIRST_RUN_OWNER_USERNAME:-}
+      - FIRST_RUN_OWNER_PASSWORD=${FIRST_RUN_OWNER_PASSWORD:-}
+    restart: unless-stopped

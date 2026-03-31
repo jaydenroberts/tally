@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+*.sqlite
+*.db
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# Docker
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Data
+data/
