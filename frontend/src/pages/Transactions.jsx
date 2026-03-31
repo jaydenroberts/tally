@@ -302,19 +302,6 @@ export default function Transactions() {
   const [actionError, setActionError] = useState('')
   const [reconciliation, setReconciliation] = useState(null)
 
-  // Build query params from filters + pagination
-  function buildParams(p = page) {
-    const params = new URLSearchParams()
-    params.set('skip', p * PAGE_SIZE)
-    params.set('limit', PAGE_SIZE)
-    if (filters.account_id)  params.set('account_id',  filters.account_id)
-    if (filters.category_id) params.set('category_id', filters.category_id)
-    if (filters.is_verified !== '') params.set('is_verified', filters.is_verified)
-    if (filters.date_from)   params.set('date_from',   filters.date_from)
-    if (filters.date_to)     params.set('date_to',     filters.date_to)
-    return params.toString()
-  }
-
   const load = useCallback((p = 0) => {
     setLoading(true)
     const params = new URLSearchParams()

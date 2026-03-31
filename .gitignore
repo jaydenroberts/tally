@@ -25,6 +25,9 @@ frontend/.vite/
 # Docker
 .dockerignore
 
+# Claude Code
+.claude/
+
 # IDE
 .vscode/
 .idea/
