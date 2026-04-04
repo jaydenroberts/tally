@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { useCurrency } from '../context/CurrencyContext'
 
 function StatCard({ label, value, accent }) {
   return (
@@ -17,6 +18,7 @@ function SectionHeader({ title }) {
 
 export default function Dashboard() {
   const { user } = useAuth()
+  const { formatCurrency } = useCurrency()
   const [accounts, setAccounts] = useState([])
   const [recentTx, setRecentTx] = useState([])
   const [loading, setLoading] = useState(true)
@@ -129,14 +131,6 @@ export default function Dashboard() {
       )}
     </div>
   )
-}
-
-function formatCurrency(n) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-  }).format(n)
 }
 
 const styles = {

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
@@ -127,12 +128,6 @@ function projectedPayoff(debt) {
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 
-function formatCurrency(n) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency', currency: 'USD', minimumFractionDigits: 2,
-  }).format(n ?? 0)
-}
-
 function formatDate(d) {
   if (!d) return null
   return new Date(d).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
@@ -215,7 +210,8 @@ const bar = {
 
 // ─── Debt card ────────────────────────────────────────────────────────────────
 
-function DebtCard({ debt, isOwner, onEdit, onDelete, onPayment }) {
+function DebtCard({ debt, isOwner, onEdit, onDelete, onPayment, onHistory }) {
+  const { formatCurrency } = useCurrency()
   const status    = debtStatus(debt)
   const color     = statusColor(status)
   const payoff    = projectedPayoff(debt)
@@ -252,6 +248,7 @@ function DebtCard({ debt, isOwner, onEdit, onDelete, onPayment }) {
           )}
         </div>
         <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <button style={{ ...styles.iconBtn, color: 'var(--cyan)' }} onClick={onHistory} title="Payment history">⏱</button>
           {isOwner && !debt.is_paid_off && (
             <button style={styles.iconBtn} onClick={onEdit} title="Edit">✎</button>
           )}
@@ -472,7 +469,9 @@ function DebtForm({ initial, accounts, onSave, onCancel, saving }) {
 // ─── Payment form ─────────────────────────────────────────────────────────────
 
 function PaymentForm({ debt, onSave, onCancel, saving }) {
+  const { formatCurrency } = useCurrency()
   const [amount, setAmount] = useState(debt.minimum_payment ? String(debt.minimum_payment) : '')
+  const [notes, setNotes]   = useState('')
   const [error, setError]   = useState('')
 
   function handleSubmit(e) {
@@ -480,7 +479,7 @@ function PaymentForm({ debt, onSave, onCancel, saving }) {
     const val = parseFloat(amount)
     if (isNaN(val) || val <= 0) { setError('Enter a positive amount'); return }
     setError('')
-    onSave(val)
+    onSave({ amount: val, notes: notes.trim() || null })
   }
 
   return (
@@ -502,6 +501,15 @@ function PaymentForm({ debt, onSave, onCancel, saving }) {
         />
       </FormField>
 
+      <FormField label="Notes" hint="Optional — e.g. 'Direct debit' or 'Extra payment'">
+        <input
+          style={inputStyle}
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Optional note"
+        />
+      </FormField>
+
       {error && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
@@ -512,10 +520,81 @@ function PaymentForm({ debt, onSave, onCancel, saving }) {
   )
 }
 
+// ─── Payment history modal ─────────────────────────────────────────────────────
+
+function PaymentHistoryModal({ debt, onClose }) {
+  const { formatCurrency } = useCurrency()
+  const [payments, setPayments] = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [error, setError]       = useState('')
+
+  useEffect(() => {
+    client.get(`/debt/${debt.id}/payments`)
+      .then((r) => setPayments(r.data))
+      .catch(() => setError('Failed to load payment history'))
+      .finally(() => setLoading(false))
+  }, [debt.id])
+
+  const total = payments.reduce((s, p) => s + p.amount, 0)
+
+  return (
+    <Modal title={`Payment history — ${debt.name}`} onClose={onClose} width={520}>
+      {loading ? (
+        <p style={{ color: 'var(--muted)' }}>Loading…</p>
+      ) : error ? (
+        <p style={{ color: 'var(--red)' }}>{error}</p>
+      ) : payments.length === 0 ? (
+        <p style={{ color: 'var(--muted)', textAlign: 'center', padding: '24px 0' }}>
+          No payments recorded yet.
+        </p>
+      ) : (
+        <>
+          {/* Summary chip */}
+          <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+              {payments.length} payment{payments.length !== 1 ? 's' : ''}
+            </span>
+            <span style={{ fontSize: 13, color: 'var(--green)', fontWeight: 600 }}>
+              {formatCurrency(total)} total paid
+            </span>
+          </div>
+
+          {/* History table */}
+          <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+            <div style={historyStyles.header}>
+              <span>Date</span>
+              <span>Amount</span>
+              <span>Balance after</span>
+              <span>Notes</span>
+            </div>
+            {payments.map((p) => (
+              <div key={p.id} style={historyStyles.row}>
+                <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+                  {new Date(p.paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>
+                  {formatCurrency(p.amount)}
+                </span>
+                <span style={{ fontSize: 13, color: 'var(--white)' }}>
+                  {formatCurrency(p.balance_after)}
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: p.notes ? 'normal' : 'italic' }}>
+                  {p.notes ?? '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Debt() {
   const { isOwner } = useAuth()
+  const { formatCurrency } = useCurrency()
 
   const [debts, setDebts]       = useState([])
   const [accounts, setAccounts] = useState([])
@@ -524,9 +603,10 @@ export default function Debt() {
 
   const [showAdd, setShowAdd]     = useState(false)
   const [editing, setEditing]     = useState(null)
-  const [deleting, setDeleting]   = useState(null)
-  const [paying, setPaying]       = useState(null)
-  const [saving, setSaving]       = useState(false)
+  const [deleting, setDeleting]       = useState(null)
+  const [paying, setPaying]           = useState(null)
+  const [viewHistory, setViewHistory] = useState(null)  // debt whose payment history to show
+  const [saving, setSaving]           = useState(false)
   const [actionError, setActionError] = useState('')
 
   const load = useCallback(() => {
@@ -588,10 +668,10 @@ export default function Debt() {
     } finally { setSaving(false) }
   }
 
-  async function handlePayment(amount) {
+  async function handlePayment({ amount, notes }) {
     setSaving(true); setActionError('')
     try {
-      await client.post(`/debt/${paying.id}/payment`, { amount })
+      await client.post(`/debt/${paying.id}/payment`, { amount, notes })
       setPaying(null); load()
     } catch (e) {
       setActionError(e.response?.data?.detail ?? 'Failed to log payment')
@@ -660,6 +740,7 @@ export default function Debt() {
                   onEdit={() => { setEditing(d); setActionError('') }}
                   onDelete={() => { setDeleting(d); setActionError('') }}
                   onPayment={() => { setPaying(d); setActionError('') }}
+                  onHistory={() => setViewHistory(d)}
                 />
               ))}
             </div>
@@ -677,6 +758,7 @@ export default function Debt() {
                     onEdit={() => {}}
                     onDelete={() => { setDeleting(d); setActionError('') }}
                     onPayment={() => {}}
+                    onHistory={() => setViewHistory(d)}
                   />
                 ))}
               </div>
@@ -720,6 +802,10 @@ export default function Debt() {
             </Button>
           </div>
         </Modal>
+      )}
+
+      {viewHistory && (
+        <PaymentHistoryModal debt={viewHistory} onClose={() => setViewHistory(null)} />
       )}
     </div>
   )
@@ -799,4 +885,19 @@ const styles = {
   empty: { textAlign: 'center', padding: '60px 0' },
   emptyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--white)', marginBottom: 8 },
   modalError: { color: 'var(--red)', fontSize: 13, marginBottom: 12 },
+}
+
+const historyStyles = {
+  header: {
+    display: 'grid', gridTemplateColumns: '120px 100px 120px 1fr',
+    padding: '8px 12px', background: 'var(--bg)',
+    fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
+    letterSpacing: '0.06em', color: 'var(--muted)',
+    borderBottom: '1px solid var(--border)',
+  },
+  row: {
+    display: 'grid', gridTemplateColumns: '120px 100px 120px 1fr',
+    padding: '10px 12px', alignItems: 'center',
+    borderBottom: '1px solid var(--border)',
+  },
 }

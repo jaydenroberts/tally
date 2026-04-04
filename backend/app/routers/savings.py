@@ -83,17 +83,49 @@ def log_contribution(
     db: Session = Depends(get_db),
     _: models.User = Depends(require_owner),
 ):
-    """Add an amount to the goal's current balance. Auto-completes the goal if target is reached."""
+    """
+    Add an amount to the goal's current balance. Records an immutable
+    SavingsContribution entry for audit history. Auto-completes the goal
+    if the target is reached.
+    """
     if payload.amount <= 0:
         raise HTTPException(status_code=400, detail="Contribution amount must be positive")
     goal = _load_goal(db, goal_id)
     if goal.is_completed:
         raise HTTPException(status_code=400, detail="Goal is already completed")
-    goal.current_amount = round(goal.current_amount + payload.amount, 2)
-    if goal.current_amount >= goal.target_amount:
+
+    new_amount = round(goal.current_amount + payload.amount, 2)
+    goal.current_amount = new_amount
+    if new_amount >= goal.target_amount:
         goal.is_completed = True
+
+    # Record the contribution in the audit trail
+    contribution_record = models.SavingsContribution(
+        goal_id=goal_id,
+        amount=payload.amount,
+        balance_after=new_amount,
+        notes=payload.notes,
+    )
+    db.add(contribution_record)
     db.commit()
     return _load_goal(db, goal_id)
+
+
+@router.get("/{goal_id}/contributions", response_model=List[schemas.SavingsContributionResponse])
+def list_contributions(
+    goal_id: int,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Return all recorded contributions for a savings goal, most recent first."""
+    if not db.query(models.SavingsGoal).filter(models.SavingsGoal.id == goal_id).first():
+        raise HTTPException(status_code=404, detail="Savings goal not found")
+    return (
+        db.query(models.SavingsContribution)
+        .filter(models.SavingsContribution.goal_id == goal_id)
+        .order_by(models.SavingsContribution.contributed_at.desc())
+        .all()
+    )
 
 
 @router.delete("/{goal_id}", status_code=status.HTTP_204_NO_CONTENT)

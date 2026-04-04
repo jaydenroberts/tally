@@ -211,6 +211,7 @@ class SavingsGoal(Base):
 
     user = relationship("User", back_populates="savings_goals")
     linked_account = relationship("Account", back_populates="savings_goals")
+    contributions = relationship("SavingsContribution", back_populates="goal", order_by="SavingsContribution.contributed_at.desc()")
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +245,82 @@ class Debt(Base):
 
     user = relationship("User", back_populates="debts")
     linked_account = relationship("Account", back_populates="debts")
+    payments = relationship("DebtPayment", back_populates="debt", order_by="DebtPayment.paid_at.desc()")
+
+
+# ---------------------------------------------------------------------------
+# Debt Payments  (audit trail for /api/debt/{id}/payment)
+# ---------------------------------------------------------------------------
+
+class DebtPayment(Base):
+    """
+    One record per payment logged against a debt.
+    Provides a full audit trail independent of the current_balance figure.
+    """
+    __tablename__ = "debt_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    debt_id = Column(Integer, ForeignKey("debts.id"), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    balance_after = Column(Float, nullable=False)   # current_balance after this payment
+    notes = Column(Text, nullable=True)
+    paid_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    debt = relationship("Debt", back_populates="payments")
+
+
+# ---------------------------------------------------------------------------
+# Savings Contributions  (audit trail for /api/savings/{id}/contribute)
+# ---------------------------------------------------------------------------
+
+class SavingsContribution(Base):
+    """
+    One record per contribution logged against a savings goal.
+    Provides a full audit trail independent of the current_amount figure.
+    """
+    __tablename__ = "savings_contributions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    goal_id = Column(Integer, ForeignKey("savings_goals.id"), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    balance_after = Column(Float, nullable=False)   # current_amount after this contribution
+    notes = Column(Text, nullable=True)
+    contributed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    goal = relationship("SavingsGoal", back_populates="contributions")
+
+
+# ---------------------------------------------------------------------------
+# Recurring Transactions
+# ---------------------------------------------------------------------------
+
+class RecurringTransaction(Base):
+    """
+    A scheduled transaction that auto-generates a real Transaction on each
+    due date. The scheduler runs on startup and checks for overdue entries.
+
+    frequency values: daily | weekly | fortnightly | monthly | yearly
+    """
+    __tablename__ = "recurring_transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    description = Column(String(500), nullable=False)
+    amount = Column(Float, nullable=False)
+    frequency = Column(String(20), nullable=False)   # daily | weekly | fortnightly | monthly | yearly
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=True)            # NULL = runs indefinitely
+    next_due = Column(Date, nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", backref="recurring_transactions")
+    account = relationship("Account")
+    category = relationship("Category")
 
 
 # ---------------------------------------------------------------------------

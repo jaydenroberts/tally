@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from .database import engine, SessionLocal, Base
 from . import models
 from .auth import hash_password
-from .routers import auth, users, accounts, transactions, categories, budgets, savings, debt, imports
+from .routers import auth, users, accounts, transactions, categories, budgets, savings, debt, imports, recurring
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +116,11 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_database(db)
+        # Generate any overdue recurring transactions on startup
+        count = recurring.run_due_recurring(db)
+        if count:
+            import logging
+            logging.getLogger("tally").info("Generated %d recurring transaction(s) on startup", count)
     finally:
         db.close()
     yield
@@ -153,6 +158,7 @@ app.include_router(budgets.router)
 app.include_router(savings.router)
 app.include_router(debt.router)
 app.include_router(imports.router)
+app.include_router(recurring.router)
 
 
 @app.get("/api/health")
@@ -171,7 +177,10 @@ if STATIC_DIR.exists():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
-        """Catch-all: serve index.html for client-side routing."""
+        """Catch-all: serve static files if they exist, otherwise serve index.html."""
+        requested = STATIC_DIR / full_path
+        if requested.exists() and requested.is_file():
+            return FileResponse(requested)
         index = STATIC_DIR / "index.html"
         if index.exists():
             return FileResponse(index)

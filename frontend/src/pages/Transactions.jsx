@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
@@ -41,7 +42,8 @@ const badge = {
 
 // ─── Amount display (estimates shown muted with ~) ───────────────────────────
 
-function AmountDisplay({ tx, currency = 'USD' }) {
+function AmountDisplay({ tx, currency }) {
+  const { formatCurrency } = useCurrency()
   const formatted = formatCurrency(tx.amount, currency)
   if (!tx.is_verified) {
     return (
@@ -60,6 +62,7 @@ function AmountDisplay({ tx, currency = 'USD' }) {
 // ─── Match warning banner ─────────────────────────────────────────────────────
 
 function ReconciliationBanner({ summary, onDismiss }) {
+  const { formatCurrency } = useCurrency()
   if (!summary) return null
   const { matched_count, new_from_bank_count, estimates_pending, amount_diff_warnings } = summary
   return (
@@ -278,10 +281,423 @@ function FilterBar({ accounts, categories, filters, onChange }) {
   )
 }
 
+// ─── Import modal (multi-step) ────────────────────────────────────────────────
+
+/**
+ * Step 1 — File & account selection
+ * Step 2 — Column mapping (+ PDF preview table)
+ * Step 3 — Result (reconciliation summary)
+ */
+function ImportModal({ accounts, onDone, onClose }) {
+  const [step, setStep]           = useState(1)
+  const [files, setFiles]         = useState([])
+  const [filesLoading, setFilesLoading] = useState(true)
+  const [filesError, setFilesError]     = useState('')
+
+  // Step 1 state
+  const [selectedFile, setSelectedFile] = useState(null)
+  const [accountId, setAccountId]       = useState(accounts[0]?.id ?? '')
+
+  // Step 2 state
+  const [preview, setPreview]     = useState(null)   // { columns, sample_rows, total_rows }
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [dateCol, setDateCol]     = useState('')
+  const [descCol, setDescCol]     = useState('')
+  const [amtCol, setAmtCol]       = useState('')
+  const [mappingError, setMappingError] = useState('')
+
+  // Step 3 state
+  const [result, setResult]       = useState(null)
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState('')
+
+  // Load file list on mount
+  useEffect(() => {
+    client.get('/import/files')
+      .then((r) => setFiles(r.data))
+      .catch(() => setFilesError('Could not load file list. Make sure /financial-data is mounted.'))
+      .finally(() => setFilesLoading(false))
+  }, [])
+
+  // Auto-select first available column when preview loads
+  useEffect(() => {
+    if (!preview) return
+    const cols = preview.columns
+    // Heuristic: pick the first column name containing "date", "desc", "amount"
+    setDateCol(cols.find((c) => /date/i.test(c)) ?? cols[0] ?? '')
+    setDescCol(cols.find((c) => /desc|narr|detail|name|memo/i.test(c)) ?? cols[1] ?? '')
+    setAmtCol(cols.find((c) => /amount|amt|debit|credit|value/i.test(c)) ?? cols[2] ?? '')
+  }, [preview])
+
+  function fileTypeOf(file) {
+    return file?.filename?.toLowerCase().endsWith('.pdf') ? 'pdf' : 'csv'
+  }
+
+  async function handleStep1Next() {
+    if (!selectedFile) return
+    if (!accountId) return
+    const type = fileTypeOf(selectedFile)
+
+    if (type === 'pdf') {
+      // Fetch preview to populate column choices
+      setPreviewLoading(true)
+      try {
+        const r = await client.get('/import/pdf/preview', {
+          params: { filename: selectedFile.filename, rows: 5 },
+        })
+        setPreview(r.data)
+      } catch (e) {
+        setMappingError(e.response?.data?.detail ?? 'Failed to preview PDF')
+      } finally {
+        setPreviewLoading(false)
+      }
+    } else {
+      // For CSV, we'll show column fields without a preview table
+      // Fetch a preview anyway so we can populate dropdowns
+      setPreviewLoading(true)
+      try {
+        // CSV preview: read first 5 rows using pandas read_csv on backend
+        // We use the same pdf preview logic but for csv — however the backend
+        // doesn't have a CSV preview endpoint yet. We'll use generic column names
+        // and let users type them in. A note is shown.
+        setPreview(null)
+      } catch {
+        setPreview(null)
+      } finally {
+        setPreviewLoading(false)
+      }
+    }
+    setStep(2)
+  }
+
+  async function handleImport() {
+    if (!dateCol || !descCol || !amtCol) {
+      setMappingError('All three columns are required')
+      return
+    }
+    setMappingError('')
+    setImporting(true)
+    try {
+      const type = fileTypeOf(selectedFile)
+      const endpoint = type === 'pdf' ? '/import/pdf' : '/import/csv'
+      const r = await client.post(endpoint, null, {
+        params: {
+          filename:   selectedFile.filename,
+          account_id: accountId,
+          date_col:   dateCol,
+          desc_col:   descCol,
+          amount_col: amtCol,
+        },
+      })
+      setResult(r.data)
+      setStep(3)
+    } catch (e) {
+      setImportError(e.response?.data?.detail ?? 'Import failed')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const type = selectedFile ? fileTypeOf(selectedFile) : null
+
+  return (
+    <Modal title="Import bank statement" onClose={onClose} width={620}>
+      {/* Step indicator */}
+      <div style={importStyles.steps}>
+        {['File & account', 'Column mapping', 'Results'].map((label, i) => {
+          const n = i + 1
+          const active = step === n
+          const done   = step > n
+          return (
+            <div key={n} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{
+                width: 22, height: 22, borderRadius: '50%',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 11, fontWeight: 700,
+                background: done ? 'var(--green)' : active ? 'var(--cyan)' : 'var(--border)',
+                color: done || active ? '#282A36' : 'var(--muted)',
+              }}>
+                {done ? '✓' : n}
+              </span>
+              <span style={{ fontSize: 12, color: active ? 'var(--white)' : 'var(--muted)' }}>
+                {label}
+              </span>
+              {i < 2 && <span style={{ color: 'var(--border)', fontSize: 12, marginLeft: 6 }}>›</span>}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* ── Step 1: File & account ── */}
+      {step === 1 && (
+        <div>
+          {filesLoading ? (
+            <p style={{ color: 'var(--muted)' }}>Loading files…</p>
+          ) : filesError ? (
+            <p style={{ color: 'var(--red)', marginBottom: 16 }}>{filesError}</p>
+          ) : files.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--muted)' }}>
+              <p style={{ fontWeight: 600, marginBottom: 8 }}>No files found</p>
+              <p style={{ fontSize: 13 }}>
+                Place CSV or PDF bank statements in your <code>/financial-data</code> volume.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* File list */}
+              <p style={importStyles.stepLabel}>Select file</p>
+              <div style={importStyles.fileList}>
+                {files.map((f) => {
+                  const isSelected = selectedFile?.filename === f.filename
+                  return (
+                    <div
+                      key={f.filename}
+                      onClick={() => setSelectedFile(f)}
+                      style={{
+                        ...importStyles.fileRow,
+                        background: isSelected ? 'var(--bg)' : 'transparent',
+                        borderColor: isSelected ? 'var(--cyan)' : 'var(--border)',
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--white)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {f.filename}
+                        </p>
+                        <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                          {(f.size_bytes / 1024).toFixed(1)} KB
+                        </p>
+                      </div>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: '2px 6px',
+                        borderRadius: 4, textTransform: 'uppercase',
+                        color: f.file_type === 'pdf' ? '#BD93F9' : '#8BE9FD',
+                        background: f.file_type === 'pdf' ? '#BD93F920' : '#8BE9FD20',
+                      }}>
+                        {f.file_type}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Account picker */}
+              <div style={{ marginTop: 16 }}>
+                <p style={importStyles.stepLabel}>Select account</p>
+                <select
+                  style={{ ...selectStyle, width: '100%' }}
+                  value={accountId}
+                  onChange={(e) => setAccountId(e.target.value)}
+                >
+                  <option value="">Select account…</option>
+                  {accounts.filter((a) => a.is_active).map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}{a.institution ? ` · ${a.institution}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
+
+          <div style={importStyles.footer}>
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button
+              onClick={handleStep1Next}
+              disabled={!selectedFile || !accountId || filesLoading}
+            >
+              {previewLoading ? 'Loading…' : 'Next →'}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 2: Column mapping ── */}
+      {step === 2 && (
+        <div>
+          <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+            File: <strong style={{ color: 'var(--white)' }}>{selectedFile?.filename}</strong>
+            {preview && (
+              <span style={{ marginLeft: 8, color: 'var(--cyan)' }}>
+                ({preview.total_rows} rows, {preview.columns.length} columns)
+              </span>
+            )}
+          </p>
+
+          {/* PDF preview table */}
+          {type === 'pdf' && preview && preview.sample_rows.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <p style={importStyles.stepLabel}>Preview (first {preview.sample_rows.length} rows)</p>
+              <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: 'var(--bg)' }}>
+                      {preview.columns.map((c) => (
+                        <th key={c} style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--muted)', fontWeight: 600, whiteSpace: 'nowrap', borderBottom: '1px solid var(--border)' }}>
+                          {c}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.sample_rows.map((row, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                        {preview.columns.map((c) => (
+                          <td key={c} style={{ padding: '5px 10px', color: 'var(--white)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {row[c] ?? ''}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Column mapping fields */}
+          <p style={importStyles.stepLabel}>Map columns</p>
+
+          {type === 'pdf' && preview ? (
+            // Dropdown selectors when we know the column names
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+              <FormField label="Date column *">
+                <select style={selectStyle} value={dateCol} onChange={(e) => setDateCol(e.target.value)}>
+                  <option value="">Select…</option>
+                  {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </FormField>
+              <FormField label="Description column *">
+                <select style={selectStyle} value={descCol} onChange={(e) => setDescCol(e.target.value)}>
+                  <option value="">Select…</option>
+                  {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </FormField>
+              <FormField label="Amount column *">
+                <select style={selectStyle} value={amtCol} onChange={(e) => setAmtCol(e.target.value)}>
+                  <option value="">Select…</option>
+                  {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </FormField>
+            </div>
+          ) : (
+            // Text inputs for CSV (or PDF where preview failed)
+            <>
+              <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+                Enter the exact column header names from your {type === 'pdf' ? 'PDF' : 'CSV'} file.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                <FormField label="Date column *">
+                  <input style={inputStyle} value={dateCol} onChange={(e) => setDateCol(e.target.value)} placeholder="e.g. Date" />
+                </FormField>
+                <FormField label="Description column *">
+                  <input style={inputStyle} value={descCol} onChange={(e) => setDescCol(e.target.value)} placeholder="e.g. Description" />
+                </FormField>
+                <FormField label="Amount column *">
+                  <input style={inputStyle} value={amtCol} onChange={(e) => setAmtCol(e.target.value)} placeholder="e.g. Amount" />
+                </FormField>
+              </div>
+            </>
+          )}
+
+          {mappingError && <p style={{ color: 'var(--red)', fontSize: 13, marginTop: 8 }}>{mappingError}</p>}
+          {importError  && <p style={{ color: 'var(--red)', fontSize: 13, marginTop: 8 }}>{importError}</p>}
+
+          <div style={importStyles.footer}>
+            <Button variant="secondary" onClick={() => { setStep(1); setPreview(null); setImportError('') }}>← Back</Button>
+            <Button onClick={handleImport} disabled={importing || !dateCol || !descCol || !amtCol}>
+              {importing ? 'Importing…' : 'Run import'}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 3: Results ── */}
+      {step === 3 && result && (
+        <div>
+          <div style={importStyles.resultGrid}>
+            <ResultTile value={result.matched_count}         label="Estimates matched"  color="#50FA7B" />
+            <ResultTile value={result.new_from_bank_count}   label="New from bank"       color="#8BE9FD" />
+            <ResultTile value={result.estimates_pending}     label="Estimates pending"   color="#FF79C6" />
+          </div>
+
+          {result.amount_diff_warnings.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--orange)', marginBottom: 8 }}>
+                Amount differences ({result.amount_diff_warnings.length})
+              </p>
+              <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+                {result.amount_diff_warnings.map((w) => (
+                  <div key={w.transaction_id} style={importStyles.warnRow}>
+                    <span style={{ fontSize: 12, color: 'var(--white)', flex: 1 }}>
+                      {w.description ?? 'Transaction'}
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                      estimated {w.manual_amount >= 0 ? '+' : ''}{w.manual_amount.toFixed(2)}
+                      {' → '}{w.bank_amount >= 0 ? '+' : ''}{w.bank_amount.toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={importStyles.footer}>
+            <Button onClick={() => { onDone(result); onClose() }}>Done</Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function ResultTile({ value, label, color }) {
+  return (
+    <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '16px 20px', textAlign: 'center' }}>
+      <p style={{ fontSize: 28, fontWeight: 700, color }}>{value}</p>
+      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{label}</p>
+    </div>
+  )
+}
+
+const importStyles = {
+  steps: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    marginBottom: 20, paddingBottom: 16,
+    borderBottom: '1px solid var(--border)',
+  },
+  stepLabel: {
+    fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
+    letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 8,
+  },
+  fileList: {
+    display: 'flex', flexDirection: 'column', gap: 6,
+    maxHeight: 240, overflowY: 'auto',
+    border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+    padding: 8,
+  },
+  fileRow: {
+    display: 'flex', alignItems: 'center', gap: 10,
+    padding: '8px 10px', borderRadius: 'var(--radius)',
+    border: '1px solid transparent', cursor: 'pointer',
+  },
+  footer: {
+    display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20,
+  },
+  resultGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12,
+    marginBottom: 16,
+  },
+  warnRow: {
+    display: 'flex', alignItems: 'center', gap: 12,
+    padding: '8px 12px', borderBottom: '1px solid var(--border)',
+  },
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Transactions() {
   const { isOwner } = useAuth()
+  const { formatCurrency } = useCurrency()
 
   const [transactions, setTransactions] = useState([])
   const [total, setTotal] = useState(0)
@@ -295,10 +711,11 @@ export default function Transactions() {
     account_id: '', category_id: '', is_verified: '', date_from: '', date_to: '',
   })
 
-  const [showAdd, setShowAdd] = useState(false)
-  const [editing, setEditing] = useState(null)
-  const [deleting, setDeleting] = useState(null)
-  const [saving, setSaving] = useState(false)
+  const [showAdd, setShowAdd]       = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const [editing, setEditing]       = useState(null)
+  const [deleting, setDeleting]     = useState(null)
+  const [saving, setSaving]         = useState(false)
   const [actionError, setActionError] = useState('')
   const [reconciliation, setReconciliation] = useState(null)
 
@@ -411,12 +828,20 @@ export default function Transactions() {
           </p>
         </div>
         {isOwner && (
-          <Button
-            onClick={() => { setShowAdd(true); setActionError('') }}
-            style={{ display: 'none' }}  /* hidden on mobile — FAB used instead */
-          >
-            + Add
-          </Button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button
+              variant="secondary"
+              onClick={() => setShowImport(true)}
+            >
+              Import statement
+            </Button>
+            <Button
+              onClick={() => { setShowAdd(true); setActionError('') }}
+              style={{ display: 'none' }}  /* hidden on mobile — FAB used instead */
+            >
+              + Add
+            </Button>
+          </div>
         )}
       </div>
 
@@ -588,6 +1013,18 @@ export default function Transactions() {
           </div>
         </Modal>
       )}
+
+      {/* Import modal */}
+      {showImport && (
+        <ImportModal
+          accounts={accounts}
+          onDone={(result) => {
+            setReconciliation(result)
+            load(0)
+          }}
+          onClose={() => setShowImport(false)}
+        />
+      )}
     </div>
   )
 }
@@ -650,14 +1087,6 @@ function EditTransactionForm({ tx, accounts, categories, onSave, onCancel, savin
       </div>
     </form>
   )
-}
-
-function formatCurrency(n, currency = 'USD') {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: currency ?? 'USD',
-    minimumFractionDigits: 2,
-  }).format(n)
 }
 
 const styles = {

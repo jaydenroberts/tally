@@ -354,6 +354,7 @@ class SavingsGoalResponse(BaseModel):
 
 class ContributionRequest(BaseModel):
     amount: float
+    notes: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +416,77 @@ class DebtResponse(BaseModel):
 
 class PaymentRequest(BaseModel):
     amount: float
+    notes: Optional[str] = None
+
+
+class DebtPaymentResponse(BaseModel):
+    id: int
+    debt_id: int
+    amount: float
+    balance_after: float
+    notes: Optional[str] = None
+    paid_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SavingsContributionResponse(BaseModel):
+    id: int
+    goal_id: int
+    amount: float
+    balance_after: float
+    notes: Optional[str] = None
+    contributed_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Recurring Transactions
+# ---------------------------------------------------------------------------
+
+RecurringFrequency = Literal["daily", "weekly", "fortnightly", "monthly", "yearly"]
+
+
+class RecurringTransactionCreate(BaseModel):
+    account_id: int
+    category_id: Optional[int] = None
+    description: str
+    amount: float
+    frequency: RecurringFrequency
+    start_date: date
+    end_date: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class RecurringTransactionUpdate(BaseModel):
+    category_id: Optional[int] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    frequency: Optional[RecurringFrequency] = None
+    end_date: Optional[date] = None
+    is_active: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+class RecurringTransactionResponse(BaseModel):
+    id: int
+    user_id: int
+    account_id: int
+    account: Optional[AccountResponse] = None
+    category_id: Optional[int] = None
+    category: Optional[CategoryResponse] = None
+    description: str
+    amount: float
+    frequency: str
+    start_date: date
+    end_date: Optional[date] = None
+    next_due: date
+    is_active: bool
+    notes: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 # ImportLogResponse is defined above (before ReconciliationSummary) to avoid forward refs.

@@ -22,9 +22,10 @@ No match:
 import os
 from datetime import timedelta
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import pandas as pd
+import pdfplumber
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -229,3 +230,181 @@ def list_import_logs(
     _: models.User = Depends(require_owner),
 ):
     return db.query(models.ImportLog).order_by(models.ImportLog.imported_at.desc()).all()
+
+
+def _extract_pdf_dataframe(file_path: Path) -> pd.DataFrame:
+    """
+    Extract all tables from a PDF and concatenate into a single DataFrame.
+    Raises HTTPException if no tables are found or parsing fails.
+    """
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            tables = []
+            for page in pdf.pages:
+                for table in page.extract_tables():
+                    if table:
+                        tables.append(table)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not open PDF: {exc}")
+
+    if not tables:
+        raise HTTPException(
+            status_code=422,
+            detail="No tables found in PDF. Tally can only import PDFs that contain structured tables.",
+        )
+
+    # Use the first table's first row as headers; subsequent tables may repeat headers — drop them
+    headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(tables[0][0])]
+    rows = []
+    for table in tables:
+        for row in table[1:]:  # skip header row of each table
+            if row != tables[0][0]:  # drop repeated header rows from subsequent pages
+                rows.append([str(c).strip() if c is not None else "" for c in row])
+
+    if not rows:
+        raise HTTPException(status_code=422, detail="PDF tables contained no data rows.")
+
+    return pd.DataFrame(rows, columns=headers)
+
+
+@router.get("/pdf/preview")
+def preview_pdf(
+    filename: str = Query(..., description="Relative path within financial data directory"),
+    rows: int = Query(5, ge=1, le=50, description="Number of sample rows to return"),
+    _: models.User = Depends(require_owner),
+):
+    """
+    Extract tables from a PDF and return the column names plus a sample of rows.
+    Use this before committing an import to confirm column mapping is correct.
+    """
+    file_path = _safe_path(filename)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    df = _extract_pdf_dataframe(file_path)
+
+    return {
+        "columns": list(df.columns),
+        "sample_rows": df.head(rows).to_dict(orient="records"),
+        "total_rows": len(df),
+    }
+
+
+@router.post(
+    "/pdf",
+    response_model=schemas.ReconciliationSummary,
+    status_code=status.HTTP_201_CREATED,
+)
+def import_pdf(
+    filename: str = Query(..., description="Relative path within financial data directory"),
+    account_id: int = Query(...),
+    date_col: str = Query("Date"),
+    desc_col: str = Query("Description"),
+    amount_col: str = Query("Amount"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_owner),
+):
+    """
+    Import transactions from a PDF bank statement.
+    Uses the same reconciliation algorithm as CSV import.
+    Call GET /api/import/pdf/preview first to confirm column names.
+    """
+    account = db.query(models.Account).filter(models.Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    file_path = _safe_path(filename)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    df = _extract_pdf_dataframe(file_path)
+
+    missing = [c for c in (date_col, desc_col, amount_col) if c not in df.columns]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Columns not found: {missing}. Available: {list(df.columns)}",
+        )
+
+    log = models.ImportLog(
+        user_id=current_user.id,
+        filename=filename,
+        file_path=str(file_path),
+        file_type="pdf",
+        status="success",
+    )
+    db.add(log)
+    db.flush()
+
+    matched_count = 0
+    new_count = 0
+    errors = []
+    amount_diff_warnings: list[schemas.MatchWarning] = []
+
+    for _, row in df.iterrows():
+        try:
+            bank_date   = pd.to_datetime(row[date_col]).date()
+            bank_amount = float(str(row[amount_col]).replace(",", "").replace("$", ""))
+            bank_desc   = str(row[desc_col]) if row[desc_col] != "" else None
+
+            match = _find_match(db, account_id, bank_date, bank_amount)
+
+            if match:
+                manual_amount = match.amount
+                if abs(manual_amount - bank_amount) > 0.005:
+                    match.match_note = (
+                        f"Matched import; amount updated "
+                        f"{manual_amount:+.2f} → {bank_amount:+.2f}"
+                    )
+                    amount_diff_warnings.append(schemas.MatchWarning(
+                        transaction_id=match.id,
+                        description=match.description or bank_desc,
+                        manual_amount=manual_amount,
+                        bank_amount=bank_amount,
+                    ))
+                    match.original_amount = manual_amount
+                else:
+                    match.match_note = "Matched import; amounts agreed"
+
+                match.amount        = bank_amount
+                match.is_verified   = True
+                match.import_log_id = log.id
+                matched_count += 1
+
+            else:
+                tx = models.Transaction(
+                    account_id=account_id,
+                    date=bank_date,
+                    description=bank_desc,
+                    amount=bank_amount,
+                    source="import",
+                    is_verified=True,
+                    import_log_id=log.id,
+                )
+                db.add(tx)
+                new_count += 1
+
+        except Exception as exc:
+            errors.append(str(exc))
+
+    log.transaction_count = matched_count + new_count
+    if errors:
+        log.status = "partial"
+        log.error_detail = "; ".join(errors[:10])
+
+    db.commit()
+    db.refresh(log)
+
+    estimates_pending = db.query(models.Transaction).filter(
+        models.Transaction.account_id == account_id,
+        models.Transaction.is_verified == False,
+        models.Transaction.source == "manual",
+    ).count()
+
+    return schemas.ReconciliationSummary(
+        matched_count=matched_count,
+        new_from_bank_count=new_count,
+        estimates_pending=estimates_pending,
+        amount_diff_warnings=amount_diff_warnings,
+        import_log=log,
+    )

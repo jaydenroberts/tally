@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
@@ -87,6 +88,7 @@ function AccountForm({ initial, onSave, onCancel, saving }) {
 
 export default function Accounts() {
   const { isOwner } = useAuth()
+  const { formatCurrency } = useCurrency()
   const [accounts, setAccounts] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -241,6 +243,7 @@ export default function Accounts() {
 }
 
 function AccountCard({ account, isOwner, onEdit, onDelete }) {
+  const { formatCurrency } = useCurrency()
   const typeColor = TYPE_COLORS[account.account_type] ?? 'var(--muted)'
   return (
     <div style={{ ...styles.card, borderTop: `3px solid ${typeColor}` }}>
@@ -274,14 +277,6 @@ function AccountCard({ account, isOwner, onEdit, onDelete }) {
       )}
     </div>
   )
-}
-
-function formatCurrency(n, currency = 'USD') {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: 2,
-  }).format(n)
 }
 
 const styles = {

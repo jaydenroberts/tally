@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
@@ -90,6 +91,7 @@ const bar = {
 
 function BudgetCard({ item, isOwner, onEdit, onDelete }) {
   const { budget, verified_spend, estimated_spend, total_spend, remaining, pct_total, pct_verified, pct_estimated, status } = item
+  const { formatCurrency } = useCurrency()
   const color = statusColor(status)
 
   return (
@@ -252,6 +254,7 @@ function MonthNav({ viewDate, onChange }) {
 
 export default function Budgets() {
   const { isOwner } = useAuth()
+  const { formatCurrency } = useCurrency()
   const now = new Date()
 
   const [viewDate, setViewDate] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 })
@@ -461,12 +464,6 @@ function TotalChip({ label, value, color }) {
       <span style={{ fontSize: 15, fontWeight: 700, color }}>{value}</span>
     </div>
   )
-}
-
-function formatCurrency(n, currency = 'USD') {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency', currency, minimumFractionDigits: 2,
-  }).format(n)
 }
 
 const styles = {

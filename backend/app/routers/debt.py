@@ -90,6 +90,7 @@ def log_payment(
 ):
     """
     Log a payment against a debt. Reduces current_balance by the payment amount.
+    Records an immutable DebtPayment entry for audit history.
     Auto-marks the debt as paid off if balance reaches zero.
     """
     if payload.amount <= 0:
@@ -99,12 +100,39 @@ def log_payment(
     if debt.is_paid_off:
         raise HTTPException(status_code=400, detail="Debt is already paid off")
 
-    debt.current_balance = round(max(0.0, debt.current_balance - payload.amount), 2)
-    if debt.current_balance == 0:
+    new_balance = round(max(0.0, debt.current_balance - payload.amount), 2)
+    debt.current_balance = new_balance
+    if new_balance == 0:
         debt.is_paid_off = True
 
+    # Record the payment in the audit trail
+    payment_record = models.DebtPayment(
+        debt_id=debt_id,
+        amount=payload.amount,
+        balance_after=new_balance,
+        notes=payload.notes,
+    )
+    db.add(payment_record)
     db.commit()
     return _load_debt(db, debt_id)
+
+
+@router.get("/{debt_id}/payments", response_model=List[schemas.DebtPaymentResponse])
+def list_payments(
+    debt_id: int,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Return all recorded payments for a debt, most recent first."""
+    # Confirm the debt exists
+    if not db.query(models.Debt).filter(models.Debt.id == debt_id).first():
+        raise HTTPException(status_code=404, detail="Debt not found")
+    return (
+        db.query(models.DebtPayment)
+        .filter(models.DebtPayment.debt_id == debt_id)
+        .order_by(models.DebtPayment.paid_at.desc())
+        .all()
+    )
 
 
 @router.delete("/{debt_id}", status_code=status.HTTP_204_NO_CONTENT)

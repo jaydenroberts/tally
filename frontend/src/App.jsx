@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
+import { CurrencyProvider } from './context/CurrencyContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Layout from './components/Layout'
 import Login from './pages/Login'
@@ -9,6 +10,8 @@ import Transactions from './pages/Transactions'
 import Budgets from './pages/Budgets'
 import Savings from './pages/Savings'
 import Debt from './pages/Debt'
+import Recurring from './pages/Recurring'
+import ImportHistory from './pages/ImportHistory'
 import Settings from './pages/Settings'
 
 // Placeholder pages — will be replaced phase by phase
@@ -22,8 +25,9 @@ const Placeholder = ({ title }) => (
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <Routes>
+      <CurrencyProvider>
+        <BrowserRouter>
+          <Routes>
           <Route path="/login" element={<Login />} />
 
           <Route
@@ -83,6 +87,24 @@ export default function App() {
           />
 
           <Route
+            path="/recurring"
+            element={
+              <ProtectedRoute>
+                <Layout><Recurring /></Layout>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/imports"
+            element={
+              <ProtectedRoute ownerOnly>
+                <Layout><ImportHistory /></Layout>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
             path="/settings"
             element={
               <ProtectedRoute>
@@ -92,8 +114,9 @@ export default function App() {
           />
 
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
+          </Routes>
+        </BrowserRouter>
+      </CurrencyProvider>
     </AuthProvider>
   )
 }

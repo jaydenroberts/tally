@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
@@ -88,12 +89,6 @@ function formatDate(d) {
   return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
 }
 
-function formatCurrency(n, currency = 'USD') {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency', currency, minimumFractionDigits: 2,
-  }).format(n ?? 0)
-}
-
 // ─── Progress bar ─────────────────────────────────────────────────────────────
 
 function GoalProgressBar({ pct, status }) {
@@ -126,7 +121,8 @@ const bar = {
 
 // ─── Goal card ────────────────────────────────────────────────────────────────
 
-function GoalCard({ goal, isOwner, onEdit, onDelete, onContribute }) {
+function GoalCard({ goal, isOwner, onEdit, onDelete, onContribute, onHistory }) {
+  const { formatCurrency } = useCurrency()
   const pct      = goal.target_amount > 0
     ? Math.min(100, (goal.current_amount / goal.target_amount) * 100)
     : 0
@@ -154,6 +150,7 @@ function GoalCard({ goal, isOwner, onEdit, onDelete, onContribute }) {
           <span style={{ ...styles.statusBadge, color, background: color + '18' }}>
             {statusLabel(status)}
           </span>
+          <button style={{ ...styles.iconBtn, color: 'var(--cyan)' }} onClick={onHistory} title="Contribution history">⏱</button>
           {isOwner && !goal.is_completed && (
             <button style={styles.iconBtn} onClick={onEdit} title="Edit">✎</button>
           )}
@@ -325,7 +322,9 @@ function GoalForm({ initial, accounts, onSave, onCancel, saving }) {
 // ─── Contribute form ──────────────────────────────────────────────────────────
 
 function ContributeForm({ goal, onSave, onCancel, saving }) {
+  const { formatCurrency } = useCurrency()
   const [amount, setAmount] = useState('')
+  const [notes, setNotes]   = useState('')
   const [error, setError]   = useState('')
 
   function handleSubmit(e) {
@@ -338,7 +337,7 @@ function ContributeForm({ goal, onSave, onCancel, saving }) {
       // not blocking — just a warning. Let it through on second submit.
     }
     setError('')
-    onSave(val)
+    onSave({ amount: val, notes: notes.trim() || null })
   }
 
   const remaining = goal.target_amount - goal.current_amount
@@ -366,6 +365,15 @@ function ContributeForm({ goal, onSave, onCancel, saving }) {
         />
       </FormField>
 
+      <FormField label="Notes" hint="Optional — e.g. 'Monthly transfer' or 'Birthday money'">
+        <input
+          style={inputStyle}
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Optional note"
+        />
+      </FormField>
+
       {error && <p style={{ color: 'var(--orange)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
@@ -376,22 +384,92 @@ function ContributeForm({ goal, onSave, onCancel, saving }) {
   )
 }
 
+// ─── Contribution history modal ───────────────────────────────────────────────
+
+function ContributionHistoryModal({ goal, onClose }) {
+  const { formatCurrency } = useCurrency()
+  const [contributions, setContributions] = useState([])
+  const [loading, setLoading]             = useState(true)
+  const [error, setError]                 = useState('')
+
+  useEffect(() => {
+    client.get(`/savings/${goal.id}/contributions`)
+      .then((r) => setContributions(r.data))
+      .catch(() => setError('Failed to load contribution history'))
+      .finally(() => setLoading(false))
+  }, [goal.id])
+
+  const total = contributions.reduce((s, c) => s + c.amount, 0)
+
+  return (
+    <Modal title={`Contribution history — ${goal.name}`} onClose={onClose} width={520}>
+      {loading ? (
+        <p style={{ color: 'var(--muted)' }}>Loading…</p>
+      ) : error ? (
+        <p style={{ color: 'var(--red)' }}>{error}</p>
+      ) : contributions.length === 0 ? (
+        <p style={{ color: 'var(--muted)', textAlign: 'center', padding: '24px 0' }}>
+          No contributions recorded yet.
+        </p>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+              {contributions.length} contribution{contributions.length !== 1 ? 's' : ''}
+            </span>
+            <span style={{ fontSize: 13, color: 'var(--green)', fontWeight: 600 }}>
+              {formatCurrency(total)} total contributed
+            </span>
+          </div>
+
+          <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+            <div style={savingsHistoryStyles.header}>
+              <span>Date</span>
+              <span>Amount</span>
+              <span>Balance after</span>
+              <span>Notes</span>
+            </div>
+            {contributions.map((c) => (
+              <div key={c.id} style={savingsHistoryStyles.row}>
+                <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+                  {new Date(c.contributed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>
+                  {formatCurrency(c.amount)}
+                </span>
+                <span style={{ fontSize: 13, color: 'var(--white)' }}>
+                  {formatCurrency(c.balance_after)}
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: c.notes ? 'normal' : 'italic' }}>
+                  {c.notes ?? '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Savings() {
   const { isOwner } = useAuth()
+  const { formatCurrency } = useCurrency()
 
   const [goals, setGoals]       = useState([])
   const [accounts, setAccounts] = useState([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState('')
 
-  const [showAdd, setShowAdd]       = useState(false)
-  const [editing, setEditing]       = useState(null)
-  const [deleting, setDeleting]     = useState(null)
+  const [showAdd, setShowAdd]           = useState(false)
+  const [editing, setEditing]           = useState(null)
+  const [deleting, setDeleting]         = useState(null)
   const [contributing, setContributing] = useState(null)
-  const [saving, setSaving]         = useState(false)
-  const [actionError, setActionError] = useState('')
+  const [viewHistory, setViewHistory]   = useState(null)  // goal whose contribution history to show
+  const [saving, setSaving]             = useState(false)
+  const [actionError, setActionError]   = useState('')
 
   const load = useCallback(() => {
     setLoading(true)
@@ -443,10 +521,10 @@ export default function Savings() {
     } finally { setSaving(false) }
   }
 
-  async function handleContribute(amount) {
+  async function handleContribute({ amount, notes }) {
     setSaving(true); setActionError('')
     try {
-      await client.post(`/savings/${contributing.id}/contribute`, { amount })
+      await client.post(`/savings/${contributing.id}/contribute`, { amount, notes })
       setContributing(null); load()
     } catch (e) {
       setActionError(e.response?.data?.detail ?? 'Failed to log contribution')
@@ -510,6 +588,7 @@ export default function Savings() {
                   onEdit={() => { setEditing(g); setActionError('') }}
                   onDelete={() => { setDeleting(g); setActionError('') }}
                   onContribute={() => { setContributing(g); setActionError('') }}
+                  onHistory={() => setViewHistory(g)}
                 />
               ))}
             </div>
@@ -527,6 +606,7 @@ export default function Savings() {
                     onEdit={() => { setEditing(g); setActionError('') }}
                     onDelete={() => { setDeleting(g); setActionError('') }}
                     onContribute={() => {}}
+                    onHistory={() => setViewHistory(g)}
                   />
                 ))}
               </div>
@@ -573,6 +653,10 @@ export default function Savings() {
             </Button>
           </div>
         </Modal>
+      )}
+
+      {viewHistory && (
+        <ContributionHistoryModal goal={viewHistory} onClose={() => setViewHistory(null)} />
       )}
     </div>
   )
@@ -656,4 +740,19 @@ const styles = {
   empty: { textAlign: 'center', padding: '60px 0' },
   emptyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--white)', marginBottom: 8 },
   modalError: { color: 'var(--red)', fontSize: 13, marginBottom: 12 },
+}
+
+const savingsHistoryStyles = {
+  header: {
+    display: 'grid', gridTemplateColumns: '120px 100px 120px 1fr',
+    padding: '8px 12px', background: 'var(--bg)',
+    fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
+    letterSpacing: '0.06em', color: 'var(--muted)',
+    borderBottom: '1px solid var(--border)',
+  },
+  row: {
+    display: 'grid', gridTemplateColumns: '120px 100px 120px 1fr',
+    padding: '10px 12px', alignItems: 'center',
+    borderBottom: '1px solid var(--border)',
+  },
 }

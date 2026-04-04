@@ -3,7 +3,7 @@
   /* Backgrounds */
   --bg:         #282A36;   /* Background */
   --bg-card:    #44475A;   /* Current Line — cards, panels, sidebar */
-  --bg-input:   #565869;   /* Slightly lighter than Current Line — inputs */
+  --bg-input:   #44475A;   /* Current Line — inputs (Dracula spec: bg-card) */
 
   /* Dracula colours */
   --green:      #50FA7B;
@@ -94,7 +94,7 @@ input, select, textarea {
   height: 56px;
   border-radius: 50%;
   background: var(--green);
-  color: #282A36;
+  color: var(--bg);
   font-size: 26px;
   font-weight: 700;
   border: none;
@@ -119,4 +119,10 @@ input, select, textarea {
 ::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 3px;
+}
+
+/* ── Text selection ───────────────────────────────────────────────────────── */
+::selection {
+  background-color: #44475A;
+  color: #F8F8F2;
 }

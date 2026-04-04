@@ -750,6 +750,8 @@ function GeneralTab({ roles }) {
   function handleSavePrefs(e) {
     e.preventDefault()
     saveLocalSettings(settings)
+    // Notify the CurrencyProvider (and any other listeners) that settings changed
+    window.dispatchEvent(new Event('tally:settings-changed'))
     setPrefSaved(true)
     setTimeout(() => setPrefSaved(false), 2500)
   }
