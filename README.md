@@ -19,29 +19,81 @@ A self-hosted personal finance web application for households. Track accounts, t
 
 ---
 
-## Quick Start
+## Installation
 
-### Docker (recommended)
+### Option 1 — Docker run (quick start)
 
 ```bash
+# Generate a secret key
+SECRET_KEY=$(openssl rand -hex 32)
+
 docker run -d \
   --name tally \
+  --restart unless-stopped \
   -p 8091:8091 \
   -v /path/to/your/data:/data \
   -v /path/to/your/financial-files:/financial-data:ro \
-  -e SECRET_KEY=your-secret-key-here \
-  ghcr.io/yourusername/tally:latest
+  -e SECRET_KEY=$SECRET_KEY \
+  -e FIRST_RUN_OWNER_USERNAME=admin \
+  -e FIRST_RUN_OWNER_PASSWORD=changeme \
+  jaydenroberts/tally:latest
 ```
 
-Open `http://localhost:8091` and create your first owner account.
+Open `http://localhost:8091` — your owner account will be created automatically on first run.
 
-### Docker Compose
+### Option 2 — Docker Compose
+
+Create a `docker-compose.yml`:
+
+```yaml
+services:
+  tally:
+    image: jaydenroberts/tally:latest
+    container_name: tally
+    restart: unless-stopped
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./data:/data
+      - ./financial-data:/financial-data:ro
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - ACCESS_TOKEN_EXPIRE_DAYS=30
+      - FIRST_RUN_OWNER_USERNAME=${FIRST_RUN_OWNER_USERNAME}
+      - FIRST_RUN_OWNER_PASSWORD=${FIRST_RUN_OWNER_PASSWORD}
+```
+
+Create a `.env` file alongside it:
+
+```env
+SECRET_KEY=         # generate with: openssl rand -hex 32
+FIRST_RUN_OWNER_USERNAME=admin
+FIRST_RUN_OWNER_PASSWORD=changeme
+```
+
+Then start:
 
 ```bash
-cp .env.example .env
-# Edit .env with your values
 docker compose up -d
 ```
+
+### Option 3 — Unraid Community Applications
+
+1. Open your Unraid web UI and go to the **Apps** tab.
+2. Search for **Tally**.
+3. Click **Install** and fill in the required fields (SECRET_KEY is mandatory — generate one with `openssl rand -hex 32`).
+4. Click **Apply** and wait for the container to start.
+5. Open `http://[your-unraid-ip]:8091`.
+
+**Manual install via Docker tab (without CA):**
+
+1. Go to the **Docker** tab in Unraid and click **Add Container**.
+2. Set the repository to `jaydenroberts/tally:latest`.
+3. Add a path: Container path `/data` → Host path `/mnt/user/appdata/tally/data` (Read/Write).
+4. Add a path (optional): Container path `/financial-data` → Host path of your bank statement files (Read Only).
+5. Add a variable: `SECRET_KEY` = your generated key.
+6. Set port: Host `8091` → Container `8091`.
+7. Click **Apply**.
 
 ---
 
@@ -49,14 +101,26 @@ docker compose up -d
 
 All configuration is via environment variables:
 
-| Variable | Default | Description |
-|---|---|---|
-| `SECRET_KEY` | *(required)* | JWT signing secret — use a long random string |
-| `ACCESS_TOKEN_EXPIRE_DAYS` | `30` | JWT token lifetime in days |
-| `DATABASE_URL` | `sqlite:////data/tally.db` | SQLite database path |
-| `FINANCIAL_DATA_PATH` | `/financial-data` | Read-only path to your financial files |
-| `FIRST_RUN_OWNER_USERNAME` | — | Auto-create owner on first run |
-| `FIRST_RUN_OWNER_PASSWORD` | — | Auto-create owner on first run |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SECRET_KEY` | Yes | — | JWT signing secret. Generate with `openssl rand -hex 32`. Never reuse across installs. |
+| `ACCESS_TOKEN_EXPIRE_DAYS` | No | `30` | How long login sessions last, in days. |
+| `FIRST_RUN_OWNER_USERNAME` | No | — | Auto-creates the first owner account on startup. Leave blank to use the setup page instead. |
+| `FIRST_RUN_OWNER_PASSWORD` | No | — | Required if `FIRST_RUN_OWNER_USERNAME` is set. |
+| `DATABASE_URL` | No | `sqlite:////data/tally.db` | SQLite database path. Change only if you know what you're doing. |
+| `FINANCIAL_DATA_PATH` | No | `/financial-data` | Container path where bank statement files are mounted. |
+
+---
+
+## First-Run Setup
+
+On first start, Tally checks whether any users exist. If none do, it enters setup mode.
+
+**Automatic setup (via env vars):** If `FIRST_RUN_OWNER_USERNAME` and `FIRST_RUN_OWNER_PASSWORD` are set, the owner account is created silently at startup. No setup page is shown.
+
+**Manual setup (via browser):** If those vars are not set, navigate to `http://[host]:8091` — you will be redirected to a setup page where you can create the first owner account. This endpoint is disabled once any user exists.
+
+After setup, log in with your owner credentials. You can add viewer accounts, configure roles, and invite household members from the **Settings** page.
 
 ---
 
