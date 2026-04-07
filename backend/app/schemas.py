@@ -16,6 +16,7 @@ class PersonaCreate(BaseModel):
     system_prompt: Optional[str] = None
     data_access_level: DataAccessLevel = "full"
     can_modify_data: bool = False
+    data_window_days: int = 90
     tone_notes: Optional[str] = None
 
 
@@ -25,6 +26,7 @@ class PersonaUpdate(BaseModel):
     system_prompt: Optional[str] = None
     data_access_level: Optional[DataAccessLevel] = None
     can_modify_data: Optional[bool] = None
+    data_window_days: Optional[int] = None
     tone_notes: Optional[str] = None
 
 
@@ -35,6 +37,7 @@ class PersonaResponse(BaseModel):
     system_prompt: Optional[str] = None
     data_access_level: str
     can_modify_data: bool
+    data_window_days: int
     tone_notes: Optional[str] = None
     is_system: bool
     created_by: Optional[int] = None

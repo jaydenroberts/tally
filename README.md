@@ -14,6 +14,7 @@ A self-hosted personal finance web application for households. Track accounts, t
 - **Savings goals** with progress tracking
 - **Debt tracking** with interest rate and minimum payment
 - **CSV/PDF import** from your existing financial files (read-only access)
+- **AI chat interface** — ask questions about your finances in plain language; powered by Anthropic, OpenAI, or any OpenAI-compatible endpoint (e.g. Ollama); persona system controls data access and write permissions
 - **Dracula-inspired UI**
 - Single Docker container — easy self-hosting
 
@@ -109,6 +110,10 @@ All configuration is via environment variables:
 | `FIRST_RUN_OWNER_PASSWORD` | No | — | Required if `FIRST_RUN_OWNER_USERNAME` is set. |
 | `DATABASE_URL` | No | `sqlite:////data/tally.db` | SQLite database path. Change only if you know what you're doing. |
 | `FINANCIAL_DATA_PATH` | No | `/financial-data` | Container path where bank statement files are mounted. |
+| `AI_PROVIDER` | No | — | AI provider to use for the chat feature: `anthropic`, `openai`, or `ollama` (any OpenAI-compatible endpoint). Leave unset to disable the chat page. |
+| `AI_API_KEY` | No | — | API key for the selected provider. Not required for local Ollama. |
+| `AI_MODEL` | No | — | Model name to use (e.g. `claude-3-5-sonnet-20241022`, `gpt-4o`, `llama3`). |
+| `AI_BASE_URL` | No | — | Base URL override for OpenAI-compatible endpoints (e.g. `http://ollama:11434/v1`). Required for Ollama; not needed for Anthropic or OpenAI. |
 
 ---
 

@@ -13,6 +13,7 @@ import Debt from './pages/Debt'
 import Recurring from './pages/Recurring'
 import ImportHistory from './pages/ImportHistory'
 import Settings from './pages/Settings'
+import Chat from './pages/Chat'
 
 // Placeholder pages — will be replaced phase by phase
 const Placeholder = ({ title }) => (
@@ -100,6 +101,15 @@ export default function App() {
             element={
               <ProtectedRoute ownerOnly>
                 <Layout><ImportHistory /></Layout>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/chat"
+            element={
+              <ProtectedRoute>
+                <Layout><Chat /></Layout>
               </ProtectedRoute>
             }
           />

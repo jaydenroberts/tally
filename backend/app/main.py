@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from .database import engine, SessionLocal, Base
 from . import models
 from .auth import hash_password
-from .routers import auth, users, accounts, transactions, categories, budgets, savings, debt, imports, recurring
+from .routers import auth, users, accounts, transactions, categories, budgets, savings, debt, imports, recurring, chat
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="0.1.0",
+    version="1.1.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -159,6 +159,7 @@ app.include_router(savings.router)
 app.include_router(debt.router)
 app.include_router(imports.router)
 app.include_router(recurring.router)
+app.include_router(chat.router)
 
 
 @app.get("/api/health")

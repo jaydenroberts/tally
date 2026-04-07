@@ -2,6 +2,9 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
+// Dracula purple — matches Chat.jsx accent
+const PURPLE = '#BD93F9'
+
 const navItems = [
   { to: '/',             label: 'Dashboard' },
   { to: '/accounts',     label: 'Accounts'  },
@@ -56,6 +59,20 @@ export default function Layout({ children }) {
               {label}
             </NavLink>
           ))}
+
+          {/* Chat — purple accent to signal AI feature */}
+          <NavLink
+            to="/chat"
+            style={({ isActive }) => ({
+              ...styles.navLink,
+              color: isActive ? PURPLE : 'var(--muted)',
+              background: isActive ? `${PURPLE}18` : 'transparent',
+            })}
+            onClick={handleNavClick}
+          >
+            Chat
+          </NavLink>
+
           {isOwner && (
             <NavLink
               to="/imports"

@@ -28,6 +28,7 @@ class Persona(Base):
     # "full" | "summary" | "readonly"
     data_access_level = Column(String(20), nullable=False, default="full")
     can_modify_data = Column(Boolean, default=False, nullable=False)
+    data_window_days = Column(Integer, default=90, nullable=False)
     tone_notes = Column(Text)
     is_system = Column(Boolean, default=True, nullable=False)   # prevents deletion
     # use_alter breaks the circular FK cycle with users.persona_id so create_all succeeds
