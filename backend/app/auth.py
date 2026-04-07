@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 from .database import get_db
 from . import models
 
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY or len(SECRET_KEY) < 32:
+    raise ValueError(
+        "SECRET_KEY environment variable is required and must be at least 32 characters. "
+        "Generate one with: openssl rand -hex 32"
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = int(os.getenv("ACCESS_TOKEN_EXPIRE_DAYS", "30"))
 

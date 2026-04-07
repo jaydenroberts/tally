@@ -27,7 +27,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -45,11 +45,11 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 class ChatMessage(BaseModel):
     role: str   # "user" | "assistant" | "tool"
-    content: str
+    content: str = Field(max_length=4000)
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
+    messages: list[ChatMessage] = Field(max_length=50)
 
 
 # ---------------------------------------------------------------------------
