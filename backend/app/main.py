@@ -28,10 +28,11 @@ def seed_database(db: Session) -> None:
                 name="analyst",
                 description="Full access with permission to modify data. For household owners.",
                 system_prompt=(
-                    "You are a precise financial analyst assistant for a household budget app. "
-                    "You have full read access to all financial data and may suggest modifications. "
-                    "Be concise, data-driven, and proactive about surfacing insights. "
-                    "Use exact figures when available."
+                    "You are a knowledgeable household finance assistant with full access to this household's financial data. "
+                    "You can read accounts, transactions, budgets, savings goals, and debts — and suggest modifications where appropriate. "
+                    "Be concise, data-driven, and proactive about surfacing insights. Use exact figures when available. "
+                    "Always distinguish between observations (what the data shows) and recommendations (what you suggest the user consider). "
+                    "Lead with the number and its implication."
                 ),
                 data_access_level="full",
                 can_modify_data=True,
@@ -40,13 +41,13 @@ def seed_database(db: Session) -> None:
             ),
             models.Persona(
                 name="family",
-                description="Read-only access. Safe for household members who should not modify data.",
+                description="Summary-only access. Safe for household members who should not see individual transactions or account details.",
                 system_prompt=(
                     "You are a friendly household finance assistant. "
                     "You can see summaries of the household's financial data but cannot make changes. "
                     "Keep explanations simple and encouraging. Avoid jargon."
                 ),
-                data_access_level="readonly",
+                data_access_level="summary",
                 can_modify_data=False,
                 tone_notes="Warm, encouraging, plain language.",
                 is_system=True,
@@ -109,6 +110,37 @@ def seed_database(db: Session) -> None:
         db.commit()
 
 
+# ---------------------------------------------------------------------------
+# Startup migration runner
+# ---------------------------------------------------------------------------
+# Pattern: add one idempotent fix per issue below. Each fix checks whether
+# it is needed before applying so it is safe to run on every container boot.
+# Do NOT use Alembic for these — they are data fixes, not schema changes.
+# ---------------------------------------------------------------------------
+
+def run_startup_migrations(db: Session) -> None:
+    """Run idempotent data fixes on every startup. Safe to re-run indefinitely."""
+    import logging
+    log = logging.getLogger("tally.migrations")
+
+    # [M-001] Fix family persona data_access_level seeded as "readonly" in v1.1.0.
+    # The correct value is "summary". Databases upgraded from v1.1.0 will have the
+    # wrong value because the seed block only runs on empty databases.
+    family_persona = (
+        db.query(models.Persona)
+        .filter(
+            models.Persona.name == "family",
+            models.Persona.is_system == True,
+            models.Persona.data_access_level == "readonly",
+        )
+        .first()
+    )
+    if family_persona:
+        family_persona.data_access_level = "summary"
+        db.commit()
+        log.info("[M-001] Fixed family persona data_access_level: readonly → summary")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create all tables
@@ -116,6 +148,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_database(db)
+        run_startup_migrations(db)
         # Generate any overdue recurring transactions on startup
         count = recurring.run_due_recurring(db)
         if count:
@@ -133,7 +166,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.1.0",
+    version="1.1.2",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
