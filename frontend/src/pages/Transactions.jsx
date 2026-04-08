@@ -310,6 +310,9 @@ function ImportModal({ accounts, onDone, onClose }) {
   const [debitCol, setDebitCol]   = useState('')
   const [mappingError, setMappingError] = useState('')
 
+  // Previously-imported warning
+  const [prevImportWarning, setPrevImportWarning] = useState(null)
+
   // Step 3 state
   const [result, setResult]       = useState(null)
   const [importing, setImporting] = useState(false)
@@ -366,6 +369,12 @@ function ImportModal({ accounts, onDone, onClose }) {
           params: { filename: selectedFile.filename, rows: 5 },
         })
         setPreview(r.data)
+        if (r.data.previously_imported) {
+          const d = new Date(r.data.last_import_at)
+          setPrevImportWarning(`This file was previously imported on ${d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}.`)
+        } else {
+          setPrevImportWarning(null)
+        }
       } catch (e) {
         setMappingError(e.response?.data?.detail ?? 'Failed to preview PDF')
       } finally {
@@ -379,9 +388,16 @@ function ImportModal({ accounts, onDone, onClose }) {
           params: { filename: selectedFile.filename, rows: 5 },
         })
         setPreview(r.data)
+        if (r.data.previously_imported) {
+          const d = new Date(r.data.last_import_at)
+          setPrevImportWarning(`This file was previously imported on ${d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}.`)
+        } else {
+          setPrevImportWarning(null)
+        }
       } catch {
         // If preview fails, fall back to manual text entry with no auto-detection
         setPreview(null)
+        setPrevImportWarning(null)
       } finally {
         setPreviewLoading(false)
       }
@@ -554,6 +570,19 @@ function ImportModal({ accounts, onDone, onClose }) {
       {/* ── Step 2: Column mapping ── */}
       {step === 2 && (
         <div>
+          {prevImportWarning && (
+            <div style={{
+              background: 'rgba(255,170,0,0.12)',
+              border: '1px solid rgba(255,170,0,0.4)',
+              borderRadius: '6px',
+              padding: '10px 14px',
+              marginBottom: '16px',
+              color: '#ffaa00',
+              fontSize: '13px',
+            }}>
+              &#9888; {prevImportWarning} Duplicate transactions will be skipped automatically.
+            </div>
+          )}
           <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
             File: <strong style={{ color: 'var(--white)' }}>{selectedFile?.filename}</strong>
             {preview && (
@@ -707,7 +736,7 @@ function ImportModal({ accounts, onDone, onClose }) {
           {importError  && <p style={{ color: 'var(--red)', fontSize: 13, marginTop: 8 }}>{importError}</p>}
 
           <div style={importStyles.footer}>
-            <Button variant="secondary" onClick={() => { setStep(1); setPreview(null); setImportError('') }}>← Back</Button>
+            <Button variant="secondary" onClick={() => { setStep(1); setPreview(null); setImportError(''); setPrevImportWarning(null) }}>← Back</Button>
             <Button
               onClick={handleImport}
               disabled={
@@ -729,6 +758,11 @@ function ImportModal({ accounts, onDone, onClose }) {
             <ResultTile value={result.new_from_bank_count}   label="New from bank"       color="#8BE9FD" />
             <ResultTile value={result.estimates_pending}     label="Estimates pending"   color="#FF79C6" />
           </div>
+          {result.skipped_duplicates > 0 && (
+            <div style={{ marginTop: 12, padding: '8px 14px', background: 'rgba(255,170,0,0.08)', border: '1px solid rgba(255,170,0,0.3)', borderRadius: 'var(--radius)', fontSize: 13, color: '#ffaa00' }}>
+              Skipped (already imported): {result.skipped_duplicates}
+            </div>
+          )}
 
           {result.amount_diff_warnings.length > 0 && (
             <div style={{ marginTop: 16 }}>
@@ -832,6 +866,8 @@ export default function Transactions() {
   const [saving, setSaving]         = useState(false)
   const [actionError, setActionError] = useState('')
   const [reconciliation, setReconciliation] = useState(null)
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
 
   const load = useCallback((p = 0) => {
     setLoading(true)
@@ -855,6 +891,7 @@ export default function Transactions() {
       .then(([txRes, countRes]) => {
         setTransactions(txRes.data)
         setTotal(countRes.data.count)
+        setSelectedIds(new Set())
       })
       .catch(console.error)
       .finally(() => setLoading(false))
@@ -929,6 +966,21 @@ export default function Transactions() {
     }
   }
 
+  const handleBulkDelete = async () => {
+    try {
+      const ids = Array.from(selectedIds)
+      await client.delete('/transactions/bulk', {
+        params: { ids },
+        paramsSerializer: params => params.ids.map(id => `ids=${id}`).join('&'),
+      })
+      setBulkDeleteConfirm(false)
+      setSelectedIds(new Set())
+      load(page)
+    } catch (err) {
+      console.error('Bulk delete failed', err)
+    }
+  }
+
   const totalPages = Math.ceil(total / PAGE_SIZE)
 
   return (
@@ -970,6 +1022,51 @@ export default function Transactions() {
         onChange={(f) => setFilters(f)}
       />
 
+      {/* Bulk action toolbar */}
+      {selectedIds.size > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          padding: '8px 12px',
+          marginBottom: '10px',
+          background: 'rgba(255,85,85,0.08)',
+          border: '1px solid rgba(255,85,85,0.25)',
+          borderRadius: '8px',
+          fontSize: '13px',
+          color: 'var(--text)',
+        }}>
+          <span>{selectedIds.size} transaction{selectedIds.size !== 1 ? 's' : ''} selected</span>
+          <button
+            onClick={() => setBulkDeleteConfirm(true)}
+            style={{
+              background: 'rgba(255,85,85,0.15)',
+              border: '1px solid rgba(255,85,85,0.4)',
+              borderRadius: '6px',
+              color: '#ff5555',
+              padding: '5px 14px',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+          >
+            Delete selected
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--comment)',
+              cursor: 'pointer',
+              fontSize: '13px',
+              padding: '5px 8px',
+            }}
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       {loading ? (
         <p style={{ color: 'var(--muted)', marginTop: 24 }}>Loading…</p>
@@ -986,7 +1083,24 @@ export default function Transactions() {
         <>
           <div style={styles.table}>
             {/* Desktop header */}
-            <div className="tx-table-header" style={styles.tableHeader}>
+            <div className="tx-table-header" style={{ ...styles.tableHeader, gridTemplateColumns: isOwner ? '36px 100px 1fr 120px 120px 110px 110px 70px' : '100px 1fr 120px 120px 110px 110px 70px' }}>
+              {isOwner && (
+                <th style={{ width: '36px', padding: '10px 8px' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.size > 0 && selectedIds.size === transactions.length}
+                    ref={el => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < transactions.length; }}
+                    onChange={e => {
+                      if (e.target.checked) {
+                        setSelectedIds(new Set(transactions.map(t => t.id)));
+                      } else {
+                        setSelectedIds(new Set());
+                      }
+                    }}
+                    style={{ cursor: 'pointer' }}
+                  />
+                </th>
+              )}
               <span>Date</span>
               <span>Description</span>
               <span>Category</span>
@@ -1006,8 +1120,25 @@ export default function Transactions() {
                   style={{
                     ...styles.tableRow,
                     opacity: isEstimate ? 0.82 : 1,
+                    gridTemplateColumns: isOwner ? '36px 100px 1fr 120px 120px 110px 110px 70px' : '100px 1fr 120px 120px 110px 110px 70px',
                   }}
                 >
+                  {isOwner && (
+                    <span style={{ padding: '10px 8px' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(tx.id)}
+                        onChange={e => {
+                          setSelectedIds(prev => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(tx.id); else next.delete(tx.id);
+                            return next;
+                          });
+                        }}
+                        style={{ cursor: 'pointer' }}
+                      />
+                    </span>
+                  )}
                   <span style={{ color: 'var(--muted)', fontSize: 13 }}>{tx.date}</span>
 
                   <span style={{ color: isEstimate ? 'var(--muted)' : 'var(--white)' }}>
@@ -1138,6 +1269,20 @@ export default function Transactions() {
           }}
           onClose={() => setShowImport(false)}
         />
+      )}
+
+      {/* Bulk delete confirmation */}
+      {bulkDeleteConfirm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: 'var(--bg)', border: '1px solid var(--selection)', borderRadius: '12px', padding: '28px', width: '360px' }}>
+            <h3 style={{ marginTop: 0, color: '#ff5555' }}>Delete {selectedIds.size} transaction{selectedIds.size !== 1 ? 's' : ''}?</h3>
+            <p style={{ color: 'var(--comment)', fontSize: '14px', marginBottom: '24px' }}>This cannot be undone.</p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setBulkDeleteConfirm(false)} style={{ background: 'transparent', border: '1px solid var(--selection)', borderRadius: '6px', color: 'var(--text)', padding: '8px 16px', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={handleBulkDelete} style={{ background: 'rgba(255,85,85,0.15)', border: '1px solid rgba(255,85,85,0.4)', borderRadius: '6px', color: '#ff5555', padding: '8px 16px', cursor: 'pointer' }}>Delete</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

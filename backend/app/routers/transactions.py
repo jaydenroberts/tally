@@ -88,6 +88,17 @@ def create_transaction(
     return tx
 
 
+@router.delete("/bulk", status_code=status.HTTP_204_NO_CONTENT)
+def bulk_delete_transactions(
+    ids: List[int] = Query(..., description="List of transaction IDs to delete"),
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_owner),
+):
+    """Delete multiple transactions by ID. Owner-only. Silently skips IDs that don't exist."""
+    db.query(models.Transaction).filter(models.Transaction.id.in_(ids)).delete(synchronize_session=False)
+    db.commit()
+
+
 @router.get("/{tx_id}", response_model=schemas.TransactionResponse)
 def get_transaction(
     tx_id: int,

@@ -168,6 +168,42 @@ def run_startup_migrations(db: Session) -> None:
         db.commit()
         log.info("[M-002] Remediated analyst persona: removed contaminated v1.1.1 personal data seed, restored generic defaults")
 
+    # [M-003] Remove duplicate imported transactions created by re-importing the same file.
+    # Introduced in v1.1.5 alongside duplicate detection. This one-time cleanup removes
+    # exact duplicates (same account_id, date, amount, description, source='import'),
+    # keeping only the earliest row (lowest id) per group.
+
+    # Find all import transactions grouped by the four dedup fields
+    # Identify groups that have more than one row (i.e. have duplicates)
+    # For each such group, delete all rows except the one with the minimum id.
+    # We do this in Python to stay compatible with SQLite (no DELETE...JOIN syntax).
+
+    dupes_removed = 0
+    import_txs = (
+        db.query(models.Transaction)
+        .filter(models.Transaction.source == "import")
+        .order_by(models.Transaction.account_id, models.Transaction.date, models.Transaction.amount, models.Transaction.description, models.Transaction.id)
+        .all()
+    )
+
+    # Group by (account_id, date, amount, description)
+    seen = {}
+    to_delete = []
+    for tx in import_txs:
+        key = (tx.account_id, tx.date, tx.amount, tx.description)
+        if key in seen:
+            to_delete.append(tx)
+        else:
+            seen[key] = tx.id
+
+    for tx in to_delete:
+        db.delete(tx)
+        dupes_removed += 1
+
+    if dupes_removed:
+        db.commit()
+        log.info("[M-003] Removed %d duplicate imported transaction(s)", dupes_removed)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -194,7 +230,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.1.4",
+    version="1.1.5",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

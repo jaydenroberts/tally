@@ -83,6 +83,31 @@ def _find_match(
     return min(valid, key=lambda c: (abs(c.amount - bank_amount), abs((c.date - bank_date).days)))
 
 
+def _find_existing_import(
+    db: Session,
+    account_id: int,
+    bank_date,
+    bank_amount: float,
+    bank_desc: Optional[str],
+) -> bool:
+    """
+    Returns True if an identical imported transaction already exists.
+    Matches on account_id + date + amount + description (all four must match).
+    Only checks source='import' transactions.
+    """
+    q = db.query(models.Transaction).filter(
+        models.Transaction.account_id == account_id,
+        models.Transaction.source == "import",
+        models.Transaction.date == bank_date,
+        models.Transaction.amount == bank_amount,
+    )
+    if bank_desc is not None:
+        q = q.filter(models.Transaction.description == bank_desc)
+    else:
+        q = q.filter(models.Transaction.description.is_(None))
+    return q.first() is not None
+
+
 @router.get("/files")
 def list_importable_files(_: models.User = Depends(require_owner)):
     base = Path(FINANCIAL_DATA_PATH)
@@ -106,7 +131,8 @@ def list_importable_files(_: models.User = Depends(require_owner)):
 def preview_csv(
     filename: str = Query(..., description="Relative path within financial data directory"),
     rows: int = Query(5, ge=1, le=50, description="Number of sample rows to return"),
-    _: models.User = Depends(require_owner),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_owner),
 ):
     """
     Return column names and a sample of rows from a CSV file.
@@ -119,10 +145,23 @@ def preview_csv(
         df = pd.read_csv(file_path)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not parse CSV: {exc}")
+
+    prev_log = (
+        db.query(models.ImportLog)
+        .filter(
+            models.ImportLog.filename == filename,
+            models.ImportLog.user_id == current_user.id,
+        )
+        .order_by(models.ImportLog.imported_at.desc())
+        .first()
+    )
+
     return {
         "columns": list(df.columns),
         "sample_rows": df.head(rows).fillna("").to_dict(orient="records"),
         "total_rows": len(df),
+        "previously_imported": prev_log is not None,
+        "last_import_at": prev_log.imported_at.isoformat() if prev_log else None,
     }
 
 
@@ -203,6 +242,7 @@ def import_csv(
 
     matched_count = 0
     new_count = 0
+    skipped_count = 0
     errors = []
     amount_diff_warnings: list[schemas.MatchWarning] = []
 
@@ -256,18 +296,21 @@ def import_csv(
                 matched_count += 1
 
             else:
-                # No manual match → create a new verified import transaction
-                tx = models.Transaction(
-                    account_id=account_id,
-                    date=bank_date,
-                    description=bank_desc,
-                    amount=bank_amount,
-                    source="import",
-                    is_verified=True,
-                    import_log_id=log.id,
-                )
-                db.add(tx)
-                new_count += 1
+                # No manual match → check for duplicate before inserting
+                if _find_existing_import(db, account_id, bank_date, bank_amount, bank_desc):
+                    skipped_count += 1
+                else:
+                    tx = models.Transaction(
+                        account_id=account_id,
+                        date=bank_date,
+                        description=bank_desc,
+                        amount=bank_amount,
+                        source="import",
+                        is_verified=True,
+                        import_log_id=log.id,
+                    )
+                    db.add(tx)
+                    new_count += 1
 
         except Exception as exc:
             errors.append(str(exc))
@@ -290,6 +333,7 @@ def import_csv(
     return schemas.ReconciliationSummary(
         matched_count=matched_count,
         new_from_bank_count=new_count,
+        skipped_duplicates=skipped_count,
         estimates_pending=estimates_pending,
         amount_diff_warnings=amount_diff_warnings,
         import_log=log,
@@ -343,7 +387,8 @@ def _extract_pdf_dataframe(file_path: Path) -> pd.DataFrame:
 def preview_pdf(
     filename: str = Query(..., description="Relative path within financial data directory"),
     rows: int = Query(5, ge=1, le=50, description="Number of sample rows to return"),
-    _: models.User = Depends(require_owner),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_owner),
 ):
     """
     Extract tables from a PDF and return the column names plus a sample of rows.
@@ -355,10 +400,22 @@ def preview_pdf(
 
     df = _extract_pdf_dataframe(file_path)
 
+    prev_log = (
+        db.query(models.ImportLog)
+        .filter(
+            models.ImportLog.filename == filename,
+            models.ImportLog.user_id == current_user.id,
+        )
+        .order_by(models.ImportLog.imported_at.desc())
+        .first()
+    )
+
     return {
         "columns": list(df.columns),
         "sample_rows": df.head(rows).to_dict(orient="records"),
         "total_rows": len(df),
+        "previously_imported": prev_log is not None,
+        "last_import_at": prev_log.imported_at.isoformat() if prev_log else None,
     }
 
 
@@ -410,6 +467,7 @@ def import_pdf(
 
     matched_count = 0
     new_count = 0
+    skipped_count = 0
     errors = []
     amount_diff_warnings: list[schemas.MatchWarning] = []
 
@@ -444,17 +502,21 @@ def import_pdf(
                 matched_count += 1
 
             else:
-                tx = models.Transaction(
-                    account_id=account_id,
-                    date=bank_date,
-                    description=bank_desc,
-                    amount=bank_amount,
-                    source="import",
-                    is_verified=True,
-                    import_log_id=log.id,
-                )
-                db.add(tx)
-                new_count += 1
+                # No manual match → check for duplicate before inserting
+                if _find_existing_import(db, account_id, bank_date, bank_amount, bank_desc):
+                    skipped_count += 1
+                else:
+                    tx = models.Transaction(
+                        account_id=account_id,
+                        date=bank_date,
+                        description=bank_desc,
+                        amount=bank_amount,
+                        source="import",
+                        is_verified=True,
+                        import_log_id=log.id,
+                    )
+                    db.add(tx)
+                    new_count += 1
 
         except Exception as exc:
             errors.append(str(exc))
@@ -476,6 +538,7 @@ def import_pdf(
     return schemas.ReconciliationSummary(
         matched_count=matched_count,
         new_from_bank_count=new_count,
+        skipped_duplicates=skipped_count,
         estimates_pending=estimates_pending,
         amount_diff_warnings=amount_diff_warnings,
         import_log=log,
