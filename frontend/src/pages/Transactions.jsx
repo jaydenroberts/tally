@@ -304,6 +304,10 @@ function ImportModal({ accounts, onDone, onClose }) {
   const [dateCol, setDateCol]     = useState('')
   const [descCol, setDescCol]     = useState('')
   const [amtCol, setAmtCol]       = useState('')
+  // Split credit/debit mode (e.g. ING Australia: Date, Description, Credit, Debit, Balance)
+  const [splitMode, setSplitMode] = useState(false)
+  const [creditCol, setCreditCol] = useState('')
+  const [debitCol, setDebitCol]   = useState('')
   const [mappingError, setMappingError] = useState('')
 
   // Step 3 state
@@ -319,14 +323,30 @@ function ImportModal({ accounts, onDone, onClose }) {
       .finally(() => setFilesLoading(false))
   }, [])
 
-  // Auto-select first available column when preview loads
+  // Auto-select columns and detect split mode when preview loads
   useEffect(() => {
     if (!preview) return
     const cols = preview.columns
-    // Heuristic: pick the first column name containing "date", "desc", "amount"
+
+    // Auto-detect ING-style split format: headers contain both "credit" and "debit"
+    const hasCreditCol = cols.some((c) => /^credit$/i.test(c.trim()))
+    const hasDebitCol  = cols.some((c) => /^debit$/i.test(c.trim()))
+    const detectedSplit = hasCreditCol && hasDebitCol
+    setSplitMode(detectedSplit)
+
     setDateCol(cols.find((c) => /date/i.test(c)) ?? cols[0] ?? '')
     setDescCol(cols.find((c) => /desc|narr|detail|name|memo/i.test(c)) ?? cols[1] ?? '')
-    setAmtCol(cols.find((c) => /amount|amt|debit|credit|value/i.test(c)) ?? cols[2] ?? '')
+
+    if (detectedSplit) {
+      // Pre-select the Credit and Debit columns
+      setCreditCol(cols.find((c) => /^credit$/i.test(c.trim())) ?? '')
+      setDebitCol(cols.find((c) => /^debit$/i.test(c.trim())) ?? '')
+      setAmtCol('')
+    } else {
+      setAmtCol(cols.find((c) => /amount|amt|value/i.test(c)) ?? cols[2] ?? '')
+      setCreditCol('')
+      setDebitCol('')
+    }
   }, [preview])
 
   function fileTypeOf(file) {
@@ -352,16 +372,15 @@ function ImportModal({ accounts, onDone, onClose }) {
         setPreviewLoading(false)
       }
     } else {
-      // For CSV, we'll show column fields without a preview table
-      // Fetch a preview anyway so we can populate dropdowns
+      // Fetch CSV preview — populates column dropdowns and triggers split-mode auto-detection
       setPreviewLoading(true)
       try {
-        // CSV preview: read first 5 rows using pandas read_csv on backend
-        // We use the same pdf preview logic but for csv — however the backend
-        // doesn't have a CSV preview endpoint yet. We'll use generic column names
-        // and let users type them in. A note is shown.
-        setPreview(null)
+        const r = await client.get('/import/csv/preview', {
+          params: { filename: selectedFile.filename, rows: 5 },
+        })
+        setPreview(r.data)
       } catch {
+        // If preview fails, fall back to manual text entry with no auto-detection
         setPreview(null)
       } finally {
         setPreviewLoading(false)
@@ -371,24 +390,45 @@ function ImportModal({ accounts, onDone, onClose }) {
   }
 
   async function handleImport() {
-    if (!dateCol || !descCol || !amtCol) {
-      setMappingError('All three columns are required')
+    const type = fileTypeOf(selectedFile)
+
+    // Validate required column mapping based on mode
+    if (!dateCol || !descCol) {
+      setMappingError('Date and description columns are required')
       return
     }
+    if (type === 'csv' && splitMode) {
+      if (!creditCol || !debitCol) {
+        setMappingError('Both credit and debit columns are required in split mode')
+        return
+      }
+    } else {
+      if (!amtCol) {
+        setMappingError('Amount column is required')
+        return
+      }
+    }
+
     setMappingError('')
     setImporting(true)
     try {
-      const type = fileTypeOf(selectedFile)
       const endpoint = type === 'pdf' ? '/import/pdf' : '/import/csv'
-      const r = await client.post(endpoint, null, {
-        params: {
-          filename:   selectedFile.filename,
-          account_id: accountId,
-          date_col:   dateCol,
-          desc_col:   descCol,
-          amount_col: amtCol,
-        },
-      })
+
+      // Build params — CSV supports split credit/debit mode; PDF uses single amount column
+      const params = {
+        filename:   selectedFile.filename,
+        account_id: accountId,
+        date_col:   dateCol,
+        desc_col:   descCol,
+      }
+      if (type === 'csv' && splitMode) {
+        params.credit_col = creditCol
+        params.debit_col  = debitCol
+      } else {
+        params.amount_col = amtCol
+      }
+
+      const r = await client.post(endpoint, null, { params })
       setResult(r.data)
       setStep(3)
     } catch (e) {
@@ -557,9 +597,45 @@ function ImportModal({ accounts, onDone, onClose }) {
           {/* Column mapping fields */}
           <p style={importStyles.stepLabel}>Map columns</p>
 
-          {type === 'pdf' && preview ? (
-            // Dropdown selectors when we know the column names
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          {/* Amount mode toggle — CSV only (PDF always uses single amount column) */}
+          {type === 'csv' && (
+            <div style={{ marginBottom: 16 }}>
+              <p style={importStyles.stepLabel}>Amount format</p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => setSplitMode(false)}
+                  style={{
+                    ...importStyles.modeBtn,
+                    background: !splitMode ? 'var(--cyan)' : 'var(--bg)',
+                    color:      !splitMode ? '#282A36'     : 'var(--muted)',
+                    borderColor: !splitMode ? 'var(--cyan)' : 'var(--border)',
+                  }}
+                >
+                  Single amount column
+                </button>
+                <button
+                  onClick={() => setSplitMode(true)}
+                  style={{
+                    ...importStyles.modeBtn,
+                    background: splitMode ? 'var(--cyan)' : 'var(--bg)',
+                    color:      splitMode ? '#282A36'    : 'var(--muted)',
+                    borderColor: splitMode ? 'var(--cyan)' : 'var(--border)',
+                  }}
+                >
+                  Separate credit / debit columns
+                </button>
+              </div>
+              {splitMode && (
+                <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
+                  Use this for ING Australia and other banks that export Credit and Debit as separate columns.
+                </p>
+              )}
+            </div>
+          )}
+
+          {preview ? (
+            // Dropdown selectors when we have a preview (CSV or PDF)
+            <div style={{ display: 'grid', gridTemplateColumns: type === 'csv' && splitMode ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
               <FormField label="Date column *">
                 <select style={selectStyle} value={dateCol} onChange={(e) => setDateCol(e.target.value)}>
                   <option value="">Select…</option>
@@ -572,29 +648,57 @@ function ImportModal({ accounts, onDone, onClose }) {
                   {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </FormField>
-              <FormField label="Amount column *">
-                <select style={selectStyle} value={amtCol} onChange={(e) => setAmtCol(e.target.value)}>
-                  <option value="">Select…</option>
-                  {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </FormField>
+              {type === 'csv' && splitMode ? (
+                <>
+                  <FormField label="Credit column *">
+                    <select style={selectStyle} value={creditCol} onChange={(e) => setCreditCol(e.target.value)}>
+                      <option value="">Select…</option>
+                      {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </FormField>
+                  <FormField label="Debit column *">
+                    <select style={selectStyle} value={debitCol} onChange={(e) => setDebitCol(e.target.value)}>
+                      <option value="">Select…</option>
+                      {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </FormField>
+                </>
+              ) : (
+                <FormField label="Amount column *">
+                  <select style={selectStyle} value={amtCol} onChange={(e) => setAmtCol(e.target.value)}>
+                    <option value="">Select…</option>
+                    {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </FormField>
+              )}
             </div>
           ) : (
-            // Text inputs for CSV (or PDF where preview failed)
+            // Text inputs for CSV where preview failed, or PDF where preview failed
             <>
               <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
                 Enter the exact column header names from your {type === 'pdf' ? 'PDF' : 'CSV'} file.
               </p>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: type === 'csv' && splitMode ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
                 <FormField label="Date column *">
                   <input style={inputStyle} value={dateCol} onChange={(e) => setDateCol(e.target.value)} placeholder="e.g. Date" />
                 </FormField>
                 <FormField label="Description column *">
                   <input style={inputStyle} value={descCol} onChange={(e) => setDescCol(e.target.value)} placeholder="e.g. Description" />
                 </FormField>
-                <FormField label="Amount column *">
-                  <input style={inputStyle} value={amtCol} onChange={(e) => setAmtCol(e.target.value)} placeholder="e.g. Amount" />
-                </FormField>
+                {type === 'csv' && splitMode ? (
+                  <>
+                    <FormField label="Credit column *">
+                      <input style={inputStyle} value={creditCol} onChange={(e) => setCreditCol(e.target.value)} placeholder="e.g. Credit" />
+                    </FormField>
+                    <FormField label="Debit column *">
+                      <input style={inputStyle} value={debitCol} onChange={(e) => setDebitCol(e.target.value)} placeholder="e.g. Debit" />
+                    </FormField>
+                  </>
+                ) : (
+                  <FormField label="Amount column *">
+                    <input style={inputStyle} value={amtCol} onChange={(e) => setAmtCol(e.target.value)} placeholder="e.g. Amount" />
+                  </FormField>
+                )}
               </div>
             </>
           )}
@@ -604,7 +708,13 @@ function ImportModal({ accounts, onDone, onClose }) {
 
           <div style={importStyles.footer}>
             <Button variant="secondary" onClick={() => { setStep(1); setPreview(null); setImportError('') }}>← Back</Button>
-            <Button onClick={handleImport} disabled={importing || !dateCol || !descCol || !amtCol}>
+            <Button
+              onClick={handleImport}
+              disabled={
+                importing || !dateCol || !descCol ||
+                (type === 'csv' && splitMode ? (!creditCol || !debitCol) : !amtCol)
+              }
+            >
               {importing ? 'Importing…' : 'Run import'}
             </Button>
           </div>
@@ -690,6 +800,10 @@ const importStyles = {
   warnRow: {
     display: 'flex', alignItems: 'center', gap: 12,
     padding: '8px 12px', borderBottom: '1px solid var(--border)',
+  },
+  modeBtn: {
+    padding: '6px 14px', borderRadius: 'var(--radius)', border: '1px solid',
+    fontSize: 12, fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
   },
 }
 

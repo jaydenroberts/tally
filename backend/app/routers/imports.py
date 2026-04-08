@@ -102,6 +102,30 @@ def list_importable_files(_: models.User = Depends(require_owner)):
     return files
 
 
+@router.get("/csv/preview")
+def preview_csv(
+    filename: str = Query(..., description="Relative path within financial data directory"),
+    rows: int = Query(5, ge=1, le=50, description="Number of sample rows to return"),
+    _: models.User = Depends(require_owner),
+):
+    """
+    Return column names and a sample of rows from a CSV file.
+    Use before importing to confirm column mapping — identical shape to PDF preview.
+    """
+    file_path = _safe_path(filename)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        df = pd.read_csv(file_path)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not parse CSV: {exc}")
+    return {
+        "columns": list(df.columns),
+        "sample_rows": df.head(rows).fillna("").to_dict(orient="records"),
+        "total_rows": len(df),
+    }
+
+
 @router.post(
     "/csv",
     response_model=schemas.ReconciliationSummary,
@@ -112,10 +136,35 @@ def import_csv(
     account_id: int = Query(...),
     date_col: str = Query("Date"),
     desc_col: str = Query("Description"),
-    amount_col: str = Query("Amount"),
+    amount_col: Optional[str] = Query(None, description="Single signed amount column (mutually exclusive with credit_col/debit_col)"),
+    credit_col: Optional[str] = Query(None, description="Credit column for split credit/debit format (e.g. ING Australia)"),
+    debit_col: Optional[str] = Query(None, description="Debit column for split credit/debit format (e.g. ING Australia)"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_owner),
 ):
+    """
+    Import transactions from a CSV bank statement.
+
+    Supports two amount formats:
+    - Single column: provide `amount_col` (signed value, credits positive)
+    - Split columns: provide both `credit_col` and `debit_col`; combined amount =
+      (credit or 0) - (debit or 0), producing a signed value where credits are positive.
+      This matches the ING Australia CSV export format (Date, Description, Credit, Debit, Balance).
+    """
+    # Validate amount mode — must provide either amount_col or both credit_col + debit_col
+    split_mode = credit_col is not None and debit_col is not None
+    single_mode = amount_col is not None
+    if not split_mode and not single_mode:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide either amount_col (single column) or both credit_col and debit_col (split format).",
+        )
+    if split_mode and single_mode:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide either amount_col or credit_col/debit_col — not both.",
+        )
+
     account = db.query(models.Account).filter(models.Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -129,7 +178,13 @@ def import_csv(
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not parse CSV: {exc}")
 
-    missing = [c for c in (date_col, desc_col, amount_col) if c not in df.columns]
+    # Validate that the required columns exist in the file
+    if split_mode:
+        required_cols = [date_col, desc_col, credit_col, debit_col]
+    else:
+        required_cols = [date_col, desc_col, amount_col]
+
+    missing = [c for c in required_cols if c not in df.columns]
     if missing:
         raise HTTPException(
             status_code=422,
@@ -151,11 +206,28 @@ def import_csv(
     errors = []
     amount_diff_warnings: list[schemas.MatchWarning] = []
 
+    def _parse_split_amount(val) -> float:
+        """Parse a credit or debit cell value; treats empty/NaN as 0."""
+        if val is None:
+            return 0.0
+        s = str(val).strip()
+        if s == '' or s.lower() == 'nan':
+            return 0.0
+        return float(s.replace(',', '').replace('$', ''))
+
     for _, row in df.iterrows():
         try:
-            bank_date   = pd.to_datetime(row[date_col]).date()
-            bank_amount = float(row[amount_col])
-            bank_desc   = str(row[desc_col]) if pd.notna(row[desc_col]) else None
+            bank_date = pd.to_datetime(row[date_col]).date()
+            bank_desc = str(row[desc_col]) if pd.notna(row[desc_col]) else None
+
+            if split_mode:
+                # ING-style: Credit and Debit are separate columns; one will be empty per row.
+                # (credit or 0) - (debit or 0) → signed amount (credits positive, debits negative)
+                credit = _parse_split_amount(row[credit_col])
+                debit  = _parse_split_amount(row[debit_col])
+                bank_amount = credit - debit
+            else:
+                bank_amount = float(row[amount_col])
 
             match = _find_match(db, account_id, bank_date, bank_amount)
 
