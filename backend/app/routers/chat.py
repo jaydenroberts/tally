@@ -6,9 +6,9 @@ POST /api/chat
     configured AI provider (see providers.py).
 
 Data access is scoped by the current user's persona:
-    data_access_level == "full"     → transactions + accounts + budgets + categories
-    data_access_level == "summary"  → aggregated summaries only (no raw transactions)
-    data_access_level == "readonly" → same as full but read-only (family view)
+    data_access_level == "full"     → transactions + accounts + budgets + categories (read + write tools available)
+    data_access_level == "readonly" → same as full but read-only (read tools only, no write tools)
+    data_access_level == "summary"  → aggregated totals only; no raw tool access (family view)
 
 Write tools (update_transaction, add_transaction, add_savings_contribution,
 add_debt_payment) are only included when persona.can_modify_data is True.
@@ -245,7 +245,10 @@ def _execute_tool(
     if tool_name == "get_accounts":
         accounts = (
             db.query(models.Account)
-            .filter(models.Account.is_active == True)
+            .filter(
+                models.Account.user_id == current_user.id,
+                models.Account.is_active == True,
+            )
             .all()
         )
         return [
@@ -270,8 +273,12 @@ def _execute_tool(
         limit = min(int(tool_input.get("limit", 50)), 100)
         q = (
             db.query(models.Transaction)
+            .join(models.Account, models.Transaction.account_id == models.Account.id)
             .options(joinedload(models.Transaction.category))
-            .filter(models.Transaction.date >= window_start)
+            .filter(
+                models.Account.user_id == current_user.id,
+                models.Transaction.date >= window_start,
+            )
         )
         if "date_from" in tool_input and tool_input["date_from"]:
             try:
@@ -315,6 +322,7 @@ def _execute_tool(
             db.query(models.Budget)
             .options(joinedload(models.Budget.category))
             .filter(
+                models.Budget.user_id == current_user.id,
                 models.Budget.is_active == True,
                 models.Budget.start_date <= last_day,
                 or_(models.Budget.end_date == None, models.Budget.end_date >= first_day),
@@ -325,7 +333,9 @@ def _execute_tool(
         for budget in budgets:
             verified_raw = (
                 db.query(func.sum(models.Transaction.amount))
+                .join(models.Account, models.Transaction.account_id == models.Account.id)
                 .filter(
+                    models.Account.user_id == current_user.id,
                     models.Transaction.category_id == budget.category_id,
                     models.Transaction.date >= first_day,
                     models.Transaction.date <= last_day,
@@ -335,7 +345,9 @@ def _execute_tool(
             ) or 0.0
             estimated_raw = (
                 db.query(func.sum(models.Transaction.amount))
+                .join(models.Account, models.Transaction.account_id == models.Account.id)
                 .filter(
+                    models.Account.user_id == current_user.id,
                     models.Transaction.category_id == budget.category_id,
                     models.Transaction.date >= first_day,
                     models.Transaction.date <= last_day,
@@ -375,10 +387,11 @@ def _execute_tool(
 
     if tool_name == "add_transaction":
         account = db.query(models.Account).filter(
-            models.Account.id == tool_input.get("account_id")
+            models.Account.id == tool_input.get("account_id"),
+            models.Account.user_id == current_user.id,
         ).first()
         if not account:
-            return {"error": f"Account {tool_input.get('account_id')} not found."}
+            return {"error": f"Account {tool_input.get('account_id')} not found or not accessible."}
         try:
             tx_date = date.fromisoformat(tool_input["date"])
         except (KeyError, ValueError):
@@ -400,9 +413,17 @@ def _execute_tool(
 
     if tool_name == "update_transaction":
         tx_id = tool_input.get("transaction_id")
-        tx = db.query(models.Transaction).filter(models.Transaction.id == tx_id).first()
+        tx = (
+            db.query(models.Transaction)
+            .join(models.Account, models.Transaction.account_id == models.Account.id)
+            .filter(
+                models.Transaction.id == tx_id,
+                models.Account.user_id == current_user.id,
+            )
+            .first()
+        )
         if not tx:
-            return {"error": f"Transaction {tx_id} not found."}
+            return {"error": f"Transaction {tx_id} not found or not accessible."}
         if tx.is_verified and tx.source == "import":
             return {"error": "Imported (verified) transactions cannot be edited."}
         updatable = {
@@ -426,9 +447,12 @@ def _execute_tool(
         amount  = float(tool_input.get("amount", 0))
         if amount <= 0:
             return {"error": "Contribution amount must be positive."}
-        goal = db.query(models.SavingsGoal).filter(models.SavingsGoal.id == goal_id).first()
+        goal = db.query(models.SavingsGoal).filter(
+            models.SavingsGoal.id == goal_id,
+            models.SavingsGoal.user_id == current_user.id,
+        ).first()
         if not goal:
-            return {"error": f"Savings goal {goal_id} not found."}
+            return {"error": f"Savings goal {goal_id} not found or not accessible."}
         if goal.is_completed:
             return {"error": "Goal is already completed."}
         new_amount = round(goal.current_amount + amount, 2)
@@ -454,9 +478,12 @@ def _execute_tool(
         amount  = float(tool_input.get("amount", 0))
         if amount <= 0:
             return {"error": "Payment amount must be positive."}
-        debt = db.query(models.Debt).filter(models.Debt.id == debt_id).first()
+        debt = db.query(models.Debt).filter(
+            models.Debt.id == debt_id,
+            models.Debt.user_id == current_user.id,
+        ).first()
         if not debt:
-            return {"error": f"Debt {debt_id} not found."}
+            return {"error": f"Debt {debt_id} not found or not accessible."}
         if debt.is_paid_off:
             return {"error": "Debt is already paid off."}
         new_balance = round(max(0.0, debt.current_balance - amount), 2)
@@ -498,22 +525,28 @@ def _build_system_prompt(
     access = persona.data_access_level   # "full" | "summary" | "readonly"
     lines: list[str] = []
 
-    # Persona identity
-    base_prompt = persona.system_prompt or (
-        "You are a helpful household finance assistant for the Tally app."
-    )
-    lines.append(base_prompt)
-    lines.append("")
+    # ── 1. Date and data window (system-controlled) ───────────────────────────
     lines.append(f"Today's date: {today.isoformat()}")
     lines.append(f"Data window: {window_start.isoformat()} to {today.isoformat()} ({persona.data_window_days} days)")
     lines.append("")
 
-    # Access-level-specific context
+    # ── 2. Access-level notice (system-controlled) ────────────────────────────
+    if access == "summary":
+        lines.append(
+            "You have summary-only access. You cannot view individual transactions, "
+            "account names, or detailed budget breakdowns."
+        )
+        lines.append("")
+
+    # ── 3. Financial context — accounts and budgets (system-controlled) ───────
     if access in ("full", "readonly"):
-        # Account balances
+        # Account balances scoped to current user
         accounts = (
             db.query(models.Account)
-            .filter(models.Account.is_active == True)
+            .filter(
+                models.Account.user_id == current_user.id,
+                models.Account.is_active == True,
+            )
             .all()
         )
         if accounts:
@@ -522,13 +555,14 @@ def _build_system_prompt(
                 lines.append(f"- {a.name} ({a.account_type or 'account'}): {a.currency} {a.balance:,.2f}")
             lines.append("")
 
-        # Current month budget snapshot
+        # Current month budget snapshot scoped to current user
         first_day = date(today.year, today.month, 1)
         last_day  = date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
         budgets = (
             db.query(models.Budget)
             .options(joinedload(models.Budget.category))
             .filter(
+                models.Budget.user_id == current_user.id,
                 models.Budget.is_active == True,
                 models.Budget.start_date <= last_day,
                 or_(models.Budget.end_date == None, models.Budget.end_date >= first_day),
@@ -540,7 +574,9 @@ def _build_system_prompt(
             for budget in budgets:
                 spend_raw = (
                     db.query(func.sum(models.Transaction.amount))
+                    .join(models.Account, models.Transaction.account_id == models.Account.id)
                     .filter(
+                        models.Account.user_id == current_user.id,
                         models.Transaction.category_id == budget.category_id,
                         models.Transaction.date >= first_day,
                         models.Transaction.date <= last_day,
@@ -554,10 +590,13 @@ def _build_system_prompt(
             lines.append("")
 
     elif access == "summary":
-        # Summary: only totals, no individual transactions
+        # Summary: only totals, no individual account names or transactions
         accounts = (
             db.query(models.Account)
-            .filter(models.Account.is_active == True)
+            .filter(
+                models.Account.user_id == current_user.id,
+                models.Account.is_active == True,
+            )
             .all()
         )
         total_balance = sum(a.balance for a in accounts)
@@ -569,7 +608,9 @@ def _build_system_prompt(
         last_day  = date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
         spend_raw = (
             db.query(func.sum(models.Transaction.amount))
+            .join(models.Account, models.Transaction.account_id == models.Account.id)
             .filter(
+                models.Account.user_id == current_user.id,
                 models.Transaction.date >= first_day,
                 models.Transaction.date <= last_day,
                 models.Transaction.amount < 0,
@@ -578,13 +619,8 @@ def _build_system_prompt(
         ) or 0.0
         lines.append(f"- Total spending this month: {abs(spend_raw):,.2f}")
         lines.append("")
-        lines.append(
-            "You have summary-only access. You cannot view individual transactions, "
-            "account names, or detailed budget breakdowns."
-        )
-        lines.append("")
 
-    # Capabilities notice
+    # ── 4. Capabilities notice (system-controlled) ────────────────────────────
     if persona.can_modify_data:
         lines.append(
             "You may use the write tools (add_transaction, update_transaction, "
@@ -592,7 +628,16 @@ def _build_system_prompt(
         )
     else:
         lines.append("You have read-only access. You cannot modify any data.")
+    lines.append("")
 
+    # ── 5. Persona system prompt (user-controlled — appended last so policy ───
+    #       enforcement text above cannot be overridden by prompt injection) ───
+    base_prompt = persona.system_prompt or (
+        "You are a helpful household finance assistant for the Tally app."
+    )
+    lines.append(base_prompt)
+
+    # ── 6. Tone notes (user-controlled — last) ────────────────────────────────
     if persona.tone_notes:
         lines.append("")
         lines.append(f"Tone guidance: {persona.tone_notes}")
@@ -714,7 +759,7 @@ async def chat(
                     window_start=window_start,
                 )
                 result_json = json.dumps(result)
-                yield _sse("tool_result", json.dumps({"name": tc["name"], "result": result}))
+                yield _sse("tool_result", json.dumps({"name": tc["name"]}))
 
                 # Append tool result to conversation for next round
                 current_messages.append({
