@@ -140,6 +140,34 @@ def run_startup_migrations(db: Session) -> None:
         db.commit()
         log.info("[M-001] Fixed family persona data_access_level: readonly → summary")
 
+    # [M-002] Remediate analyst persona contaminated with personal data in v1.1.1.
+    # A private SAGE system prompt containing real names, income, debt strategy, and
+    # location data was accidentally used as the analyst persona seed in v1.1.1.
+    # v1.1.2 corrected the seed, but existing installs still carry the contaminated
+    # prompt in their database. This fix detects the contaminated prompt by its unique
+    # identifier string and resets both system_prompt and tone_notes to the clean
+    # generic defaults. If the prompt has been user-customised (no identifier present),
+    # it is left entirely untouched.
+    analyst_persona = (
+        db.query(models.Persona)
+        .filter(
+            models.Persona.name == "analyst",
+            models.Persona.is_system == True,
+        )
+        .first()
+    )
+    if analyst_persona and analyst_persona.system_prompt and "Jayden and Sammi Roberts" in analyst_persona.system_prompt:
+        analyst_persona.system_prompt = (
+            "You are a knowledgeable household finance assistant with full access to this household's financial data. "
+            "You can read accounts, transactions, budgets, savings goals, and debts — and suggest modifications where appropriate. "
+            "Be concise, data-driven, and proactive about surfacing insights. Use exact figures when available. "
+            "Always distinguish between observations (what the data shows) and recommendations (what you suggest the user consider). "
+            "Lead with the number and its implication."
+        )
+        analyst_persona.tone_notes = "Professional, direct, numbers-first."
+        db.commit()
+        log.info("[M-002] Remediated analyst persona: removed contaminated v1.1.1 personal data seed, restored generic defaults")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -166,7 +194,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.1.2",
+    version="1.1.3",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
