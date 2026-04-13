@@ -1,4 +1,5 @@
 from typing import List
+from datetime import date as date_type
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
@@ -113,6 +114,30 @@ def log_payment(
         notes=payload.notes,
     )
     db.add(payment_record)
+
+    # Optionally create a linked debit transaction on the source account
+    if payload.source_account_id:
+        source_account = db.query(models.Account).filter(
+            models.Account.id == payload.source_account_id,
+            models.Account.is_active == True,
+        ).first()
+        if not source_account:
+            raise HTTPException(status_code=404, detail="Source account not found")
+        new_tx = models.Transaction(
+            account_id=payload.source_account_id,
+            date=date_type.today(),
+            description=f"Debt payment: {debt.name}",
+            amount=round(-payload.amount, 2),
+            source="manual",
+            is_verified=False,
+            debt_id=debt_id,
+            transaction_type="debt_payment",
+        )
+        db.add(new_tx)
+        # Flush to assign new_tx.id before linking it to the payment record
+        db.flush()
+        payment_record.transaction_id = new_tx.id
+
     db.commit()
     return _load_debt(db, debt_id)
 

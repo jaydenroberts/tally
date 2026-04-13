@@ -109,6 +109,12 @@ input, select, textarea {
 .fab:hover  { transform: scale(1.08); box-shadow: 0 6px 20px rgba(80, 250, 123, 0.45); }
 .fab:active { transform: scale(0.96); }
 
+/* Inline category cell — subtle hover hint that it's clickable */
+.tx-category-cell:hover {
+  background: rgba(98, 114, 164, 0.18);  /* --muted at ~18% alpha */
+  color: var(--white) !important;
+}
+
 /* ── Scrollbar ────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 6px;

@@ -137,6 +137,7 @@ class AccountUpdate(BaseModel):
     institution: Optional[str] = None
     balance: Optional[float] = None
     currency: Optional[str] = None
+    status: Optional[str] = None          # "active" | "closed"
     is_active: Optional[bool] = None
     notes: Optional[str] = None
 
@@ -149,6 +150,7 @@ class AccountResponse(BaseModel):
     institution: Optional[str] = None
     balance: float
     currency: str
+    status: str = "active"
     is_active: bool
     notes: Optional[str] = None
     created_at: datetime
@@ -207,6 +209,7 @@ class TransactionUpdate(BaseModel):
     category_id: Optional[int] = None
     notes: Optional[str] = None
     # is_verified intentionally excluded — verification is automatic only
+    # transaction_type intentionally excluded — set only via link/unlink endpoints
 
 
 class TransactionResponse(BaseModel):
@@ -223,7 +226,28 @@ class TransactionResponse(BaseModel):
     category: Optional[CategoryResponse] = None
     notes: Optional[str] = None
     import_log_id: Optional[int] = None
+    savings_goal_id: Optional[int] = None
+    debt_id: Optional[int] = None
+    transaction_type: str = "expense"              # expense | income | transfer | debt_payment
+    transfer_pair_id: Optional[int] = None         # groups the two sides of a transfer
     created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TransferCreate(BaseModel):
+    source_account_id: int
+    destination_account_id: int
+    amount: float          # positive value — sign applied automatically
+    date: date
+    description: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class TransferResponse(BaseModel):
+    debit_transaction: TransactionResponse
+    credit_transaction: TransactionResponse
+    transfer_pair_id: int
 
     model_config = {"from_attributes": True}
 
@@ -259,6 +283,7 @@ class MatchWarning(BaseModel):
 class ReconciliationSummary(BaseModel):
     matched_count: int          # manual estimates matched + verified by this import
     new_from_bank_count: int    # brand-new transactions created from this import
+    skipped_duplicates: int = 0 # rows skipped because an identical import already exists
     estimates_pending: int      # unverified manual entries still in this account
     amount_diff_warnings: list[MatchWarning]
     import_log: ImportLogResponse
@@ -420,6 +445,7 @@ class DebtResponse(BaseModel):
 class PaymentRequest(BaseModel):
     amount: float
     notes: Optional[str] = None
+    source_account_id: Optional[int] = None  # if set, creates a linked debit transaction on this account
 
 
 class DebtPaymentResponse(BaseModel):
@@ -429,8 +455,13 @@ class DebtPaymentResponse(BaseModel):
     balance_after: float
     notes: Optional[str] = None
     paid_at: datetime
+    transaction_id: Optional[int] = None           # set if a linked transaction exists
 
     model_config = {"from_attributes": True}
+
+
+class LinkTransactionToDebtRequest(BaseModel):
+    debt_id: int
 
 
 class SavingsContributionResponse(BaseModel):
@@ -440,8 +471,56 @@ class SavingsContributionResponse(BaseModel):
     balance_after: float
     notes: Optional[str] = None
     contributed_at: datetime
+    transaction_id: Optional[int] = None   # set when contribution is linked to a source transaction
 
     model_config = {"from_attributes": True}
+
+
+class LinkTransactionToSavingsItem(BaseModel):
+    goal_id: int
+    amount: float  # portion of the transaction to allocate to this goal
+
+
+class LinkTransactionToSavingsRequest(BaseModel):
+    allocations: list[LinkTransactionToSavingsItem]
+
+
+class LinkTransactionToSavingsResponse(BaseModel):
+    contributions: list[SavingsContributionResponse]
+    total_allocated: float
+    transaction_id: int
+
+    model_config = {"from_attributes": True}
+
+
+class LinkTransferPairRequest(BaseModel):
+    transaction_a_id: int
+    transaction_b_id: int
+
+
+class LinkSavingsWithdrawalRequest(BaseModel):
+    goal_id: int
+
+
+class AllocateItem(BaseModel):
+    goal_id: int
+    amount: float
+
+
+class AllocateRequest(BaseModel):
+    account_id: int
+    allocations: list[AllocateItem]
+
+
+class AllocateResponse(BaseModel):
+    updated_goals: list[SavingsGoalResponse]
+    available_before: float
+    available_after: float
+
+
+class WithdrawResponse(BaseModel):
+    goal: SavingsGoalResponse
+    transaction: TransactionResponse
 
 
 # ---------------------------------------------------------------------------

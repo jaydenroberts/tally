@@ -121,7 +121,7 @@ const bar = {
 
 // ─── Goal card ────────────────────────────────────────────────────────────────
 
-function GoalCard({ goal, isOwner, onEdit, onDelete, onContribute, onHistory }) {
+function GoalCard({ goal, isOwner, onEdit, onDelete, onContribute, onHistory, onWithdraw }) {
   const { formatCurrency } = useCurrency()
   const pct      = goal.target_amount > 0
     ? Math.min(100, (goal.current_amount / goal.target_amount) * 100)
@@ -208,17 +208,29 @@ function GoalCard({ goal, isOwner, onEdit, onDelete, onContribute, onHistory }) 
         </div>
       </div>
 
-      {/* Contribute button */}
-      {isOwner && !goal.is_completed && (
-        <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={onContribute}
-            style={{ width: '100%', justifyContent: 'center' }}
-          >
-            + Log contribution
-          </Button>
+      {/* Contribute + withdraw buttons */}
+      {isOwner && (
+        <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {!goal.is_completed && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={onContribute}
+              style={{ width: '100%', justifyContent: 'center' }}
+            >
+              + Log contribution
+            </Button>
+          )}
+          {goal.linked_account_id && goal.current_amount > 0 && (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={onWithdraw}
+              style={{ width: '100%', justifyContent: 'center' }}
+            >
+              Mark as spent
+            </Button>
+          )}
         </div>
       )}
 
@@ -452,6 +464,101 @@ function ContributionHistoryModal({ goal, onClose }) {
   )
 }
 
+// ─── Allocate modal ──────────────────────────────────────────────────────────
+
+function AllocateModal({ summary, goals, onAllocate, onClose, saving, actionError }) {
+  const { formatCurrency } = useCurrency()
+  const [amounts, setAmounts] = useState(
+    Object.fromEntries(goals.map(g => [g.id, '']))
+  )
+
+  const total = Object.values(amounts).reduce((s, v) => s + (parseFloat(v) || 0), 0)
+  const remaining = Math.round((summary.available - total) * 100) / 100
+
+  function handleSubmit(e) {
+    e.preventDefault()
+    const allocations = goals
+      .filter(g => parseFloat(amounts[g.id]) > 0)
+      .map(g => ({ goal_id: g.id, amount: parseFloat(amounts[g.id]) }))
+    if (allocations.length === 0) return
+    onAllocate(allocations)
+  }
+
+  return (
+    <Modal title={`Allocate funds — ${summary.account_name}`} onClose={onClose} width={520}>
+      <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 16 }}>
+        Available to allocate:
+        <strong style={{ color: 'var(--cyan)', marginLeft: 6 }}>{formatCurrency(summary.available)}</strong>
+      </p>
+
+      <form onSubmit={handleSubmit}>
+        {goals.map(g => (
+          <FormField key={g.id} label={`${g.name} (${formatCurrency(g.current_amount)} / ${formatCurrency(g.target_amount)})`}>
+            <input
+              style={inputStyle}
+              type="number"
+              step="0.01"
+              min="0"
+              value={amounts[g.id]}
+              onChange={e => setAmounts(a => ({ ...a, [g.id]: e.target.value }))}
+              inputMode="decimal"
+              placeholder="0.00"
+            />
+          </FormField>
+        ))}
+
+        <div style={{ padding: '12px 0', borderTop: '1px solid var(--border)', marginTop: 8, display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 13, color: 'var(--muted)' }}>Total allocating</span>
+          <strong style={{ color: total > summary.available ? 'var(--red)' : 'var(--white)' }}>
+            {formatCurrency(total)}
+          </strong>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+          <span style={{ fontSize: 13, color: 'var(--muted)' }}>Remaining available after</span>
+          <strong style={{ color: remaining < 0 ? 'var(--red)' : 'var(--cyan)' }}>
+            {formatCurrency(remaining)}
+          </strong>
+        </div>
+
+        {actionError && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{actionError}</p>}
+
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={saving || total <= 0 || total > summary.available + 0.001}>
+            {saving ? 'Allocating…' : 'Confirm allocation'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+// ─── Withdraw modal ──────────────────────────────────────────────────────────
+
+function WithdrawModal({ goal, onConfirm, onClose, saving, actionError }) {
+  const { formatCurrency } = useCurrency()
+  return (
+    <Modal title="Mark as spent?" onClose={onClose} width={440}>
+      <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+        <strong>{goal.name}</strong>
+      </p>
+      <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 16 }}>
+        This will create a debit transaction of{' '}
+        <strong style={{ color: 'var(--pink)' }}>{formatCurrency(goal.current_amount)}</strong>{' '}
+        on <strong>{goal.linked_account?.name ?? 'the linked account'}</strong> and mark the goal as completed.
+        The transaction will be verified when your next bank statement is imported.
+      </p>
+      {actionError && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{actionError}</p>}
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button variant="danger" onClick={onConfirm} disabled={saving}>
+          {saving ? 'Processing…' : 'Confirm — mark as spent'}
+        </Button>
+      </div>
+    </Modal>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Savings() {
@@ -468,13 +575,31 @@ export default function Savings() {
   const [deleting, setDeleting]         = useState(null)
   const [contributing, setContributing] = useState(null)
   const [viewHistory, setViewHistory]   = useState(null)  // goal whose contribution history to show
+  const [allocating, setAllocating]     = useState(null)  // account summary to allocate from
+  const [withdrawing, setWithdrawing]   = useState(null)  // goal to mark as spent
   const [saving, setSaving]             = useState(false)
   const [actionError, setActionError]   = useState('')
+  const [accountSummaries, setAccountSummaries] = useState({})
 
   const load = useCallback(() => {
     setLoading(true)
     client.get('/savings')
-      .then((r) => setGoals(r.data))
+      .then(async (r) => {
+        setGoals(r.data)
+        // Fetch savings account summaries for accounts with active goals
+        const accountIds = [...new Set(
+          r.data
+            .filter(g => !g.is_completed && g.linked_account_id)
+            .map(g => g.linked_account_id)
+        )]
+        const summaries = {}
+        await Promise.all(accountIds.map(id =>
+          client.get(`/savings/account/${id}/summary`)
+            .then(s => { summaries[id] = s.data })
+            .catch(() => {})
+        ))
+        setAccountSummaries(summaries)
+      })
       .catch(() => setError('Failed to load savings goals'))
       .finally(() => setLoading(false))
   }, [])
@@ -531,6 +656,29 @@ export default function Savings() {
     } finally { setSaving(false) }
   }
 
+  async function handleAllocate(allocations) {
+    setSaving(true); setActionError('')
+    try {
+      await client.post('/savings/allocate', {
+        account_id: allocating.account_id,
+        allocations,
+      })
+      setAllocating(null); load()
+    } catch (e) {
+      setActionError(e.response?.data?.detail ?? 'Allocation failed')
+    } finally { setSaving(false) }
+  }
+
+  async function handleWithdraw() {
+    setSaving(true); setActionError('')
+    try {
+      await client.post(`/savings/${withdrawing.id}/withdraw`)
+      setWithdrawing(null); load()
+    } catch (e) {
+      setActionError(e.response?.data?.detail ?? 'Withdrawal failed')
+    } finally { setSaving(false) }
+  }
+
   return (
     <div>
       {/* Header */}
@@ -578,21 +726,56 @@ export default function Savings() {
         </div>
       ) : (
         <>
-          {activeGoals.length > 0 && (
-            <div style={styles.grid}>
-              {activeGoals.map((g) => (
-                <GoalCard
-                  key={g.id}
-                  goal={g}
-                  isOwner={isOwner}
-                  onEdit={() => { setEditing(g); setActionError('') }}
-                  onDelete={() => { setDeleting(g); setActionError('') }}
-                  onContribute={() => { setContributing(g); setActionError('') }}
-                  onHistory={() => setViewHistory(g)}
-                />
-              ))}
-            </div>
-          )}
+          {activeGoals.length > 0 && (() => {
+            // Group active goals by linked account (null = unlinked)
+            const groups = {}
+            for (const g of activeGoals) {
+              const key = g.linked_account_id ?? 'unlinked'
+              if (!groups[key]) groups[key] = []
+              groups[key].push(g)
+            }
+            return Object.entries(groups).map(([accountKey, groupGoals]) => {
+              const summary = accountKey !== 'unlinked' ? accountSummaries[accountKey] : null
+              return (
+                <div key={accountKey}>
+                  {summary && (
+                    <div style={styles.accountHeader}>
+                      <div>
+                        <span style={styles.accountHeaderName}>{summary.account_name}</span>
+                        <span style={styles.accountHeaderMeta}>
+                          Balance: {formatCurrency(summary.balance)}
+                          {' · '}Allocated: {formatCurrency(summary.total_allocated)}
+                          {' · '}
+                          <span style={{ color: summary.available > 0 ? 'var(--cyan)' : 'var(--pink)' }}>
+                            Available: {formatCurrency(summary.available)}
+                          </span>
+                        </span>
+                      </div>
+                      {isOwner && summary.available > 0 && (
+                        <Button size="sm" onClick={() => { setAllocating(summary); setActionError('') }}>
+                          Allocate funds
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  <div style={styles.grid}>
+                    {groupGoals.map((g) => (
+                      <GoalCard
+                        key={g.id}
+                        goal={g}
+                        isOwner={isOwner}
+                        onEdit={() => { setEditing(g); setActionError('') }}
+                        onDelete={() => { setDeleting(g); setActionError('') }}
+                        onContribute={() => { setContributing(g); setActionError('') }}
+                        onHistory={() => setViewHistory(g)}
+                        onWithdraw={() => { setWithdrawing(g); setActionError('') }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )
+            })
+          })()}
 
           {completedGoals.length > 0 && (
             <>
@@ -607,6 +790,7 @@ export default function Savings() {
                     onDelete={() => { setDeleting(g); setActionError('') }}
                     onContribute={() => {}}
                     onHistory={() => setViewHistory(g)}
+                    onWithdraw={() => { setWithdrawing(g); setActionError('') }}
                   />
                 ))}
               </div>
@@ -657,6 +841,29 @@ export default function Savings() {
 
       {viewHistory && (
         <ContributionHistoryModal goal={viewHistory} onClose={() => setViewHistory(null)} />
+      )}
+
+      {/* Allocate modal */}
+      {allocating && (
+        <AllocateModal
+          summary={allocating}
+          goals={activeGoals.filter(g => g.linked_account_id === allocating.account_id)}
+          onAllocate={handleAllocate}
+          onClose={() => setAllocating(null)}
+          saving={saving}
+          actionError={actionError}
+        />
+      )}
+
+      {/* Withdraw confirmation */}
+      {withdrawing && (
+        <WithdrawModal
+          goal={withdrawing}
+          onConfirm={handleWithdraw}
+          onClose={() => setWithdrawing(null)}
+          saving={saving}
+          actionError={actionError}
+        />
       )}
     </div>
   )
@@ -740,6 +947,14 @@ const styles = {
   empty: { textAlign: 'center', padding: '60px 0' },
   emptyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--white)', marginBottom: 8 },
   modalError: { color: 'var(--red)', fontSize: 13, marginBottom: 12 },
+  accountHeader: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '12px 16px', marginBottom: 12,
+    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-lg)', flexWrap: 'wrap', gap: 8,
+  },
+  accountHeaderName: { fontSize: 15, fontWeight: 600, color: 'var(--white)', marginRight: 12 },
+  accountHeaderMeta: { fontSize: 13, color: 'var(--muted)' },
 }
 
 const savingsHistoryStyles = {

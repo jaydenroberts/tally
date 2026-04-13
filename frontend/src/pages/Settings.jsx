@@ -282,7 +282,7 @@ function UserForm({ initial, roles, personas, onSave, onCancel, saving }) {
 
 // ─── Users tab ────────────────────────────────────────────────────────────────
 
-function UsersTab({ currentUser, roles, personas, onReload }) {
+function UsersTab({ currentUser, roles, personas, onReload, onRefreshCurrentUser }) {
   const [users, setUsers]       = useState([])
   const [loading, setLoading]   = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -317,6 +317,9 @@ function UsersTab({ currentUser, roles, personas, onReload }) {
     try {
       await client.patch(`/users/${editing.id}`, payload)
       setEditing(null); load(); onReload()
+      // Refresh the current user in AuthContext so persona changes are reflected
+      // immediately in the sidebar and Chat page without requiring a logout.
+      onRefreshCurrentUser()
     } catch (err) {
       setActionError(err.response?.data?.detail ?? 'Failed to update user')
     } finally { setSaving(false) }
@@ -845,7 +848,7 @@ function GeneralTab({ roles }) {
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Settings() {
-  const { user, isOwner } = useAuth()
+  const { user, isOwner, refreshUser } = useAuth()
 
   const [tab, setTab]           = useState('profile')
   const [roles, setRoles]       = useState([])
@@ -892,6 +895,7 @@ export default function Settings() {
           roles={roles}
           personas={personas}
           onReload={loadRolesAndPersonas}
+          onRefreshCurrentUser={refreshUser}
         />
       )}
       {tab === 'personas' && isOwner && (

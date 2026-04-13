@@ -99,6 +99,7 @@ class Account(Base):
     institution = Column(String(200))
     balance = Column(Float, default=0.0, nullable=False)
     currency = Column(String(10), default="USD", nullable=False)
+    status = Column(String(20), default="active", nullable=False)  # active | closed
     is_active = Column(Boolean, default=True, nullable=False)
     notes = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -161,12 +162,22 @@ class Transaction(Base):
 
     notes = Column(Text)
     import_log_id = Column(Integer, ForeignKey("import_logs.id"), nullable=True)
+    savings_goal_id = Column(Integer, ForeignKey("savings_goals.id"), nullable=True, index=True)
+    debt_id = Column(Integer, ForeignKey("debts.id"), nullable=True, index=True)
+    # Classifies the transaction's role — used for budget exclusion and import matching.
+    # Values: expense (default), income, transfer, debt_payment
+    transaction_type = Column(String(20), default="expense", nullable=False, index=True)
+    # Groups a transfer pair: both debit and credit transactions share the same value
+    # (set to the debit transaction's id). Plain integer — not a FK.
+    transfer_pair_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     account = relationship("Account", back_populates="transactions")
     category = relationship("Category", back_populates="transactions")
     import_log = relationship("ImportLog", back_populates="transactions")
+    savings_goal = relationship("SavingsGoal", backref="withdrawal_transactions")
+    debt = relationship("Debt", backref="payment_transactions")
 
 
 # ---------------------------------------------------------------------------
@@ -266,8 +277,12 @@ class DebtPayment(Base):
     balance_after = Column(Float, nullable=False)   # current_balance after this payment
     notes = Column(Text, nullable=True)
     paid_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Optional FK to the transaction that represents this payment (set when linked or
+    # auto-created by the log_payment endpoint with source_account_id).
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True, unique=True)
 
     debt = relationship("Debt", back_populates="payments")
+    transaction = relationship("Transaction", foreign_keys=[transaction_id])
 
 
 # ---------------------------------------------------------------------------
@@ -287,8 +302,11 @@ class SavingsContribution(Base):
     balance_after = Column(Float, nullable=False)   # current_amount after this contribution
     notes = Column(Text, nullable=True)
     contributed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Optional FK to the source transaction (set when allocated via link-savings endpoint)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True)
 
     goal = relationship("SavingsGoal", back_populates="contributions")
+    transaction = relationship("Transaction", foreign_keys=[transaction_id])
 
 
 # ---------------------------------------------------------------------------

@@ -468,10 +468,11 @@ function DebtForm({ initial, accounts, onSave, onCancel, saving }) {
 
 // ─── Payment form ─────────────────────────────────────────────────────────────
 
-function PaymentForm({ debt, onSave, onCancel, saving }) {
+function PaymentForm({ debt, accounts, onSave, onCancel, saving }) {
   const { formatCurrency } = useCurrency()
   const [amount, setAmount] = useState(debt.minimum_payment ? String(debt.minimum_payment) : '')
   const [notes, setNotes]   = useState('')
+  const [sourceAccountId, setSourceAccountId] = useState('')
   const [error, setError]   = useState('')
 
   function handleSubmit(e) {
@@ -479,7 +480,11 @@ function PaymentForm({ debt, onSave, onCancel, saving }) {
     const val = parseFloat(amount)
     if (isNaN(val) || val <= 0) { setError('Enter a positive amount'); return }
     setError('')
-    onSave({ amount: val, notes: notes.trim() || null })
+    onSave({
+      amount: val,
+      notes: notes.trim() || null,
+      source_account_id: sourceAccountId ? parseInt(sourceAccountId) : null,
+    })
   }
 
   return (
@@ -499,6 +504,15 @@ function PaymentForm({ debt, onSave, onCancel, saving }) {
           value={amount} onChange={(e) => setAmount(e.target.value)}
           required autoFocus inputMode="decimal"
         />
+      </FormField>
+
+      <FormField label="Source account" hint="Optional — creates a linked debit transaction on this account">
+        <select style={selectStyle} value={sourceAccountId} onChange={(e) => setSourceAccountId(e.target.value)}>
+          <option value="">None</option>
+          {(accounts || []).map(a => (
+            <option key={a.id} value={a.id}>{a.name}{a.institution ? ` · ${a.institution}` : ''}</option>
+          ))}
+        </select>
       </FormField>
 
       <FormField label="Notes" hint="Optional — e.g. 'Direct debit' or 'Extra payment'">
@@ -574,6 +588,23 @@ function PaymentHistoryModal({ debt, onClose }) {
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>
                   {formatCurrency(p.amount)}
+                  {p.transaction_id && (
+                    <span
+                      title={`Linked to transaction #${p.transaction_id}`}
+                      style={{
+                        marginLeft: 6,
+                        fontSize: 10,
+                        padding: '1px 5px',
+                        borderRadius: 99,
+                        background: '#BD93F918',
+                        color: 'var(--purple)',
+                        fontWeight: 600,
+                        verticalAlign: 'middle',
+                      }}
+                    >
+                      ⛓ txn
+                    </span>
+                  )}
                 </span>
                 <span style={{ fontSize: 13, color: 'var(--white)' }}>
                   {formatCurrency(p.balance_after)}
@@ -668,10 +699,10 @@ export default function Debt() {
     } finally { setSaving(false) }
   }
 
-  async function handlePayment({ amount, notes }) {
+  async function handlePayment({ amount, notes, source_account_id }) {
     setSaving(true); setActionError('')
     try {
-      await client.post(`/debt/${paying.id}/payment`, { amount, notes })
+      await client.post(`/debt/${paying.id}/payment`, { amount, notes, source_account_id })
       setPaying(null); load()
     } catch (e) {
       setActionError(e.response?.data?.detail ?? 'Failed to log payment')
@@ -785,7 +816,7 @@ export default function Debt() {
       {paying && (
         <Modal title="Log payment" onClose={() => setPaying(null)} width={400}>
           {actionError && <p style={styles.modalError}>{actionError}</p>}
-          <PaymentForm debt={paying} onSave={handlePayment} onCancel={() => setPaying(null)} saving={saving} />
+          <PaymentForm debt={paying} accounts={accounts} onSave={handlePayment} onCancel={() => setPaying(null)} saving={saving} />
         </Modal>
       )}
 

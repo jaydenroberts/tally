@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .database import engine, SessionLocal, Base
@@ -168,6 +169,97 @@ def run_startup_migrations(db: Session) -> None:
         db.commit()
         log.info("[M-002] Remediated analyst persona: removed contaminated v1.1.1 personal data seed, restored generic defaults")
 
+    # [M-004] Add savings_goal_id and debt_id to transactions table.
+    # Must run before M-003 because M-003 uses ORM queries on Transaction which
+    # now includes these columns in the model definition.
+    cols = [row[1] for row in db.execute(text("PRAGMA table_info(transactions)")).fetchall()]
+    if "savings_goal_id" not in cols:
+        db.execute(text("ALTER TABLE transactions ADD COLUMN savings_goal_id INTEGER REFERENCES savings_goals(id)"))
+        db.commit()
+        log.info("[M-004] Added savings_goal_id column to transactions")
+    cols = [row[1] for row in db.execute(text("PRAGMA table_info(transactions)")).fetchall()]
+    if "debt_id" not in cols:
+        db.execute(text("ALTER TABLE transactions ADD COLUMN debt_id INTEGER REFERENCES debts(id)"))
+        db.commit()
+        log.info("[M-004] Added debt_id column to transactions")
+
+    # [M-005] Add status column to accounts table (active/closed lifecycle).
+    acct_cols = [row[1] for row in db.execute(text("PRAGMA table_info(accounts)")).fetchall()]
+    if "status" not in acct_cols:
+        db.execute(text("ALTER TABLE accounts ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"))
+        db.commit()
+        log.info("[M-005] Added status column to accounts")
+
+    # [M-006] Add transaction_type to transactions and transaction_id to debt_payments.
+    # transaction_type classifies transactions for budget exclusion and import matching.
+    # Values: expense (default), income, transfer, debt_payment.
+    # transaction_id on DebtPayment links a payment record to its originating transaction.
+    tx_cols = [row[1] for row in db.execute(text("PRAGMA table_info(transactions)")).fetchall()]
+    if "transaction_type" not in tx_cols:
+        try:
+            db.execute(text("ALTER TABLE transactions ADD COLUMN transaction_type TEXT NOT NULL DEFAULT 'expense'"))
+            db.commit()
+            log.info("[M-006] Added transaction_type column to transactions")
+        except Exception as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+    db.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_transactions_transaction_type "
+        "ON transactions(transaction_type)"
+    ))
+    db.commit()
+
+    dp_cols = [row[1] for row in db.execute(text("PRAGMA table_info(debt_payments)")).fetchall()]
+    if "transaction_id" not in dp_cols:
+        try:
+            db.execute(text("ALTER TABLE debt_payments ADD COLUMN transaction_id INTEGER REFERENCES transactions(id)"))
+            db.commit()
+            log.info("[M-006] Added transaction_id column to debt_payments")
+        except Exception as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+    # Backfill: any transaction already linked to a debt that is still typed as
+    # 'expense' should be reclassified as 'debt_payment' for consistency.
+    result = db.execute(text(
+        "UPDATE transactions SET transaction_type = 'debt_payment' "
+        "WHERE debt_id IS NOT NULL AND transaction_type = 'expense'"
+    ))
+    if result.rowcount:
+        db.commit()
+        log.info("[M-006] Backfilled %d transaction(s) to transaction_type='debt_payment'", result.rowcount)
+
+    # [M-007] Add transfer_pair_id to transactions table.
+    # Plain integer grouping key (not a FK) — both sides of a transfer share the
+    # same value, set to the id of the debit (outgoing) transaction created first.
+    tx_cols_m007 = [row[1] for row in db.execute(text("PRAGMA table_info(transactions)")).fetchall()]
+    if "transfer_pair_id" not in tx_cols_m007:
+        try:
+            db.execute(text("ALTER TABLE transactions ADD COLUMN transfer_pair_id INTEGER"))
+            db.commit()
+            log.info("[M-007] Added transfer_pair_id column to transactions")
+        except Exception as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+    db.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_transactions_transfer_pair_id "
+        "ON transactions(transfer_pair_id)"
+    ))
+    db.commit()
+
+    # [M-008] Add transaction_id to savings_contributions.
+    # Links a contribution record back to the source transaction when money is
+    # allocated to savings goals via POST /api/transactions/{id}/link-savings.
+    sc_cols = [row[1] for row in db.execute(text("PRAGMA table_info(savings_contributions)")).fetchall()]
+    if "transaction_id" not in sc_cols:
+        try:
+            db.execute(text("ALTER TABLE savings_contributions ADD COLUMN transaction_id INTEGER REFERENCES transactions(id)"))
+            db.commit()
+            log.info("[M-008] Added transaction_id column to savings_contributions")
+        except Exception as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
     # [M-003] Remove duplicate imported transactions created by re-importing the same file.
     # Introduced in v1.1.5 alongside duplicate detection. This one-time cleanup removes
     # exact duplicates (same account_id, date, amount, description, source='import'),
@@ -207,6 +299,7 @@ def run_startup_migrations(db: Session) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import logging
     # Create all tables
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
@@ -216,10 +309,17 @@ async def lifespan(app: FastAPI):
         # Generate any overdue recurring transactions on startup
         count = recurring.run_due_recurring(db)
         if count:
-            import logging
             logging.getLogger("tally").info("Generated %d recurring transaction(s) on startup", count)
     finally:
         db.close()
+
+    # Warn operators that the recovery endpoint is live if the token is set.
+    if os.getenv("RECOVERY_TOKEN"):
+        logging.getLogger("tally").warning(
+            "WARNING: RECOVERY_TOKEN is set — password recovery endpoint is active. Remove after use. "
+            "Use a token of at least 32 random characters (e.g. openssl rand -hex 32)."
+        )
+
     yield
 
 
@@ -230,7 +330,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.1.5",
+    version="1.2.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

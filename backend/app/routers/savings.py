@@ -1,4 +1,5 @@
 from typing import List
+from datetime import date as date_type
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
@@ -31,6 +32,155 @@ def list_savings_goals(
         .options(joinedload(models.SavingsGoal.linked_account))
         .order_by(models.SavingsGoal.is_completed, models.SavingsGoal.deadline.asc().nulls_last())
         .all()
+    )
+
+
+@router.get("/account/{account_id}/summary")
+def account_savings_summary(
+    account_id: int,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Return balance, total allocated to active goals, and available amount for a savings account."""
+    account = db.query(models.Account).filter(models.Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    active_goals = (
+        db.query(models.SavingsGoal)
+        .filter(
+            models.SavingsGoal.linked_account_id == account_id,
+            models.SavingsGoal.is_completed == False,
+        )
+        .all()
+    )
+    total_allocated = round(sum(g.current_amount for g in active_goals), 2)
+    available = round(account.balance - total_allocated, 2)
+    return {
+        "account_id": account_id,
+        "account_name": account.name,
+        "balance": account.balance,
+        "total_allocated": total_allocated,
+        "available": available,
+        "active_goal_count": len(active_goals),
+    }
+
+
+@router.post("/allocate", response_model=schemas.AllocateResponse)
+def bulk_allocate(
+    payload: schemas.AllocateRequest,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_owner),
+):
+    """
+    Allocate available balance from a savings account to one or more goals atomically.
+    Creates a SavingsContribution record per goal for audit history.
+    """
+    if not payload.allocations:
+        raise HTTPException(status_code=400, detail="No allocations provided")
+
+    account = db.query(models.Account).filter(models.Account.id == payload.account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    linked_goals = (
+        db.query(models.SavingsGoal)
+        .filter(
+            models.SavingsGoal.linked_account_id == payload.account_id,
+            models.SavingsGoal.is_completed == False,
+        )
+        .all()
+    )
+    allocated_total = sum(g.current_amount for g in linked_goals)
+    available_before = round(account.balance - allocated_total, 2)
+
+    for item in payload.allocations:
+        if item.amount <= 0:
+            raise HTTPException(status_code=400, detail=f"Allocation amount for goal {item.goal_id} must be positive")
+
+    allocation_sum = round(sum(item.amount for item in payload.allocations), 2)
+    if allocation_sum > available_before + 0.001:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Total allocation {allocation_sum} exceeds available balance {available_before}",
+        )
+
+    goal_map: dict[int, models.SavingsGoal] = {}
+    for item in payload.allocations:
+        goal = (
+            db.query(models.SavingsGoal)
+            .options(joinedload(models.SavingsGoal.linked_account))
+            .filter(models.SavingsGoal.id == item.goal_id)
+            .first()
+        )
+        if not goal:
+            raise HTTPException(status_code=404, detail=f"Savings goal {item.goal_id} not found")
+        if goal.linked_account_id != payload.account_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Goal '{goal.name}' is not linked to the specified account",
+            )
+        if goal.is_completed:
+            raise HTTPException(status_code=400, detail=f"Goal '{goal.name}' is already completed")
+        goal_map[item.goal_id] = goal
+
+    for item in payload.allocations:
+        goal = goal_map[item.goal_id]
+        new_amount = round(goal.current_amount + item.amount, 2)
+        goal.current_amount = new_amount
+        if new_amount >= goal.target_amount:
+            goal.is_completed = True
+        db.add(models.SavingsContribution(
+            goal_id=goal.id,
+            amount=item.amount,
+            balance_after=new_amount,
+            notes="Bulk allocation",
+        ))
+
+    db.commit()
+    available_after = round(available_before - allocation_sum, 2)
+    updated_goals = [_load_goal(db, item.goal_id) for item in payload.allocations]
+    return schemas.AllocateResponse(
+        updated_goals=updated_goals,
+        available_before=available_before,
+        available_after=available_after,
+    )
+
+
+@router.post("/{goal_id}/withdraw", response_model=schemas.WithdrawResponse)
+def withdraw_goal(
+    goal_id: int,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_owner),
+):
+    """
+    Mark a goal as spent. Creates a manual debit transaction on the linked savings
+    account (source='manual', is_verified=False) so it reconciles on the next import.
+    """
+    goal = _load_goal(db, goal_id)
+    if not goal.linked_account_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Goal has no linked account. Link a savings account before withdrawing.",
+        )
+    if goal.current_amount <= 0:
+        raise HTTPException(status_code=400, detail="Goal has no saved amount to withdraw")
+
+    tx = models.Transaction(
+        account_id=goal.linked_account_id,
+        date=date_type.today(),
+        description=f"Savings withdrawal: {goal.name}",
+        amount=round(-goal.current_amount, 2),
+        source="manual",
+        is_verified=False,
+        savings_goal_id=goal.id,
+    )
+    db.add(tx)
+    goal.is_completed = True
+    db.commit()
+    db.refresh(tx)
+    return schemas.WithdrawResponse(
+        goal=_load_goal(db, goal_id),
+        transaction=tx,
     )
 
 

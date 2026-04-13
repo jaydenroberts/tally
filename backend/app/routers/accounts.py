@@ -11,11 +11,15 @@ router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
 @router.get("", response_model=List[schemas.AccountResponse])
 def list_accounts(
+    include_closed: bool = False,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     # Owners see all accounts; viewers see all accounts (household data is shared)
-    return db.query(models.Account).filter(models.Account.is_active == True).all()
+    q = db.query(models.Account).filter(models.Account.is_active == True)
+    if not include_closed:
+        q = q.filter(models.Account.status == "active")
+    return q.all()
 
 
 @router.post("", response_model=schemas.AccountResponse, status_code=status.HTTP_201_CREATED)

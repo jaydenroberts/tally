@@ -38,10 +38,24 @@ export function AuthProvider({ children }) {
     setUser(null)
   }, [])
 
+  // Fetch the latest user object from the server and sync it to state +
+  // localStorage. Call this whenever stale persona/role data is a concern
+  // (e.g. on Chat mount, or after a user is edited in Settings).
+  const refreshUser = useCallback(async () => {
+    try {
+      const { data } = await client.get('/users/me')
+      localStorage.setItem('tally_user', JSON.stringify(data))
+      setUser(data)
+    } catch {
+      // Silently ignore — if the token is invalid the auth interceptor will
+      // handle logout; we don't want a refresh failure to break the UI.
+    }
+  }, [])
+
   const isOwner = user?.role?.name === 'owner'
 
   return (
-    <AuthContext.Provider value={{ user, login, setup, logout, isOwner }}>
+    <AuthContext.Provider value={{ user, login, setup, logout, isOwner, refreshUser }}>
       {children}
     </AuthContext.Provider>
   )

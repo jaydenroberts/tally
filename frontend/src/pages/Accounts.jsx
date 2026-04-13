@@ -97,11 +97,21 @@ export default function Accounts() {
   const [deleting, setDeleting] = useState(null)     // account object
   const [saving, setSaving] = useState(false)
   const [actionError, setActionError] = useState('')
+  const [closedAccounts, setClosedAccounts] = useState([])
+  const [showClosed, setShowClosed] = useState(false)
+  const [closing, setClosing] = useState(null)          // account to mark as closed
 
   const load = useCallback(() => {
     setLoading(true)
-    client.get('/accounts')
-      .then((r) => setAccounts(r.data))
+    Promise.all([
+      client.get('/accounts'),
+      client.get('/accounts?include_closed=true'),
+    ])
+      .then(([activeRes, allRes]) => {
+        const activeIds = new Set(activeRes.data.map(a => a.id))
+        setAccounts(activeRes.data)
+        setClosedAccounts(allRes.data.filter(a => !activeIds.has(a.id)))
+      })
       .catch(() => setError('Failed to load accounts'))
       .finally(() => setLoading(false))
   }, [])
@@ -146,6 +156,28 @@ export default function Accounts() {
       setActionError(e.response?.data?.detail ?? 'Failed to delete account')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleClose() {
+    setSaving(true)
+    try {
+      await client.patch(`/accounts/${closing.id}`, { status: 'closed' })
+      setClosing(null)
+      load()
+    } catch (e) {
+      setActionError(e.response?.data?.detail ?? 'Failed to close account')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleReopen(account) {
+    try {
+      await client.patch(`/accounts/${account.id}`, { status: 'active' })
+      load()
+    } catch (e) {
+      setActionError(e.response?.data?.detail ?? 'Failed to reopen account')
     }
   }
 
@@ -196,9 +228,52 @@ export default function Accounts() {
               isOwner={isOwner}
               onEdit={() => { setEditing(account); setActionError('') }}
               onDelete={() => { setDeleting(account); setActionError('') }}
+              onClose={() => { setClosing(account); setActionError('') }}
             />
           ))}
         </div>
+      )}
+
+      {/* Closed accounts */}
+      {closedAccounts.length > 0 && (
+        <div style={{ marginTop: 32 }}>
+          <button
+            style={styles.closedToggle}
+            onClick={() => setShowClosed(s => !s)}
+          >
+            {showClosed ? '▾' : '▸'} Closed accounts ({closedAccounts.length})
+          </button>
+          {showClosed && (
+            <div style={{ ...styles.grid, marginTop: 12, opacity: 0.7 }}>
+              {closedAccounts.map(account => (
+                <AccountCard
+                  key={account.id}
+                  account={account}
+                  isOwner={isOwner}
+                  closed
+                  onReopen={() => handleReopen(account)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Close confirmation */}
+      {closing && (
+        <Modal title="Close account?" onClose={() => setClosing(null)} width={400}>
+          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+            <strong>{closing.name}</strong> will be moved to "Closed accounts".
+            Transactions are preserved and the account remains visible for historical reports.
+          </p>
+          {actionError && <p style={styles.modalError}>{actionError}</p>}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
+            <Button variant="secondary" onClick={() => setClosing(null)}>Cancel</Button>
+            <Button variant="danger" onClick={handleClose} disabled={saving}>
+              {saving ? 'Closing…' : 'Close account'}
+            </Button>
+          </div>
+        </Modal>
       )}
 
       {/* Add modal */}
@@ -242,14 +317,17 @@ export default function Accounts() {
   )
 }
 
-function AccountCard({ account, isOwner, onEdit, onDelete }) {
+function AccountCard({ account, isOwner, onEdit, onDelete, onClose, closed, onReopen }) {
   const { formatCurrency } = useCurrency()
   const typeColor = TYPE_COLORS[account.account_type] ?? 'var(--muted)'
   return (
     <div style={{ ...styles.card, borderTop: `3px solid ${typeColor}` }}>
       <div style={styles.cardTop}>
         <div>
-          <p style={styles.cardName}>{account.name}</p>
+          <p style={styles.cardName}>
+            {account.name}
+            {closed && <span style={styles.closedBadge}>Closed</span>}
+          </p>
           <p style={styles.cardMeta}>
             <span style={{ color: typeColor, textTransform: 'capitalize' }}>
               {account.account_type ?? 'Account'}
@@ -259,10 +337,16 @@ function AccountCard({ account, isOwner, onEdit, onDelete }) {
             )}
           </p>
         </div>
-        {isOwner && (
+        {isOwner && !closed && (
           <div style={styles.cardActions}>
             <button style={styles.iconBtn} onClick={onEdit} title="Edit">✎</button>
+            <button style={styles.iconBtn} onClick={onClose} title="Close account">⏻</button>
             <button style={{ ...styles.iconBtn, color: 'var(--red)' }} onClick={onDelete} title="Delete">✕</button>
+          </div>
+        )}
+        {isOwner && closed && (
+          <div style={styles.cardActions}>
+            <button style={{ ...styles.iconBtn, color: 'var(--green)' }} onClick={onReopen} title="Reopen account">↺</button>
           </div>
         )}
       </div>
@@ -371,5 +455,25 @@ const styles = {
     color: 'var(--red)',
     fontSize: 13,
     marginBottom: 12,
+  },
+  closedToggle: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--muted)',
+    fontSize: 14,
+    cursor: 'pointer',
+    padding: '4px 0',
+    fontWeight: 600,
+  },
+  closedBadge: {
+    display: 'inline-block',
+    fontSize: 10,
+    fontWeight: 600,
+    padding: '2px 8px',
+    borderRadius: 99,
+    background: 'var(--border)',
+    color: 'var(--muted)',
+    marginLeft: 8,
+    verticalAlign: 'middle',
   },
 }

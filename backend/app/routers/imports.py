@@ -44,7 +44,7 @@ router = APIRouter(prefix="/api/import", tags=["imports"])
 def _safe_path(filename: str) -> Path:
     base = Path(FINANCIAL_DATA_PATH).resolve()
     target = (base / filename).resolve()
-    if not str(target).startswith(str(base)):
+    if not (str(target).startswith(str(base) + "/") or target == base):
         raise HTTPException(status_code=400, detail="Invalid file path")
     return target
 
@@ -68,6 +68,9 @@ def _find_match(
         models.Transaction.is_verified == False,
         models.Transaction.date >= window_start,
         models.Transaction.date <= window_end,
+        # Exclude transactions that have already been typed (e.g. debt_payment).
+        # These should not be silently overwritten by a future bank import.
+        models.Transaction.transaction_type == "expense",
     ).all()
 
     tolerance = max(abs(bank_amount) * MATCH_AMOUNT_TOLERANCE_PCT, MATCH_AMOUNT_TOLERANCE_MIN)
@@ -262,10 +265,11 @@ def import_csv(
 
             if split_mode:
                 # ING-style: Credit and Debit are separate columns; one will be empty per row.
-                # (credit or 0) - (debit or 0) → signed amount (credits positive, debits negative)
+                # Use abs(debit) so this works whether the bank exports debits as positive or
+                # already-negative values (ING exports debit as e.g. -200.00, not 200.00).
                 credit = _parse_split_amount(row[credit_col])
                 debit  = _parse_split_amount(row[debit_col])
-                bank_amount = credit - debit
+                bank_amount = credit - abs(debit)
             else:
                 bank_amount = float(row[amount_col])
 
@@ -350,8 +354,19 @@ def list_import_logs(
 
 def _extract_pdf_dataframe(file_path: Path) -> pd.DataFrame:
     """
-    Extract all tables from a PDF and concatenate into a single DataFrame.
-    Raises HTTPException if no tables are found or parsing fails.
+    Extract transaction tables from a PDF bank statement into a single DataFrame.
+
+    Handles two PDF table layouts:
+
+    1. Standard layout (most banks): one or more multi-row tables per page.
+       Selects the largest table by row count to skip header/summary tables,
+       then concatenates all pages dropping repeated header rows.
+
+    2. Row-per-table layout (Virgin Money): each transaction is rendered as its
+       own 1-row table by pdfplumber. Detected when single-row tables vastly
+       outnumber multi-row tables. Flattens by finding the dominant column count,
+       identifying the repeating header row (most common row value), and
+       concatenating all matching data rows.
     """
     try:
         with pdfplumber.open(file_path) as pdf:
@@ -369,12 +384,49 @@ def _extract_pdf_dataframe(file_path: Path) -> pd.DataFrame:
             detail="No tables found in PDF. Tally can only import PDFs that contain structured tables.",
         )
 
-    # Use the first table's first row as headers; subsequent tables may repeat headers — drop them
-    headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(tables[0][0])]
+    # Detect row-per-table layout: many 1-row tables, few multi-row tables.
+    # Threshold: single-row tables outnumber multi-row tables by more than 3:1
+    # (or there are at least 4 single-row tables and no significant multi-row tables).
+    single_row = [t for t in tables if len(t) == 1]
+    multi_row = [t for t in tables if len(t) > 1]
+
+    if len(single_row) > max(len(multi_row) * 2, 3):
+        # Row-per-table layout: flatten all 1-row tables with the dominant column count.
+        from collections import Counter
+
+        col_counts = Counter(len(t[0]) for t in single_row if t)
+        if not col_counts:
+            raise HTTPException(status_code=422, detail="PDF tables contained no data rows.")
+        target_cols = col_counts.most_common(1)[0][0]
+        candidates = [t for t in single_row if t and len(t[0]) == target_cols]
+
+        # The header row repeats across sections — it's the most frequently seen row.
+        row_counter = Counter(
+            tuple(str(c).strip() if c else "" for c in t[0]) for t in candidates
+        )
+        header_tuple = row_counter.most_common(1)[0][0]
+        headers = list(header_tuple)
+
+        rows = []
+        for t in candidates:
+            row = [str(c).strip() if c is not None else "" for c in t[0]]
+            if tuple(row) != header_tuple:
+                rows.append(row)
+
+        if not rows:
+            raise HTTPException(status_code=422, detail="PDF tables contained no data rows.")
+        return pd.DataFrame(rows, columns=headers)
+
+    # Standard layout: select the largest table by data row count (excluding the header row).
+    # On multi-page PDFs the first table is often an account summary, not transactions.
+    largest_table = max(tables, key=lambda t: len(t) - 1)
+
+    # Use the largest table's first row as headers; drop repeated header rows from other tables.
+    headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(largest_table[0])]
     rows = []
     for table in tables:
         for row in table[1:]:  # skip header row of each table
-            if row != tables[0][0]:  # drop repeated header rows from subsequent pages
+            if row != largest_table[0]:  # drop repeated header rows from subsequent pages
                 rows.append([str(c).strip() if c is not None else "" for c in row])
 
     if not rows:
@@ -471,10 +523,36 @@ def import_pdf(
     errors = []
     amount_diff_warnings: list[schemas.MatchWarning] = []
 
+    def _parse_pdf_amount(val) -> float:
+        """
+        Parse a bank statement amount string into a signed float.
+
+        Handles three formats:
+        - Signed numeric:       '-159.20' or '2000.00'
+        - Dollar with commas:   '$1,234.56' or '-$1,234.56'
+        - Cr/Dr suffix (Virgin Money style): '$2,000.00 Cr' → +2000.00
+                                             '$91.34 Dr'    → -91.34
+        Credits (Cr) are positive; debits (Dr) are negative.
+        """
+        s = str(val).strip()
+        # Detect and strip Cr/Dr suffix before any other processing
+        is_credit = s.lower().endswith(" cr") or s.lower().endswith("cr")
+        is_debit  = s.lower().endswith(" dr") or s.lower().endswith("dr")
+        if is_credit or is_debit:
+            s = s[:-2].strip()  # remove the two-char suffix
+        # Strip currency symbols and thousands separators
+        s = s.replace("$", "").replace(",", "").strip()
+        amount = float(s)
+        if is_debit:
+            amount = -abs(amount)
+        elif is_credit:
+            amount = abs(amount)
+        return amount
+
     for _, row in df.iterrows():
         try:
             bank_date   = pd.to_datetime(row[date_col]).date()
-            bank_amount = float(str(row[amount_col]).replace(",", "").replace("$", ""))
+            bank_amount = _parse_pdf_amount(row[amount_col])
             bank_desc   = str(row[desc_col]) if row[desc_col] != "" else None
 
             match = _find_match(db, account_id, bank_date, bank_amount)

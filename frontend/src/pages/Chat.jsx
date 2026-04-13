@@ -89,7 +89,7 @@ function MessageBubble({ message }) {
 // ---------------------------------------------------------------------------
 
 export default function Chat() {
-  const { user } = useAuth()
+  const { user, refreshUser } = useAuth()
   // user.persona is the full PersonaResponse object embedded in the login response
   const persona = user?.persona ?? null
 
@@ -101,6 +101,12 @@ export default function Chat() {
 
   const bottomRef  = useRef(null)
   const abortRef   = useRef(null)   // AbortController for the active fetch
+
+  // Refresh user on mount so persona data is always current, even if it was
+  // assigned after the last login (AuthContext only loads user from localStorage).
+  useEffect(() => {
+    refreshUser()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Scroll to bottom when messages change
   useEffect(() => {
