@@ -9,13 +9,16 @@ A self-hosted personal finance web application for households. Track accounts, t
 ## Features
 
 - **Multi-user** with configurable roles (Owner / Viewer by default)
-- **Transaction tracking** with verified/unverified status
-- **Budgets** by category and period
-- **Savings goals** with progress tracking
-- **Debt tracking** with interest rate and minimum payment
+- **Transaction tracking** — verified/unverified status, sortable columns, inline category editing, bulk category update
+- **Transfers** — record money moving between accounts; excluded from budget calculations
+- **Budgets** by category and period (transfers and debt payments excluded)
+- **Savings goals** — allocate income across goals in one step; link withdrawals back to the goal
+- **Debt tracking** — interest rate, minimum payment, paydown strategy badges; link expense transactions directly to a debt
+- **Closed account lifecycle** — mark accounts as closed rather than deleting them
 - **CSV/PDF import** from your existing financial files (read-only access)
 - **AI chat interface** — ask questions about your finances in plain language; powered by Anthropic, OpenAI, or any OpenAI-compatible endpoint (e.g. Ollama); persona system controls data access and write permissions
-- **Dracula-inspired UI**
+- **Mobile navigation** — slide-in drawer on small screens
+- **Dracula-inspired UI** with custom logo and favicon
 - Single Docker container — easy self-hosting
 
 ---
@@ -114,6 +117,7 @@ All configuration is via environment variables:
 | `AI_API_KEY` | No | — | API key for the selected provider. Not required for local Ollama. |
 | `AI_MODEL` | No | — | Model name to use (e.g. `claude-3-5-sonnet-20241022`, `gpt-4o`, `llama3`). |
 | `AI_BASE_URL` | No | — | Base URL override for OpenAI-compatible endpoints (e.g. `http://ollama:11434/v1`). Required for Ollama; not needed for Anthropic or OpenAI. |
+| `RECOVERY_TOKEN` | No | — | Enables the `POST /api/auth/recover` endpoint for owner password recovery. Use a token of at least 32 random characters (`openssl rand -hex 32`). Remove after use. |
 
 ---
 
@@ -139,6 +143,26 @@ Tally ships with two roles:
 | `viewer` | Viewer | Read-only access to shared household data |
 
 Display names are editable by any owner via the UI without affecting permissions logic.
+
+---
+
+## Documentation
+
+Full documentation is available in the [`docs/`](docs/) directory:
+
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](docs/getting-started.md) | First-run setup, logging in, adding accounts |
+| [Configuration](docs/configuration.md) | All environment variables explained |
+| [Dashboard](docs/dashboard.md) | Balance summary and recent transactions |
+| [Accounts](docs/accounts.md) | Adding accounts, closed account lifecycle |
+| [Transactions](docs/transactions.md) | Logging, importing, transfers, linking to savings/debt |
+| [Budgets](docs/budgets.md) | Monthly category budgets and progress tracking |
+| [Savings Goals](docs/savings.md) | Goal setup, contributions, bucket allocation |
+| [Debt Tracker](docs/debt.md) | Debt tracking, payment logging, paydown strategies |
+| [CSV & PDF Import](docs/import.md) | Importing bank statements, column mapping, reconciliation |
+| [AI Coach](docs/ai-coach.md) | Chat interface, personas, data access levels |
+| [Settings](docs/settings.md) | User management, personas, preferences |
 
 ---
 
