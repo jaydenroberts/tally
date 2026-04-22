@@ -4,7 +4,7 @@ providers.py — Multi-provider AI abstraction for Tally.
 Reads configuration from environment variables:
     AI_PROVIDER   — "anthropic" (default) or "openai"
     AI_API_KEY    — API key for the selected provider
-    AI_MODEL      — model identifier (e.g. "claude-3-5-sonnet-20241022" or "gpt-4o")
+    AI_MODEL      — model identifier (e.g. "claude-sonnet-4-6" or "gpt-4o")
     AI_BASE_URL   — optional base URL override (required for Ollama and other
                     OpenAI-compatible endpoints, e.g. "http://localhost:11434/v1")
 
@@ -24,7 +24,9 @@ from typing import Any
 
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").lower()
-AI_API_KEY  = os.getenv("AI_API_KEY", "")
+# Accept both AI_API_KEY (generic) and ANTHROPIC_API_KEY (provider-specific).
+# AI_API_KEY takes precedence if both are set.
+AI_API_KEY  = os.getenv("AI_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
 AI_MODEL    = os.getenv("AI_MODEL", "")
 AI_BASE_URL = os.getenv("AI_BASE_URL", "")
 
@@ -60,7 +62,7 @@ async def _stream_anthropic(
             "Set AI_PROVIDER=openai to use the OpenAI-compatible branch instead."
         ) from exc
 
-    model = AI_MODEL or "claude-3-5-sonnet-20241022"
+    model = AI_MODEL or "claude-sonnet-4-6"
     client = anthropic.AsyncAnthropic(api_key=AI_API_KEY or None)
 
     # Convert tools from OpenAI-style to Anthropic tool format if needed.
@@ -233,8 +235,14 @@ async def stream_chat(
     """
     tools = tools or []
     if AI_PROVIDER == "openai":
+        # Handles OpenAI, Ollama, LM Studio, and other OpenAI-compatible endpoints.
+        # Multi-turn tool use is supported (tool_calls + tool_call_id format).
         async for chunk in _stream_openai(messages, tools, system):
             yield chunk
     else:
+        # Default: Anthropic. Multi-turn tool use is supported (content block format).
+        # NOTE: Gemini is not yet supported — it requires a separate SDK and message
+        # schema. To add Gemini, introduce a third AI_PROVIDER branch here and a
+        # matching _stream_gemini() function.
         async for chunk in _stream_anthropic(messages, tools, system):
             yield chunk

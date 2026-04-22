@@ -141,33 +141,13 @@ def run_startup_migrations(db: Session) -> None:
         db.commit()
         log.info("[M-001] Fixed family persona data_access_level: readonly → summary")
 
-    # [M-002] Remediate analyst persona contaminated with personal data in v1.1.1.
-    # A private SAGE system prompt containing real names, income, debt strategy, and
-    # location data was accidentally used as the analyst persona seed in v1.1.1.
-    # v1.1.2 corrected the seed, but existing installs still carry the contaminated
-    # prompt in their database. This fix detects the contaminated prompt by its unique
-    # identifier string and resets both system_prompt and tone_notes to the clean
-    # generic defaults. If the prompt has been user-customised (no identifier present),
-    # it is left entirely untouched.
-    analyst_persona = (
-        db.query(models.Persona)
-        .filter(
-            models.Persona.name == "analyst",
-            models.Persona.is_system == True,
-        )
-        .first()
-    )
-    if analyst_persona and analyst_persona.system_prompt and "Jayden and Sammi Roberts" in analyst_persona.system_prompt:
-        analyst_persona.system_prompt = (
-            "You are a knowledgeable household finance assistant with full access to this household's financial data. "
-            "You can read accounts, transactions, budgets, savings goals, and debts — and suggest modifications where appropriate. "
-            "Be concise, data-driven, and proactive about surfacing insights. Use exact figures when available. "
-            "Always distinguish between observations (what the data shows) and recommendations (what you suggest the user consider). "
-            "Lead with the number and its implication."
-        )
-        analyst_persona.tone_notes = "Professional, direct, numbers-first."
-        db.commit()
-        log.info("[M-002] Remediated analyst persona: removed contaminated v1.1.1 personal data seed, restored generic defaults")
+    # [M-002] Retired in v1.3.0.
+    # This migration detected and removed a contaminated analyst persona prompt that
+    # was accidentally seeded with private household data in v1.1.1. The detector
+    # relied on a personal name string which cannot be shipped in a public repository.
+    # Any install that reached v1.3.0 without having passed through M-002 is
+    # considered out of the supported upgrade path — manual persona reset via Settings
+    # is required in that unlikely case.
 
     # [M-004] Add savings_goal_id and debt_id to transactions table.
     # Must run before M-003 because M-003 uses ORM queries on Transaction which
@@ -330,7 +310,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.2.0",
+    version="1.3.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

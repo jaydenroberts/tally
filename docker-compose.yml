@@ -7,7 +7,7 @@ services:
       - "8091:8091"
     volumes:
       - ./data:/data
-      - /mnt/user/ROBEUR01-DOCS/financial-tracking:/financial-data:ro
+      - ./financial-data:/financial-data:ro
     environment:
       - SECRET_KEY=${SECRET_KEY}
       - ACCESS_TOKEN_EXPIRE_DAYS=${ACCESS_TOKEN_EXPIRE_DAYS:-30}

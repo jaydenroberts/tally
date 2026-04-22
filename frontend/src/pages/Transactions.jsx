@@ -50,6 +50,13 @@ const badge = {
     background: '#BD93F918', color: 'var(--purple)',
     fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 6,
   },
+  income: {
+    display: 'inline-flex', alignItems: 'center', gap: 3,
+    fontSize: 10, fontWeight: 600, padding: '2px 6px',
+    borderRadius: 4, marginLeft: 6,
+    background: '#50FA7B18', color: 'var(--green)',
+    border: '1px solid #50FA7B40',
+  },
   transfer: {
     display: 'inline-flex', alignItems: 'center', gap: 3,
     fontSize: 10, fontWeight: 600, padding: '2px 6px',
@@ -151,10 +158,17 @@ const bannerStyle = {
 
 // ─── Quick / Full add form ────────────────────────────────────────────────────
 
+// Transaction type toggle config — label and accent colour per type.
+const TX_TYPES = [
+  { key: 'expense',  label: '− Expense',   accent: 'var(--red)'   },
+  { key: 'income',   label: '+ Income',    accent: 'var(--green)' },
+  { key: 'transfer', label: '↔ Transfer',  accent: 'var(--cyan)'  },
+]
+
 function AddTransactionForm({ accounts, categories, onSave, onCancel, saving }) {
   const today = new Date().toISOString().split('T')[0]
 
-  // Transaction type toggle — 'expense' uses the existing flow; 'transfer' calls the transfer endpoint
+  // Transaction type: 'expense' | 'income' | 'transfer'
   const [txType, setTxType] = useState('expense')
 
   const [form, setForm] = useState({
@@ -212,44 +226,47 @@ function AddTransactionForm({ accounts, categories, onSave, onCancel, saving }) 
       return
     }
 
-    // Standard expense flow
-    const amount = parseFloat(form.amount)
-    if (isNaN(amount)) { setError('Amount must be a number'); return }
+    // Expense / Income — user always enters a positive number.
+    // Expenses are negated before saving; income is stored positive.
+    const raw = parseFloat(form.amount)
+    if (isNaN(raw) || raw <= 0) { setError('Enter a positive amount'); return }
     if (!form.account_id) { setError('Select an account'); return }
     setError('')
     onSave({
       account_id: parseInt(form.account_id),
-      amount,
+      amount: txType === 'expense' ? -raw : raw,
       category_id: form.category_id ? parseInt(form.category_id) : null,
       date: form.date || today,
       description: form.description || null,
       notes: form.notes || null,
+      transaction_type: txType,
     })
   }
+
+  const activeAccent = TX_TYPES.find((t) => t.key === txType)?.accent ?? 'var(--cyan)'
 
   return (
     <form onSubmit={handleSubmit}>
       {/* ── Transaction type toggle ── */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-        {['expense', 'transfer'].map((type) => (
+        {TX_TYPES.map(({ key, label, accent }) => (
           <button
-            key={type}
+            key={key}
             type="button"
-            onClick={() => { setTxType(type); setError('') }}
+            onClick={() => { setTxType(key); setError('') }}
             style={{
               padding: '6px 16px',
               borderRadius: 'var(--radius)',
-              border: `1px solid ${txType === type ? 'var(--cyan)' : 'var(--border)'}`,
-              background: txType === type ? 'var(--cyan)18' : 'transparent',
-              color: txType === type ? 'var(--cyan)' : 'var(--muted)',
+              border: `1px solid ${txType === key ? accent : 'var(--border)'}`,
+              background: txType === key ? `${accent}18` : 'transparent',
+              color: txType === key ? accent : 'var(--muted)',
               fontSize: 13,
               fontWeight: 600,
               cursor: 'pointer',
-              textTransform: 'capitalize',
               transition: 'all 0.15s',
             }}
           >
-            {type === 'expense' ? 'Expense' : '↔ Transfer'}
+            {label}
           </button>
         ))}
       </div>
@@ -323,7 +340,7 @@ function AddTransactionForm({ accounts, categories, onSave, onCancel, saving }) 
           </div>
         </>
       ) : (
-        /* ── Expense mode (original flow) ── */
+        /* ── Expense / Income mode ── */
         <>
           <FormField label="Account *">
             <select style={selectStyle} value={form.account_id} onChange={set('account_id')} required autoFocus>
@@ -334,18 +351,37 @@ function AddTransactionForm({ accounts, categories, onSave, onCancel, saving }) 
             </select>
           </FormField>
 
-          <FormField label="Amount *" hint="Use negative for expenses (e.g. -45.00), positive for income">
-            <input
-              style={inputStyle}
-              type="number"
-              step="0.01"
-              placeholder="-45.00"
-              value={form.amount}
-              onChange={set('amount')}
-              required
-              inputMode="decimal"
-            />
+          {/* Amount — user enters a positive value; sign is applied automatically by type */}
+          <FormField label="Amount *">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ color: activeAccent, fontWeight: 700, fontSize: 18, lineHeight: 1, userSelect: 'none' }}>
+                {txType === 'expense' ? '−' : '+'}
+              </span>
+              <input
+                style={{ ...inputStyle, flex: 1 }}
+                type="number"
+                step="0.01"
+                min="0.01"
+                placeholder="45.00"
+                value={form.amount}
+                onChange={set('amount')}
+                required
+                inputMode="decimal"
+              />
+            </div>
           </FormField>
+
+          {/* Description is prominent for income — who paid you is the key fact */}
+          {txType === 'income' && (
+            <FormField label="Description" hint="e.g. John — rent reimbursement">
+              <input
+                style={inputStyle}
+                value={form.description}
+                onChange={set('description')}
+                placeholder="Who paid you / what for"
+              />
+            </FormField>
+          )}
 
           <FormField label="Category">
             <select style={selectStyle} value={form.category_id} onChange={set('category_id')}>
@@ -356,7 +392,7 @@ function AddTransactionForm({ accounts, categories, onSave, onCancel, saving }) 
             </select>
           </FormField>
 
-          {/* ── Optional fields toggle ── */}
+          {/* Optional fields */}
           <button
             type="button"
             style={styles.moreToggle}
@@ -370,9 +406,12 @@ function AddTransactionForm({ accounts, categories, onSave, onCancel, saving }) 
               <FormField label="Date">
                 <input style={inputStyle} type="date" value={form.date} onChange={set('date')} />
               </FormField>
-              <FormField label="Description">
-                <input style={inputStyle} value={form.description} onChange={set('description')} placeholder="e.g. Groceries" />
-              </FormField>
+              {/* Description for expenses lives here; for income it's already shown above */}
+              {txType === 'expense' && (
+                <FormField label="Description">
+                  <input style={inputStyle} value={form.description} onChange={set('description')} placeholder="e.g. Groceries run" />
+                </FormField>
+              )}
               <FormField label="Notes">
                 <textarea style={{ ...inputStyle, resize: 'vertical', minHeight: 60 }} value={form.notes} onChange={set('notes')} />
               </FormField>
@@ -388,7 +427,9 @@ function AddTransactionForm({ accounts, categories, onSave, onCancel, saving }) 
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
             <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-            <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Add transaction'}</Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? 'Saving…' : txType === 'income' ? 'Add income' : 'Add expense'}
+            </Button>
           </div>
         </>
       )}
@@ -1777,6 +1818,11 @@ export default function Transactions() {
                     {tx.debt_id && (
                       <span style={badge.debt} title="Click to unlink">
                         ⬡ {debtMap[tx.debt_id] ?? 'Debt'}
+                      </span>
+                    )}
+                    {tx.transaction_type === 'income' && (
+                      <span style={badge.income} title="Income">
+                        + Income
                       </span>
                     )}
                     {tx.transaction_type === 'transfer' && (

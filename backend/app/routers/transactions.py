@@ -90,9 +90,12 @@ def create_transaction(
     account = db.query(models.Account).filter(models.Account.id == payload.account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+    # transaction_type comes from the payload ('expense' or 'income').
+    # We pass it explicitly via model_dump() rather than relying on the SQLAlchemy
+    # column default, which is not applied to rows on ALTER-added columns.
     tx = models.Transaction(
         **payload.model_dump(),
-        source="manual",      # manual entries are always estimates
+        source="manual",   # manual entries are always estimates
         is_verified=False,
     )
     db.add(tx)

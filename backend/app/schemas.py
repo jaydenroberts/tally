@@ -199,6 +199,7 @@ class TransactionCreate(BaseModel):
     amount: float
     category_id: Optional[int] = None
     notes: Optional[str] = None
+    transaction_type: Literal['expense', 'income'] = 'expense'
     # source and is_verified are set by the backend; not accepted from clients
 
 

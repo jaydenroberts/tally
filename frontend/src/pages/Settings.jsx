@@ -715,6 +715,233 @@ function PersonasTab({ personas, onReload }) {
   )
 }
 
+// ─── Categories tab ───────────────────────────────────────────────────────────
+
+function CategoriesTab() {
+  const [categories, setCategories]   = useState([])
+  const [loading, setLoading]         = useState(true)
+  const [loadError, setLoadError]     = useState('')
+  const [newName, setNewName]         = useState('')
+  const [adding, setAdding]           = useState(false)
+  const [addError, setAddError]       = useState('')
+  // Map of category id → current rename input value (only populated while editing)
+  const [renaming, setRenaming]       = useState({})   // { [id]: string }
+  const [renameSaving, setRenameSaving] = useState({}) // { [id]: bool }
+  const [renameError, setRenameError] = useState({})   // { [id]: string }
+  const [deleting, setDeleting]       = useState(null) // category object
+  const [deleteError, setDeleteError] = useState('')
+  const [deleteSaving, setDeleteSaving] = useState(false)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    client.get('/categories')
+      .then((r) => setCategories(r.data))
+      .catch(() => setLoadError('Failed to load categories'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  // ── Add ────────────────────────────────────────────────────────────────────
+
+  async function handleAdd(e) {
+    e.preventDefault()
+    const name = newName.trim()
+    if (!name) return
+    setAdding(true); setAddError('')
+    try {
+      await client.post('/categories', { name })
+      setNewName('')
+      load()
+    } catch (err) {
+      setAddError(err.response?.data?.detail ?? 'Failed to add category')
+    } finally { setAdding(false) }
+  }
+
+  // ── Rename ─────────────────────────────────────────────────────────────────
+
+  function startRename(cat) {
+    setRenaming((prev) => ({ ...prev, [cat.id]: cat.name }))
+    setRenameError((prev) => ({ ...prev, [cat.id]: '' }))
+  }
+
+  function cancelRename(id) {
+    setRenaming((prev) => {
+      const next = { ...prev }; delete next[id]; return next
+    })
+  }
+
+  async function commitRename(cat) {
+    const name = (renaming[cat.id] ?? '').trim()
+    if (!name || name === cat.name) { cancelRename(cat.id); return }
+    setRenameSaving((prev) => ({ ...prev, [cat.id]: true }))
+    setRenameError((prev) => ({ ...prev, [cat.id]: '' }))
+    try {
+      await client.patch(`/categories/${cat.id}`, { name })
+      cancelRename(cat.id)
+      load()
+    } catch (err) {
+      setRenameError((prev) => ({ ...prev, [cat.id]: err.response?.data?.detail ?? 'Failed to rename' }))
+    } finally {
+      setRenameSaving((prev) => ({ ...prev, [cat.id]: false }))
+    }
+  }
+
+  // ── Delete ─────────────────────────────────────────────────────────────────
+
+  async function handleDelete() {
+    if (!deleting) return
+    setDeleteSaving(true); setDeleteError('')
+    try {
+      await client.delete(`/categories/${deleting.id}`)
+      setDeleting(null)
+      load()
+    } catch (err) {
+      setDeleteError(err.response?.data?.detail ?? 'Failed to delete category')
+    } finally { setDeleteSaving(false) }
+  }
+
+  if (loading)   return <p style={{ color: 'var(--muted)' }}>Loading…</p>
+  if (loadError) return <p style={{ color: 'var(--red)' }}>{loadError}</p>
+
+  const userCategories   = categories.filter((c) => !c.is_system)
+  const systemCategories = categories.filter((c) =>  c.is_system)
+
+  return (
+    <div style={{ maxWidth: 640 }}>
+      {/* Add new category */}
+      <div style={styles.card}>
+        <p style={styles.sectionTitle}>Add Category</p>
+        <form onSubmit={handleAdd} style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+          <div style={{ flex: 1 }}>
+            <FormField label="Category name">
+              <input
+                style={inputStyle}
+                value={newName}
+                onChange={(e) => { setNewName(e.target.value); setAddError('') }}
+                placeholder="e.g. Pet Supplies"
+                autoComplete="off"
+              />
+            </FormField>
+          </div>
+          <div style={{ paddingBottom: 2 }}>
+            <Button type="submit" disabled={adding || !newName.trim()}>
+              {adding ? 'Adding…' : 'Add'}
+            </Button>
+          </div>
+        </form>
+        {addError && <p style={{ ...styles.errorMsg, marginTop: 8 }}>{addError}</p>}
+      </div>
+
+      {/* Custom categories */}
+      <div style={{ ...styles.card, marginTop: 16 }}>
+        <p style={styles.sectionTitle}>Custom Categories</p>
+        {userCategories.length === 0 && (
+          <p style={{ color: 'var(--muted)', fontSize: 13 }}>
+            No custom categories yet. Add one above.
+          </p>
+        )}
+        {userCategories.map((cat, i) => {
+          const isRenaming = cat.id in renaming
+          return (
+            <div
+              key={cat.id}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 0',
+                borderBottom: i < userCategories.length - 1 ? '1px solid var(--border)' : 'none',
+              }}
+            >
+              {isRenaming ? (
+                /* Inline rename input */
+                <div style={{ flex: 1, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input
+                    style={{ ...inputStyle, flex: 1, minWidth: 140 }}
+                    value={renaming[cat.id]}
+                    onChange={(e) => setRenaming((prev) => ({ ...prev, [cat.id]: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); commitRename(cat) }
+                      if (e.key === 'Escape') cancelRename(cat.id)
+                    }}
+                    autoFocus
+                  />
+                  <Button size="sm" onClick={() => commitRename(cat)} disabled={renameSaving[cat.id]}>
+                    {renameSaving[cat.id] ? '…' : 'Save'}
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => cancelRename(cat.id)}>
+                    Cancel
+                  </Button>
+                  {renameError[cat.id] && (
+                    <span style={{ color: 'var(--red)', fontSize: 12 }}>{renameError[cat.id]}</span>
+                  )}
+                </div>
+              ) : (
+                /* Display row */
+                <>
+                  <span style={{ flex: 1, fontSize: 14, color: 'var(--white)' }}>{cat.name}</span>
+                  <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                    <button
+                      style={styles.iconBtn}
+                      onClick={() => startRename(cat)}
+                      title="Rename"
+                    >✎</button>
+                    <button
+                      style={{ ...styles.iconBtn, color: 'var(--red)' }}
+                      onClick={() => { setDeleting(cat); setDeleteError('') }}
+                      title="Delete"
+                    >✕</button>
+                  </div>
+                </>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* System categories — read-only reference */}
+      <div style={{ ...styles.card, marginTop: 16 }}>
+        <p style={styles.sectionTitle}>System Categories</p>
+        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
+          Built-in categories shared across all users. These cannot be renamed or deleted.
+        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {systemCategories.map((cat) => (
+            <span
+              key={cat.id}
+              style={{
+                fontSize: 12, padding: '4px 10px', borderRadius: 99,
+                background: 'var(--border)', color: 'var(--muted)',
+              }}
+            >
+              {cat.name}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Delete confirmation modal */}
+      {deleting && (
+        <Modal title="Delete category?" onClose={() => setDeleting(null)} width={400}>
+          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+            Delete <strong>{deleting.name}</strong>?
+          </p>
+          <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
+            Any transactions, budgets, or recurring entries using this category will be uncategorised.
+            Your transaction history is preserved — nothing is deleted.
+          </p>
+          {deleteError && <p style={styles.errorMsg}>{deleteError}</p>}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <Button variant="secondary" onClick={() => setDeleting(null)}>Cancel</Button>
+            <Button variant="danger" onClick={handleDelete} disabled={deleteSaving}>
+              {deleteSaving ? 'Deleting…' : 'Delete category'}
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
 // ─── General tab ──────────────────────────────────────────────────────────────
 
 const CURRENCIES = ['USD','EUR','GBP','CAD','AUD','NZD','CHF','JPY','CNY','INR','BRL','MXN','ZAR','SGD','HKD','NOK','SEK','DKK','PLN']
@@ -870,9 +1097,10 @@ export default function Settings() {
   const tabs = [
     { id: 'profile', label: 'Profile' },
     ...(isOwner ? [
-      { id: 'users',    label: 'Users' },
-      { id: 'personas', label: 'Personas' },
-      { id: 'general',  label: 'General' },
+      { id: 'users',       label: 'Users' },
+      { id: 'personas',    label: 'Personas' },
+      { id: 'categories',  label: 'Categories' },
+      { id: 'general',     label: 'General' },
     ] : []),
   ]
 
@@ -903,6 +1131,9 @@ export default function Settings() {
           personas={personas}
           onReload={loadRolesAndPersonas}
         />
+      )}
+      {tab === 'categories' && isOwner && (
+        <CategoriesTab />
       )}
       {tab === 'general'  && isOwner && (
         <GeneralTab roles={roles} />

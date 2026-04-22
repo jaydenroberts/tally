@@ -4,6 +4,35 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.3.0] - 2026-04-22
+
+### Added
+
+- **Category management UI** — new "Categories" tab in Settings (owner only). Add, rename (inline — Enter to commit, Escape to cancel), and delete user-defined categories. System categories shown as read-only. Deletion nulls out linked transactions and budgets rather than blocking.
+- **Budget awareness in AI chat** — system prompt now includes a per-category budget vs. spend table (verified + estimated split) for the current month. Works with all data access levels.
+- **AI multi-turn tool use** — chat endpoint now correctly handles multi-turn tool use for both Anthropic (content block format) and OpenAI/compatible providers (tool_calls + tool_call_id format). Previously tool follow-up calls failed with a stream error.
+- **Three-tab transaction form** — Add Transaction FAB now has Expense / Income / Transfer tabs. Expense tab auto-negates (user enters positive value, sign applied on save). Income tab has a prominent description field and stores a positive amount with `transaction_type="income"`. Income transactions display a "+ Income" badge in the list.
+
+### Changed
+
+- AI model updated from `claude-3-5-sonnet-20241022` (deprecated April 2026) to `claude-sonnet-4-6`.
+
+### Fixed
+
+- NULL `transaction_type` rows now correctly included in budget spend calculations (affected manually created transactions prior to this release).
+- Corrected AI API key fallback order — `AI_API_KEY` checked before `ANTHROPIC_API_KEY`.
+- `docker-compose.yml` financial-data volume corrected to a generic relative path (`./financial-data`).
+- M-002 migration retired — it contained a personal name string incompatible with public release; any install reaching v1.3.0 without M-002 having run should manually reset the analyst persona in Settings.
+
+### Security
+
+- **Category PATCH/DELETE** now enforce ownership — previously any authenticated user could modify or delete another user's custom categories (Critical, OWASP API3:2023).
+- **AI write tools** now validate monetary amounts (rejects NaN, Infinity, values outside ±999,999,999.99) and enforce field length limits: description ≤ 500 chars, notes ≤ 2000 chars (High).
+- **AI `category_name` filter** sanitized via `_sanitize_category_name()` before use in ILIKE query (High).
+- **Persona `system_prompt` sandboxed** — an explicit `---` separator and framing sentence now precede user-configured persona content in the AI system prompt, making the authority boundary clear to the model (High).
+
+---
+
 ## [1.2.0] - 2026-04-13
 
 ### Added
