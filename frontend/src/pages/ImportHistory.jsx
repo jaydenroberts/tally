@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import client from '../api/client'
+import { formatDate } from '../utils/dateFormat'
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 
@@ -114,9 +115,7 @@ export default function ImportHistory() {
               {/* Date */}
               <div>
                 <p style={styles.date}>
-                  {new Date(log.imported_at).toLocaleDateString('en-US', {
-                    month: 'short', day: 'numeric', year: 'numeric',
-                  })}
+                  {formatDate(new Date(log.imported_at))}
                 </p>
                 <p style={styles.time}>
                   {new Date(log.imported_at).toLocaleTimeString('en-US', {

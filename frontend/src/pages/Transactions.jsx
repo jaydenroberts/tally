@@ -5,6 +5,7 @@ import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
+import { formatDate } from '../utils/dateFormat'
 
 const PAGE_SIZE = 50
 
@@ -1805,7 +1806,7 @@ export default function Transactions() {
                       />
                     </span>
                   )}
-                  <span style={{ color: 'var(--muted)', fontSize: 13 }}>{tx.date}</span>
+                  <span style={{ color: 'var(--muted)', fontSize: 13 }}>{formatDate(tx.date)}</span>
 
                   <span style={{ color: isEstimate ? 'var(--muted)' : 'var(--white)' }}>
                     {tx.description ?? <span style={{ color: 'var(--border)' }}>—</span>}
@@ -2049,7 +2050,7 @@ export default function Transactions() {
       {deleting && (
         <Modal title="Delete transaction?" onClose={() => setDeleting(null)} width={400}>
           <p style={{ color: 'var(--white)', marginBottom: 8 }}>
-            <strong>{deleting.description ?? 'This transaction'}</strong> on {deleting.date} (
+            <strong>{deleting.description ?? 'This transaction'}</strong> on {formatDate(deleting.date)} (
             {formatCurrency(deleting.amount)}) will be permanently removed.
           </p>
           {actionError && <p style={styles.modalError}>{actionError}</p>}
@@ -2167,7 +2168,7 @@ function LinkToDebtModal({ tx, debts, linkDebtId, onDebtChange, linkError, linkL
         padding: '12px 16px',
         marginBottom: 20,
       }}>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>{tx.date}</p>
+        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>{formatDate(tx.date)}</p>
         <p style={{ fontSize: 14, color: 'var(--white)', marginBottom: 4 }}>
           {tx.description ?? <span style={{ color: 'var(--border)' }}>No description</span>}
         </p>
@@ -2236,7 +2237,7 @@ function AllocateToGoalsModal({
         padding: '12px 16px',
         marginBottom: 16,
       }}>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>{tx.date}</p>
+        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>{formatDate(tx.date)}</p>
         <p style={{ fontSize: 14, color: 'var(--white)', marginBottom: 4 }}>
           {tx.description ?? <span style={{ color: 'var(--border)' }}>No description</span>}
         </p>
@@ -2366,7 +2367,7 @@ function LinkTransferPairModal({ sourceTx, allTransactions, accounts, error, loa
         <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 6 }}>
           Source transaction
         </p>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 2 }}>{sourceTx.date} · {sourceAccount?.name ?? '—'}</p>
+        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 2 }}>{formatDate(sourceTx.date)} · {sourceAccount?.name ?? '—'}</p>
         <p style={{ fontSize: 14, color: 'var(--white)', marginBottom: 4 }}>
           {sourceTx.description ?? <span style={{ color: 'var(--border)' }}>No description</span>}
         </p>
@@ -2424,7 +2425,7 @@ function LinkTransferPairModal({ sourceTx, allTransactions, accounts, error, loa
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>
-                    {tx.date} · {acct?.name ?? '—'}
+                    {formatDate(tx.date)} · {acct?.name ?? '—'}
                   </p>
                   <p style={{ fontSize: 13, color: 'var(--white)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {tx.description ?? <span style={{ color: 'var(--border)' }}>No description</span>}
@@ -2486,7 +2487,7 @@ function LinkSavingsWithdrawalModal({ tx, savingsGoals, goalId, onGoalChange, er
         padding: '12px 16px',
         marginBottom: 20,
       }}>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>{tx.date}</p>
+        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>{formatDate(tx.date)}</p>
         <p style={{ fontSize: 14, color: 'var(--white)', marginBottom: 4 }}>
           {tx.description ?? <span style={{ color: 'var(--border)' }}>No description</span>}
         </p>

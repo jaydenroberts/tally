@@ -5,6 +5,7 @@ import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
+import { formatDate as formatDateDMY } from '../utils/dateFormat'
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
@@ -444,7 +445,7 @@ function ContributionHistoryModal({ goal, onClose }) {
             {contributions.map((c) => (
               <div key={c.id} style={savingsHistoryStyles.row}>
                 <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-                  {new Date(c.contributed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {formatDateDMY(c.contributed_at)}
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>
                   {formatCurrency(c.amount)}

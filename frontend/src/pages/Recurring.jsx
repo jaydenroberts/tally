@@ -5,6 +5,7 @@ import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
+import { formatDate } from '../utils/dateFormat'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -90,14 +91,14 @@ function RecurringCard({ rec, isOwner, onEdit, onDelete }) {
         <div style={styles.stat}>
           <span style={styles.statLabel}>Next due</span>
           <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--white)' }}>
-            {new Date(rec.next_due).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+            {formatDate(rec.next_due)}
           </span>
         </div>
         {rec.end_date && (
           <div style={styles.stat}>
             <span style={styles.statLabel}>Ends</span>
             <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-              {new Date(rec.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+              {formatDate(rec.end_date)}
             </span>
           </div>
         )}

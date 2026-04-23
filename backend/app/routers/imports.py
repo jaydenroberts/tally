@@ -260,7 +260,10 @@ def import_csv(
 
     for _, row in df.iterrows():
         try:
-            bank_date = pd.to_datetime(row[date_col]).date()
+            # ING Australia exports dates as DD/MM/YYYY. Specify the format explicitly
+            # so pandas does not guess MM/DD/YYYY (its default), which would silently
+            # corrupt dates where day ≤ 12 and raise ValueError where day > 12.
+            bank_date = pd.to_datetime(row[date_col], format="%d/%m/%Y").date()
             bank_desc = str(row[desc_col]) if pd.notna(row[desc_col]) else None
 
             if split_mode:
@@ -551,7 +554,10 @@ def import_pdf(
 
     for _, row in df.iterrows():
         try:
-            bank_date   = pd.to_datetime(row[date_col]).date()
+            # Use dayfirst=True so pandas resolves ambiguous dates (e.g. 12/04/2026)
+            # as DD/MM/YYYY rather than MM/DD/YYYY. PDF formats vary by bank so we
+            # use a hint rather than a hard format string.
+            bank_date   = pd.to_datetime(row[date_col], dayfirst=True).date()
             bank_amount = _parse_pdf_amount(row[amount_col])
             bank_desc   = str(row[desc_col]) if row[desc_col] != "" else None
 

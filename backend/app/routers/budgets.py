@@ -43,6 +43,7 @@ def budget_summary(
     for budget in budgets:
         # Verified spend in this category this month.
         # Debt payments are excluded — they reduce a liability, not a spending category.
+        # NULL transaction_type is treated as "expense" (legacy rows pre-dating the column).
         verified_raw = (
             db.query(func.sum(models.Transaction.amount))
             .filter(
@@ -50,12 +51,16 @@ def budget_summary(
                 models.Transaction.date >= first_day,
                 models.Transaction.date <= last_day,
                 models.Transaction.is_verified == True,
-                models.Transaction.transaction_type == "expense",
+                or_(
+                    models.Transaction.transaction_type == "expense",
+                    models.Transaction.transaction_type == None,
+                ),
             )
             .scalar()
         ) or 0.0
 
         # Estimated spend (unverified manual entries), also excluding debt payments.
+        # NULL transaction_type is treated as "expense" (legacy rows pre-dating the column).
         estimated_raw = (
             db.query(func.sum(models.Transaction.amount))
             .filter(
@@ -63,7 +68,10 @@ def budget_summary(
                 models.Transaction.date >= first_day,
                 models.Transaction.date <= last_day,
                 models.Transaction.is_verified == False,
-                models.Transaction.transaction_type == "expense",
+                or_(
+                    models.Transaction.transaction_type == "expense",
+                    models.Transaction.transaction_type == None,
+                ),
             )
             .scalar()
         ) or 0.0

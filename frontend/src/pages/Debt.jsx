@@ -5,6 +5,7 @@ import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
+import { formatDate as formatDateDMY } from '../utils/dateFormat'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -584,7 +585,7 @@ function PaymentHistoryModal({ debt, onClose }) {
             {payments.map((p) => (
               <div key={p.id} style={historyStyles.row}>
                 <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-                  {new Date(p.paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {formatDateDMY(p.paid_at)}
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>
                   {formatCurrency(p.amount)}

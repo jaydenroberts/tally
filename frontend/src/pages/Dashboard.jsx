@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useCurrency } from '../context/CurrencyContext'
+import { formatDate } from '../utils/dateFormat'
 
 function StatCard({ label, value, accent }) {
   return (
@@ -108,7 +109,7 @@ export default function Dashboard() {
           </div>
           {recentTx.map((tx) => (
             <div key={tx.id} style={styles.tableRow}>
-              <span style={{ color: 'var(--muted)' }}>{tx.date}</span>
+              <span style={{ color: 'var(--muted)' }}>{formatDate(tx.date)}</span>
               <span>{tx.description ?? '—'}</span>
               <span style={{ color: 'var(--muted)' }}>{tx.category?.name ?? '—'}</span>
               <span style={{ textAlign: 'right', color: tx.amount >= 0 ? 'var(--green)' : 'var(--pink)' }}>
