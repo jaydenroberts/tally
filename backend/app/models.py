@@ -36,6 +36,32 @@ class Persona(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     users = relationship("User", foreign_keys="User.persona_id", back_populates="persona")
+    memory_files = relationship("PersonaMemoryFile", back_populates="persona", order_by="PersonaMemoryFile.display_order")
+
+
+# ---------------------------------------------------------------------------
+# Persona Memory Files  (persistent AI context files — BACKLOG-009)
+# ---------------------------------------------------------------------------
+
+class PersonaMemoryFile(Base):
+    """
+    A persistent markdown context file attached to a persona.
+    Active files are loaded into the system prompt at chat time,
+    ordered by display_order.
+    """
+    __tablename__ = "persona_memory_files"
+
+    id = Column(Integer, primary_key=True, index=True)
+    persona_id = Column(Integer, ForeignKey("personas.id"), nullable=False, index=True)
+    filename = Column(String(200), nullable=False)
+    content = Column(Text, nullable=False, default="")
+    description = Column(String(500), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    display_order = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    persona = relationship("Persona", back_populates="memory_files")
 
 
 # ---------------------------------------------------------------------------

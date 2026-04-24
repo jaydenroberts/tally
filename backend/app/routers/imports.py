@@ -355,6 +355,44 @@ def list_import_logs(
     return db.query(models.ImportLog).order_by(models.ImportLog.imported_at.desc()).all()
 
 
+def _extract_two_date_rows_from_text(file_path: Path) -> list[list[str]]:
+    """
+    Fallback text-based extraction for PDFs with two date columns
+    (e.g. Virgin Money: "Processed Date" + "Transaction Date").
+
+    pdfplumber's table extraction can miss rows when the two dates differ
+    and cell boundaries shift.  This function uses extract_text() and a
+    regex to reliably capture every transaction line.
+
+    Returns a list of rows, each with 3 elements:
+        [transaction_date, description, amount]
+    (The processed date is discarded.)
+    """
+    import re
+
+    # Pattern: DD/MM/YY(YY)  DD/MM/YY(YY)  <description>  $<amount> (Cr|Dr)
+    _TX_RE = re.compile(
+        r"(\d{2}/\d{2}/\d{2,4})\s+"   # processed date
+        r"(\d{2}/\d{2}/\d{2,4})\s+"   # transaction date
+        r"(.+?)\s+"                    # description (non-greedy)
+        r"(\$[\d,]+\.\d{2}\s*(?:Cr|Dr))"  # amount with Cr/Dr suffix
+    )
+
+    rows: list[list[str]] = []
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                for m in _TX_RE.finditer(text):
+                    tx_date = m.group(2)
+                    desc = m.group(3).strip()
+                    amount = m.group(4).strip()
+                    rows.append([tx_date, desc, amount])
+    except Exception:
+        pass  # caller will fall back to table-extracted rows
+    return rows
+
+
 def _extract_pdf_dataframe(file_path: Path) -> pd.DataFrame:
     """
     Extract transaction tables from a PDF bank statement into a single DataFrame.
@@ -396,6 +434,7 @@ def _extract_pdf_dataframe(file_path: Path) -> pd.DataFrame:
     if len(single_row) > max(len(multi_row) * 2, 3):
         # Row-per-table layout: flatten all 1-row tables with the dominant column count.
         from collections import Counter
+        import re
 
         col_counts = Counter(len(t[0]) for t in single_row if t)
         if not col_counts:
@@ -415,6 +454,26 @@ def _extract_pdf_dataframe(file_path: Path) -> pd.DataFrame:
             row = [str(c).strip() if c is not None else "" for c in t[0]]
             if tuple(row) != header_tuple:
                 rows.append(row)
+
+        # Two-date-column detection: if the header contains two "date" columns
+        # (e.g. "Processed Date" and "Transaction Date"), pdfplumber's table
+        # extraction often drops rows where the two dates differ because the
+        # cell boundaries shift.  In that case, fall back to text-based
+        # extraction which reliably captures every transaction line.
+        date_col_indices = [
+            i for i, h in enumerate(headers) if "date" in h.lower()
+        ]
+        if len(date_col_indices) == 2:
+            text_rows = _extract_two_date_rows_from_text(file_path)
+            if len(text_rows) > len(rows):
+                # Text extraction found more transactions — use it instead.
+                # Keep only the transaction-date column (second date col header).
+                kept_date_header = headers[date_col_indices[1]]
+                non_date_headers = [
+                    h for i, h in enumerate(headers) if i not in date_col_indices
+                ]
+                headers = [kept_date_header] + non_date_headers
+                rows = text_rows
 
         if not rows:
             raise HTTPException(status_code=422, detail="PDF tables contained no data rows.")

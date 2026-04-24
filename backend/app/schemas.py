@@ -47,6 +47,40 @@ class PersonaResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Persona Memory Files
+# ---------------------------------------------------------------------------
+
+class PersonaMemoryFileCreate(BaseModel):
+    filename: str
+    content: str = ""
+    description: Optional[str] = None
+    is_active: bool = True
+    display_order: int = 0
+
+
+class PersonaMemoryFileUpdate(BaseModel):
+    filename: Optional[str] = None
+    content: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+    display_order: Optional[int] = None
+
+
+class PersonaMemoryFileResponse(BaseModel):
+    id: int
+    persona_id: int
+    filename: str
+    content: str
+    description: Optional[str] = None
+    is_active: bool
+    display_order: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
 # Roles
 # ---------------------------------------------------------------------------
 

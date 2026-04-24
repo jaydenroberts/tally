@@ -211,3 +211,108 @@ def delete_persona(
     )
     db.delete(persona)
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Persona Memory Files (owner-only management)
+# ---------------------------------------------------------------------------
+
+def _get_persona_or_404(persona_id: int, db: Session) -> models.Persona:
+    persona = db.query(models.Persona).filter(models.Persona.id == persona_id).first()
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+    return persona
+
+
+@router.get(
+    "/personas/{persona_id}/memory-files",
+    response_model=List[schemas.PersonaMemoryFileResponse],
+)
+def list_memory_files(
+    persona_id: int,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    _get_persona_or_404(persona_id, db)
+    return (
+        db.query(models.PersonaMemoryFile)
+        .filter(models.PersonaMemoryFile.persona_id == persona_id)
+        .order_by(models.PersonaMemoryFile.display_order)
+        .all()
+    )
+
+
+@router.post(
+    "/personas/{persona_id}/memory-files",
+    response_model=schemas.PersonaMemoryFileResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_memory_file(
+    persona_id: int,
+    payload: schemas.PersonaMemoryFileCreate,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_owner),
+):
+    _get_persona_or_404(persona_id, db)
+    mem_file = models.PersonaMemoryFile(
+        persona_id=persona_id,
+        **payload.model_dump(),
+    )
+    db.add(mem_file)
+    db.commit()
+    db.refresh(mem_file)
+    return mem_file
+
+
+@router.patch(
+    "/personas/{persona_id}/memory-files/{file_id}",
+    response_model=schemas.PersonaMemoryFileResponse,
+)
+def update_memory_file(
+    persona_id: int,
+    file_id: int,
+    payload: schemas.PersonaMemoryFileUpdate,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_owner),
+):
+    _get_persona_or_404(persona_id, db)
+    mem_file = (
+        db.query(models.PersonaMemoryFile)
+        .filter(
+            models.PersonaMemoryFile.id == file_id,
+            models.PersonaMemoryFile.persona_id == persona_id,
+        )
+        .first()
+    )
+    if not mem_file:
+        raise HTTPException(status_code=404, detail="Memory file not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(mem_file, field, value)
+    db.commit()
+    db.refresh(mem_file)
+    return mem_file
+
+
+@router.delete(
+    "/personas/{persona_id}/memory-files/{file_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_memory_file(
+    persona_id: int,
+    file_id: int,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_owner),
+):
+    _get_persona_or_404(persona_id, db)
+    mem_file = (
+        db.query(models.PersonaMemoryFile)
+        .filter(
+            models.PersonaMemoryFile.id == file_id,
+            models.PersonaMemoryFile.persona_id == persona_id,
+        )
+        .first()
+    )
+    if not mem_file:
+        raise HTTPException(status_code=404, detail="Memory file not found")
+    db.delete(mem_file)
+    db.commit()

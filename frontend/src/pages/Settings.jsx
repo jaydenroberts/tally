@@ -556,8 +556,9 @@ function PersonaForm({ initial, onSave, onCancel, saving }) {
 
 // ─── Persona card ─────────────────────────────────────────────────────────────
 
-function PersonaCard({ persona, onEdit, onDelete }) {
+function PersonaCard({ persona, onEdit, onDelete, isOwner }) {
   const accessColor = ACCESS_COLORS[persona.data_access_level] || 'var(--muted)'
+  const [showMemory, setShowMemory] = useState(false)
 
   return (
     <div style={{ ...styles.card, borderTop: `3px solid ${accessColor}` }}>
@@ -615,13 +616,331 @@ function PersonaCard({ persona, onEdit, onDelete }) {
           "{persona.tone_notes}"
         </p>
       )}
+
+      {/* Memory Files toggle + section (owner only) */}
+      {isOwner && (
+        <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+          <button
+            onClick={() => setShowMemory((v) => !v)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: 'var(--purple)', fontSize: 13, fontWeight: 600,
+              padding: 0,
+            }}
+          >
+            {showMemory ? '▾ Hide Memory Files' : '▸ Memory Files'}
+          </button>
+          {showMemory && <MemoryFilesSection personaId={persona.id} />}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Token estimate helper ───────────────────────────────────────────────────
+
+function estimateTokens(charCount) {
+  return Math.ceil(charCount / 4)
+}
+
+function tokenColor(tokens) {
+  if (tokens > 25000) return 'var(--red)'
+  if (tokens > 10000) return 'var(--orange)'
+  return 'var(--muted)'
+}
+
+// ─── Memory Files section ────────────────────────────────────────────────────
+
+function MemoryFilesSection({ personaId }) {
+  const [files, setFiles]           = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [loadError, setLoadError]   = useState('')
+  const [showAdd, setShowAdd]       = useState(false)
+  const [editing, setEditing]       = useState(null)     // memory file object
+  const [deleting, setDeleting]     = useState(null)     // memory file object
+  const [saving, setSaving]         = useState(false)
+  const [actionError, setActionError] = useState('')
+
+  // Add/Edit form state
+  const [form, setForm] = useState({ filename: '', description: '', content: '', display_order: 0, is_active: true })
+
+  const load = useCallback(() => {
+    setLoading(true)
+    client.get(`/users/personas/${personaId}/memory-files`)
+      .then((r) => setFiles(r.data))
+      .catch(() => setLoadError('Failed to load memory files'))
+      .finally(() => setLoading(false))
+  }, [personaId])
+
+  useEffect(() => { load() }, [load])
+
+  function resetForm() {
+    setForm({ filename: '', description: '', content: '', display_order: 0, is_active: true })
+  }
+
+  function openAdd() {
+    resetForm()
+    setShowAdd(true)
+    setEditing(null)
+    setActionError('')
+  }
+
+  function openEdit(mf) {
+    setForm({
+      filename: mf.filename,
+      description: mf.description || '',
+      content: mf.content || '',
+      display_order: mf.display_order,
+      is_active: mf.is_active,
+    })
+    setEditing(mf)
+    setShowAdd(false)
+    setActionError('')
+  }
+
+  async function handleSave(e) {
+    e.preventDefault()
+    if (!form.filename.trim()) { setActionError('Filename is required'); return }
+    setSaving(true); setActionError('')
+    try {
+      if (editing) {
+        await client.patch(`/users/personas/${personaId}/memory-files/${editing.id}`, {
+          filename: form.filename.trim(),
+          description: form.description || null,
+          content: form.content,
+          display_order: parseInt(form.display_order) || 0,
+          is_active: form.is_active,
+        })
+        setEditing(null)
+      } else {
+        await client.post(`/users/personas/${personaId}/memory-files`, {
+          filename: form.filename.trim(),
+          description: form.description || null,
+          content: form.content,
+          display_order: parseInt(form.display_order) || 0,
+          is_active: form.is_active,
+        })
+        setShowAdd(false)
+      }
+      resetForm()
+      load()
+    } catch (err) {
+      setActionError(err.response?.data?.detail ?? 'Failed to save memory file')
+    } finally { setSaving(false) }
+  }
+
+  async function handleToggleActive(mf) {
+    try {
+      await client.patch(`/users/personas/${personaId}/memory-files/${mf.id}`, {
+        is_active: !mf.is_active,
+      })
+      load()
+    } catch (err) {
+      setActionError(err.response?.data?.detail ?? 'Failed to toggle')
+    }
+  }
+
+  async function handleDelete() {
+    if (!deleting) return
+    setSaving(true); setActionError('')
+    try {
+      await client.delete(`/users/personas/${personaId}/memory-files/${deleting.id}`)
+      setDeleting(null)
+      load()
+    } catch (err) {
+      setActionError(err.response?.data?.detail ?? 'Failed to delete memory file')
+    } finally { setSaving(false) }
+  }
+
+  if (loading) return <p style={{ color: 'var(--muted)', fontSize: 13 }}>Loading memory files…</p>
+  if (loadError) return <p style={{ color: 'var(--red)', fontSize: 13 }}>{loadError}</p>
+
+  const isFormOpen = showAdd || editing
+
+  return (
+    <div style={{ marginTop: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--purple)' }}>Memory Files</p>
+        {!isFormOpen && (
+          <Button size="sm" onClick={openAdd}>+ Add file</Button>
+        )}
+      </div>
+
+      {/* Token estimate summary */}
+      {files.length > 0 && (() => {
+        const activeFiles = files.filter((f) => f.is_active)
+        const totalChars = activeFiles.reduce((sum, f) => sum + (f.content || '').length, 0)
+        const totalTokens = estimateTokens(totalChars)
+        return (
+          <div style={{
+            fontSize: 13, color: tokenColor(totalTokens),
+            padding: '8px 12px', background: 'var(--bg)', borderRadius: 'var(--radius)',
+            marginBottom: 12, lineHeight: 1.6,
+          }}>
+            <span style={{ fontWeight: 600 }}>{activeFiles.length}</span> active file{activeFiles.length !== 1 ? 's' : ''}
+            {' · '}{totalChars.toLocaleString()} chars
+            {' · ~'}{totalTokens.toLocaleString()} tokens added to every chat message
+          </div>
+        )
+      })()}
+
+      {/* File list */}
+      {files.length === 0 && !isFormOpen && (
+        <p style={{ color: 'var(--muted)', fontSize: 13 }}>
+          No memory files yet. Add persistent context that will be included in every AI conversation.
+        </p>
+      )}
+
+      {files.map((mf, i) => (
+        <div
+          key={mf.id}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 0',
+            borderBottom: i < files.length - 1 ? '1px solid var(--border)' : 'none',
+            opacity: mf.is_active ? 1 : 0.5,
+          }}
+        >
+          {/* Order badge */}
+          <span style={{
+            fontSize: 11, fontWeight: 700, color: 'var(--muted)',
+            background: 'var(--bg)', padding: '2px 6px', borderRadius: 4,
+            minWidth: 24, textAlign: 'center', flexShrink: 0,
+          }}>
+            {mf.display_order}
+          </span>
+
+          {/* File info */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--white)' }}>{mf.filename}</p>
+            {mf.description && (
+              <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{mf.description}</p>
+            )}
+            <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+              {(mf.content || '').length.toLocaleString()} chars{' · ~'}{estimateTokens((mf.content || '').length).toLocaleString()} tokens
+            </p>
+          </div>
+
+          {/* Actions */}
+          <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
+            <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }} title={mf.is_active ? 'Active — click to deactivate' : 'Inactive — click to activate'}>
+              <input
+                type="checkbox"
+                checked={mf.is_active}
+                onChange={() => handleToggleActive(mf)}
+                style={{ accentColor: 'var(--green)', width: 14, height: 14 }}
+              />
+            </label>
+            <button style={styles.iconBtn} onClick={() => openEdit(mf)} title="Edit">✎</button>
+            <button
+              style={{ ...styles.iconBtn, color: 'var(--red)' }}
+              onClick={() => { setDeleting(mf); setActionError('') }}
+              title="Delete"
+            >✕</button>
+          </div>
+        </div>
+      ))}
+
+      {/* Add/Edit form */}
+      {isFormOpen && (
+        <div style={{ ...styles.card, marginTop: 12, borderLeft: '3px solid var(--purple)' }}>
+          <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--white)', marginBottom: 12 }}>
+            {editing ? `Edit — ${editing.filename}` : 'New Memory File'}
+          </p>
+          {actionError && <p style={styles.errorMsg}>{actionError}</p>}
+          <form onSubmit={handleSave}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px', gap: 12 }}>
+              <FormField label="Filename *">
+                <input
+                  style={inputStyle}
+                  value={form.filename}
+                  onChange={(e) => setForm((f) => ({ ...f, filename: e.target.value }))}
+                  placeholder="e.g. MEMORY.md"
+                  required
+                  autoFocus
+                />
+              </FormField>
+              <FormField label="Order">
+                <input
+                  style={inputStyle}
+                  type="number"
+                  value={form.display_order}
+                  onChange={(e) => setForm((f) => ({ ...f, display_order: e.target.value }))}
+                  min="0"
+                />
+              </FormField>
+            </div>
+
+            <FormField label="Description" hint="One-liner shown in the file list">
+              <input
+                style={inputStyle}
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="e.g. Persistent session notes and preferences"
+              />
+            </FormField>
+
+            <FormField label="Content" hint="Markdown — appended to the AI system prompt">
+              <textarea
+                style={{ ...inputStyle, resize: 'vertical', minHeight: 160, fontFamily: 'monospace', fontSize: 13 }}
+                value={form.content}
+                onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
+                placeholder="# Memory&#10;&#10;Write persistent context here…"
+              />
+            </FormField>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--white)', fontSize: 14 }}>
+                <input
+                  type="checkbox"
+                  checked={form.is_active}
+                  onChange={(e) => setForm((f) => ({ ...f, is_active: e.target.checked }))}
+                  style={{ accentColor: 'var(--green)', width: 15, height: 15 }}
+                />
+                Active
+              </label>
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                {(form.content || '').length.toLocaleString()} / 50,000 chars
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <Button variant="secondary" onClick={() => { setShowAdd(false); setEditing(null); resetForm(); setActionError('') }}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={saving}>
+                {saving ? 'Saving…' : editing ? 'Save changes' : 'Create file'}
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Delete confirmation */}
+      {deleting && (
+        <Modal title="Delete memory file?" onClose={() => setDeleting(null)} width={400}>
+          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+            Delete <strong>{deleting.filename}</strong>?
+          </p>
+          <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
+            This context will no longer be included in AI conversations.
+          </p>
+          {actionError && <p style={styles.errorMsg}>{actionError}</p>}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <Button variant="secondary" onClick={() => setDeleting(null)}>Cancel</Button>
+            <Button variant="danger" onClick={handleDelete} disabled={saving}>
+              {saving ? 'Deleting…' : 'Delete file'}
+            </Button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
 
 // ─── Personas tab ─────────────────────────────────────────────────────────────
 
-function PersonasTab({ personas, onReload }) {
+function PersonasTab({ personas, onReload, isOwner }) {
   const [showAdd, setShowAdd]   = useState(false)
   const [editing, setEditing]   = useState(null)
   const [deleting, setDeleting] = useState(null)
@@ -669,6 +988,7 @@ function PersonasTab({ personas, onReload }) {
           <PersonaCard
             key={p.id}
             persona={p}
+            isOwner={isOwner}
             onEdit={() => { setEditing(p); setActionError('') }}
             onDelete={() => { setDeleting(p); setActionError('') }}
           />
@@ -1130,6 +1450,7 @@ export default function Settings() {
         <PersonasTab
           personas={personas}
           onReload={loadRolesAndPersonas}
+          isOwner={isOwner}
         />
       )}
       {tab === 'categories' && isOwner && (

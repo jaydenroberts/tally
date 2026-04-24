@@ -768,6 +768,44 @@ def _build_system_prompt(
         lines.append("")
         lines.append(f"Tone guidance: {persona.tone_notes}")
 
+    # ── 7. Persona memory files (user-controlled, persistent context) ────────
+    # Load all active memory files for this persona, ordered by display_order.
+    # Content is appended after persona prompt but before the financial snapshot
+    # was already injected above — so these sit at the very end as supplementary
+    # context. A total content cap prevents runaway token usage.
+    import logging
+    _log = logging.getLogger("tally.chat")
+    MEMORY_FILE_CAP = 50_000  # characters
+
+    memory_files = (
+        db.query(models.PersonaMemoryFile)
+        .filter(
+            models.PersonaMemoryFile.persona_id == persona.id,
+            models.PersonaMemoryFile.is_active == True,
+        )
+        .order_by(models.PersonaMemoryFile.display_order)
+        .all()
+    )
+
+    if memory_files:
+        lines.append("")
+        lines.append("---")
+        lines.append("The following are persistent memory files configured for this persona. They provide additional context and instructions.")
+        lines.append("")
+        total_chars = 0
+        for mf in memory_files:
+            content_len = len(mf.content or "")
+            if total_chars + content_len > MEMORY_FILE_CAP:
+                _log.warning(
+                    "Memory file '%s' (id=%d) skipped — would exceed %d char cap (current: %d, file: %d)",
+                    mf.filename, mf.id, MEMORY_FILE_CAP, total_chars, content_len,
+                )
+                continue
+            lines.append(f"## {mf.filename}")
+            lines.append(mf.content or "")
+            lines.append("")
+            total_chars += content_len
+
     return "\n".join(lines)
 
 
