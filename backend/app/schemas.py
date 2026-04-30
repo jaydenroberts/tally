@@ -1,6 +1,20 @@
 from datetime import datetime, date
-from typing import Literal, Optional
-from pydantic import BaseModel
+import math
+from typing import Any, Literal, Optional
+from pydantic import BaseModel, field_validator
+
+
+# ---------------------------------------------------------------------------
+# Shared validator — rejects NaN, Inf, -Inf on monetary/numeric float fields
+# ---------------------------------------------------------------------------
+
+def _check_finite(v: Any) -> Any:
+    """Reject NaN and Infinity values on float fields."""
+    if v is not None and isinstance(v, (int, float)):
+        v = float(v)
+        if math.isnan(v) or math.isinf(v):
+            raise ValueError("Value must be a finite number (NaN and Infinity are not allowed)")
+    return v
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +178,8 @@ class AccountCreate(BaseModel):
     currency: str = "USD"
     notes: Optional[str] = None
 
+    _validate_balance = field_validator("balance", mode="before")(_check_finite)
+
 
 class AccountUpdate(BaseModel):
     name: Optional[str] = None
@@ -174,6 +190,8 @@ class AccountUpdate(BaseModel):
     status: Optional[str] = None          # "active" | "closed"
     is_active: Optional[bool] = None
     notes: Optional[str] = None
+
+    _validate_balance = field_validator("balance", mode="before")(_check_finite)
 
 
 class AccountResponse(BaseModel):
@@ -236,6 +254,8 @@ class TransactionCreate(BaseModel):
     transaction_type: Literal['expense', 'income'] = 'expense'
     # source and is_verified are set by the backend; not accepted from clients
 
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
+
 
 class TransactionUpdate(BaseModel):
     date: Optional[date] = None
@@ -245,6 +265,8 @@ class TransactionUpdate(BaseModel):
     notes: Optional[str] = None
     # is_verified intentionally excluded — verification is automatic only
     # transaction_type intentionally excluded — set only via link/unlink endpoints
+
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
 
 
 class TransactionResponse(BaseModel):
@@ -277,6 +299,8 @@ class TransferCreate(BaseModel):
     date: date
     description: Optional[str] = None
     notes: Optional[str] = None
+
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
 
 
 class TransferResponse(BaseModel):
@@ -335,6 +359,8 @@ class BudgetCreate(BaseModel):
     start_date: date
     end_date: Optional[date] = None
 
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
+
 
 class BudgetUpdate(BaseModel):
     amount: Optional[float] = None
@@ -342,6 +368,8 @@ class BudgetUpdate(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     is_active: Optional[bool] = None
+
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
 
 
 class BudgetResponse(BaseModel):
@@ -385,6 +413,10 @@ class SavingsGoalCreate(BaseModel):
     linked_account_id: Optional[int] = None
     notes: Optional[str] = None
 
+    _validate_amounts = field_validator(
+        "target_amount", "current_amount", "monthly_contribution", mode="before",
+    )(_check_finite)
+
 
 class SavingsGoalUpdate(BaseModel):
     name: Optional[str] = None
@@ -395,6 +427,10 @@ class SavingsGoalUpdate(BaseModel):
     linked_account_id: Optional[int] = None
     is_completed: Optional[bool] = None
     notes: Optional[str] = None
+
+    _validate_amounts = field_validator(
+        "target_amount", "current_amount", "monthly_contribution", mode="before",
+    )(_check_finite)
 
 
 class SavingsGoalResponse(BaseModel):
@@ -419,6 +455,8 @@ class ContributionRequest(BaseModel):
     amount: float
     notes: Optional[str] = None
 
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
+
 
 # ---------------------------------------------------------------------------
 # Debts
@@ -438,6 +476,11 @@ class DebtCreate(BaseModel):
     linked_account_id: Optional[int] = None
     notes: Optional[str] = None
 
+    _validate_amounts = field_validator(
+        "original_amount", "current_balance", "interest_rate", "minimum_payment",
+        mode="before",
+    )(_check_finite)
+
 
 class DebtUpdate(BaseModel):
     name: Optional[str] = None
@@ -452,6 +495,10 @@ class DebtUpdate(BaseModel):
     linked_account_id: Optional[int] = None
     is_paid_off: Optional[bool] = None
     notes: Optional[str] = None
+
+    _validate_amounts = field_validator(
+        "current_balance", "interest_rate", "minimum_payment", mode="before",
+    )(_check_finite)
 
 
 class DebtResponse(BaseModel):
@@ -481,6 +528,8 @@ class PaymentRequest(BaseModel):
     amount: float
     notes: Optional[str] = None
     source_account_id: Optional[int] = None  # if set, creates a linked debit transaction on this account
+
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
 
 
 class DebtPaymentResponse(BaseModel):
@@ -515,6 +564,8 @@ class LinkTransactionToSavingsItem(BaseModel):
     goal_id: int
     amount: float  # portion of the transaction to allocate to this goal
 
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
+
 
 class LinkTransactionToSavingsRequest(BaseModel):
     allocations: list[LinkTransactionToSavingsItem]
@@ -540,6 +591,8 @@ class LinkSavingsWithdrawalRequest(BaseModel):
 class AllocateItem(BaseModel):
     goal_id: int
     amount: float
+
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
 
 
 class AllocateRequest(BaseModel):
@@ -575,6 +628,8 @@ class RecurringTransactionCreate(BaseModel):
     end_date: Optional[date] = None
     notes: Optional[str] = None
 
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
+
 
 class RecurringTransactionUpdate(BaseModel):
     category_id: Optional[int] = None
@@ -584,6 +639,8 @@ class RecurringTransactionUpdate(BaseModel):
     end_date: Optional[date] = None
     is_active: Optional[bool] = None
     notes: Optional[str] = None
+
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
 
 
 class RecurringTransactionResponse(BaseModel):

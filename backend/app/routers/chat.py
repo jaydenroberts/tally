@@ -243,6 +243,23 @@ def _validate_amount(value: Any) -> float | None:
     return amount
 
 
+def _sanitize_float(value: Any) -> float:
+    """
+    Sanitize a numeric value read from the database before it goes into an
+    AI tool response.  Replaces NaN and Inf with 0.0 so corrupt DB values
+    never propagate to the model or the client.
+    """
+    if value is None:
+        return 0.0
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if math.isnan(f) or math.isinf(f):
+        return 0.0
+    return f
+
+
 def _sanitize_category_name(value: str) -> str:
     """
     Strip control characters and cap length on AI-supplied category name filters.
@@ -285,7 +302,7 @@ def _execute_tool(
                 "name": a.name,
                 "type": a.account_type,
                 "institution": a.institution,
-                "balance": a.balance,
+                "balance": _sanitize_float(a.balance),
                 "currency": a.currency,
             }
             for a in accounts
@@ -330,7 +347,7 @@ def _execute_tool(
                 "account_id": t.account_id,
                 "date": t.date.isoformat(),
                 "description": t.description,
-                "amount": t.amount,
+                "amount": _sanitize_float(t.amount),
                 "category": t.category.name if t.category else None,
                 "category_id": t.category_id,
                 "is_verified": t.is_verified,
@@ -384,10 +401,11 @@ def _execute_tool(
                 )
                 .scalar()
             ) or 0.0
-            verified_spend  = max(0.0, -verified_raw)
-            estimated_spend = max(0.0, -estimated_raw)
+            verified_spend  = max(0.0, -_sanitize_float(verified_raw))
+            estimated_spend = max(0.0, -_sanitize_float(estimated_raw))
+            budget_amount   = _sanitize_float(budget.amount)
             total_spend     = round(verified_spend + estimated_spend, 2)
-            divisor = budget.amount if budget.amount > 0 else 1.0
+            divisor = budget_amount if budget_amount > 0 else 1.0
             pct = round((total_spend / divisor) * 100, 1)
             if pct >= 90:
                 status = "over"
@@ -397,12 +415,12 @@ def _execute_tool(
                 status = "healthy"
             result.append({
                 "category": budget.category.name if budget.category else None,
-                "budget_amount": budget.amount,
+                "budget_amount": budget_amount,
                 "period": budget.period,
                 "verified_spend": round(verified_spend, 2),
                 "estimated_spend": round(estimated_spend, 2),
                 "total_spend": total_spend,
-                "remaining": round(budget.amount - total_spend, 2),
+                "remaining": round(budget_amount - total_spend, 2),
                 "pct_used": pct,
                 "status": status,
             })
@@ -434,12 +452,18 @@ def _execute_tool(
         notes = tool_input.get("notes") or ""
         if len(notes) > 2000:
             return {"error": "Notes exceed 2000 character limit."}
+        # Validate category ownership (F-CHAT-05)
+        cat_id = tool_input.get("category_id")
+        if cat_id is not None:
+            cat = db.query(models.Category).filter(models.Category.id == cat_id).first()
+            if not cat or (cat.user_id is not None and cat.user_id != current_user.id):
+                return {"error": f"Category {cat_id} not found or not accessible."}
         tx = models.Transaction(
             account_id=tool_input["account_id"],
             date=tx_date,
             description=description,
             amount=amount,
-            category_id=tool_input.get("category_id"),
+            category_id=cat_id,
             notes=notes or None,
             source="manual",
             is_verified=False,
@@ -483,6 +507,11 @@ def _execute_tool(
                     return {"error": "Description exceeds 500 character limit."}
                 elif field == "notes" and len(str(value)) > 2000:
                     return {"error": "Notes exceed 2000 character limit."}
+                elif field == "category_id":
+                    # Validate category ownership (F-CHAT-05)
+                    cat = db.query(models.Category).filter(models.Category.id == value).first()
+                    if not cat or (cat.user_id is not None and cat.user_id != current_user.id):
+                        return {"error": f"Category {value} not found or not accessible."}
                 setattr(tx, field, value)
         db.commit()
         db.refresh(tx)
@@ -627,11 +656,12 @@ def _inject_budget_table(
             .scalar()
         ) or 0.0
 
-        verified_spend  = max(0.0, -verified_raw)
-        estimated_spend = max(0.0, -estimated_raw)
+        verified_spend  = max(0.0, -_sanitize_float(verified_raw))
+        estimated_spend = max(0.0, -_sanitize_float(estimated_raw))
+        budget_amount   = _sanitize_float(budget.amount)
         total_spend     = round(verified_spend + estimated_spend, 2)
-        remaining       = round(budget.amount - total_spend, 2)
-        pct             = round((total_spend / budget.amount) * 100, 1) if budget.amount > 0 else 0.0
+        remaining       = round(budget_amount - total_spend, 2)
+        pct             = round((total_spend / budget_amount) * 100, 1) if budget_amount > 0 else 0.0
 
         if pct >= 90:
             status = "OVER"
@@ -642,7 +672,7 @@ def _inject_budget_table(
 
         lines.append(
             f"| {cat_name} "
-            f"| ${budget.amount:,.2f} "
+            f"| ${budget_amount:,.2f} "
             f"| ${verified_spend:,.2f} "
             f"| ${estimated_spend:,.2f} "
             f"| ${total_spend:,.2f} "
@@ -703,7 +733,7 @@ def _build_system_prompt(
         if accounts:
             lines.append("## Accounts")
             for a in accounts:
-                lines.append(f"- {a.name} ({a.account_type or 'account'}): {a.currency} {a.balance:,.2f}")
+                lines.append(f"- {a.name} ({a.account_type or 'account'}): {a.currency} {_sanitize_float(a.balance):,.2f}")
             lines.append("")
 
         # Current month budget summary — per-category table with verified/estimated split
@@ -719,7 +749,7 @@ def _build_system_prompt(
             )
             .all()
         )
-        total_balance = sum(a.balance for a in accounts)
+        total_balance = sum(_sanitize_float(a.balance) for a in accounts)
         lines.append(f"## Summary")
         lines.append(f"- Total balance across {len(accounts)} account(s): {total_balance:,.2f}")
 
@@ -735,7 +765,7 @@ def _build_system_prompt(
             )
             .scalar()
         ) or 0.0
-        lines.append(f"- Total spending this month: {abs(spend_raw):,.2f}")
+        lines.append(f"- Total spending this month: {abs(_sanitize_float(spend_raw)):,.2f}")
         lines.append("")
 
         # Per-category budget breakdown so summary personas can answer budget questions
@@ -813,6 +843,19 @@ def _build_system_prompt(
 # SSE helpers
 # ---------------------------------------------------------------------------
 
+# Per-tool call limits within a single chat stream (F-CHAT-07).
+# Prevents data enumeration via repeated tool calls with varying filters.
+TOOL_CALL_LIMITS: dict[str, int] = {
+    "get_transactions": 3,
+    "get_accounts": 2,
+    "get_budget_summary": 2,
+    "get_categories": 2,
+    "add_transaction": 3,
+    "update_transaction": 3,
+    "add_savings_contribution": 3,
+    "add_debt_payment": 3,
+}
+
 SENTINEL = "\x00TOOL:"
 
 
@@ -867,6 +910,10 @@ async def chat(
     if persona.can_modify_data:
         available_tools = available_tools + list(WRITE_TOOLS)
 
+    # SECURITY INVARIANT (F-CHAT-08): Personas are shared across users, but all
+    # financial data injected into the AI context is scoped to current_user.id.
+    # The persona controls data_access_level (full/summary/readonly), not data ownership.
+    # If multi-tenant user isolation is ever needed, scope must be enforced here.
     system_prompt = _build_system_prompt(persona, window_start, db, current_user)
 
     # Convert request messages to provider format
@@ -878,6 +925,7 @@ async def chat(
         # `messages`, then re-invokes the model.
         MAX_TOOL_ROUNDS = 6
         current_messages = list(messages)
+        tool_call_counts: dict[str, int] = {}  # per-tool call counter (F-CHAT-07)
 
         for _round in range(MAX_TOOL_ROUNDS + 1):
             if _round == MAX_TOOL_ROUNDS:
@@ -928,14 +976,20 @@ async def chat(
                 # All tool results go in a single user message as tool_result blocks.
                 tool_result_blocks: list[dict] = []
                 for tc in tool_calls_this_round:
-                    result = _execute_tool(
-                        tool_name=tc["name"],
-                        tool_input=tc["input"],
-                        db=db,
-                        current_user=current_user,
-                        persona=persona,
-                        window_start=window_start,
-                    )
+                    # Per-tool rate limiting (F-CHAT-07)
+                    tool_call_counts[tc["name"]] = tool_call_counts.get(tc["name"], 0) + 1
+                    limit = TOOL_CALL_LIMITS.get(tc["name"], 3)
+                    if tool_call_counts[tc["name"]] > limit:
+                        result = {"error": f"Tool '{tc['name']}' has exceeded its per-conversation limit of {limit} calls."}
+                    else:
+                        result = _execute_tool(
+                            tool_name=tc["name"],
+                            tool_input=tc["input"],
+                            db=db,
+                            current_user=current_user,
+                            persona=persona,
+                            window_start=window_start,
+                        )
                     yield _sse("tool_result", json.dumps({"name": tc["name"]}))
                     tool_result_blocks.append({
                         "type": "tool_result",
@@ -964,14 +1018,20 @@ async def chat(
                 current_messages.append(assistant_msg)
 
                 for tc in tool_calls_this_round:
-                    result = _execute_tool(
-                        tool_name=tc["name"],
-                        tool_input=tc["input"],
-                        db=db,
-                        current_user=current_user,
-                        persona=persona,
-                        window_start=window_start,
-                    )
+                    # Per-tool rate limiting (F-CHAT-07)
+                    tool_call_counts[tc["name"]] = tool_call_counts.get(tc["name"], 0) + 1
+                    limit = TOOL_CALL_LIMITS.get(tc["name"], 3)
+                    if tool_call_counts[tc["name"]] > limit:
+                        result = {"error": f"Tool '{tc['name']}' has exceeded its per-conversation limit of {limit} calls."}
+                    else:
+                        result = _execute_tool(
+                            tool_name=tc["name"],
+                            tool_input=tc["input"],
+                            db=db,
+                            current_user=current_user,
+                            persona=persona,
+                            window_start=window_start,
+                        )
                     yield _sse("tool_result", json.dumps({"name": tc["name"]}))
                     current_messages.append({
                         "role": "tool",
