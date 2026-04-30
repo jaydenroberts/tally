@@ -4,6 +4,22 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.3.3] - 2026-04-30
+
+### Security
+
+- **Category IDOR in AI write tools** — `add_transaction` and `update_transaction` tool handlers now verify that the supplied `category_id` belongs to the current user or is a system category before use (Medium, F-CHAT-05).
+- **Float validation on all API inputs** — all monetary and numeric fields across every Pydantic schema now reject NaN, Infinity, and -Infinity at the API boundary via `_check_finite` validators (Medium, F-CHAT-06).
+- **Float sanitization on AI responses** — numeric values read from the database for AI tool responses and system prompt injection are now passed through `_sanitize_float()`, replacing corrupt floats with 0.0 before they reach the model (Medium, F-CHAT-06).
+- **Per-tool call rate limiting** — individual AI tool invocations are now capped per chat stream (e.g. `get_transactions` max 3, `get_budget_summary` max 2) to prevent data enumeration via repeated calls with varying filters (Medium, F-CHAT-07).
+- **Persona isolation invariant documented** — added security invariant comment confirming all financial data is scoped to `current_user.id` regardless of shared persona assignment (Medium, F-CHAT-08).
+
+### Changed
+
+- Replaced bank-specific institution names in code comments, UI placeholders, and documentation with generic descriptions.
+
+---
+
 ## [1.3.0] - 2026-04-22
 
 ### Added
