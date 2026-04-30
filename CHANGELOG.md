@@ -66,7 +66,7 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 - Bulk delete errors are now shown in the confirmation modal instead of being silently swallowed.
 - The row actions column in the transaction list is now wide enough to display all available action buttons without them overlapping.
 - The static file server now correctly serves favicons, manifests, and other root-level assets instead of returning the app shell for every non-API path.
-- ING bank statement imports now correctly handle debit columns that are already stored as negative values, preventing double-negation of debit amounts.
+- Bank statement imports now correctly handle debit columns that are already stored as negative values, preventing double-negation of debit amounts.
 
 ### Security
 

@@ -511,7 +511,7 @@ function ImportModal({ accounts, onDone, onClose }) {
   const [dateCol, setDateCol]     = useState('')
   const [descCol, setDescCol]     = useState('')
   const [amtCol, setAmtCol]       = useState('')
-  // Split credit/debit mode (e.g. ING Australia: Date, Description, Credit, Debit, Balance)
+  // Split credit/debit mode (e.g. Date, Description, Credit, Debit, Balance)
   const [splitMode, setSplitMode] = useState(false)
   const [creditCol, setCreditCol] = useState('')
   const [debitCol, setDebitCol]   = useState('')
@@ -538,7 +538,7 @@ function ImportModal({ accounts, onDone, onClose }) {
     if (!preview) return
     const cols = preview.columns
 
-    // Auto-detect ING-style split format: headers contain both "credit" and "debit"
+    // Auto-detect split format: headers contain both "credit" and "debit"
     const hasCreditCol = cols.some((c) => /^credit$/i.test(c.trim()))
     const hasDebitCol  = cols.some((c) => /^debit$/i.test(c.trim()))
     const detectedSplit = hasCreditCol && hasDebitCol
@@ -863,7 +863,7 @@ function ImportModal({ accounts, onDone, onClose }) {
               </div>
               {splitMode && (
                 <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
-                  Use this for ING Australia and other banks that export Credit and Debit as separate columns.
+                  Use this for banks that export Credit and Debit as separate columns.
                 </p>
               )}
             </div>

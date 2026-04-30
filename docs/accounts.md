@@ -23,7 +23,7 @@ The type affects how balances are displayed and summarised on the Dashboard.
 ## Adding an Account
 
 1. Click **Add Account** in the top right of the Accounts page
-2. Enter an account name (e.g. "ING Everyday", "Visa Credit Card")
+2. Enter an account name (e.g. "Everyday Account", "Visa Credit Card")
 3. Select the account type
 4. Enter the current balance
 5. Optionally enter a currency code (e.g. `AUD`, `USD`) — this is for reference only

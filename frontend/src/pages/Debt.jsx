@@ -389,7 +389,7 @@ function DebtForm({ initial, accounts, onSave, onCancel, saving }) {
     <form onSubmit={handleSubmit}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <FormField label="Debt name *" style={{ gridColumn: '1 / -1' }}>
-          <input style={inputStyle} value={form.name} onChange={set('name')} required autoFocus placeholder="e.g. Virgin Money BT" />
+          <input style={inputStyle} value={form.name} onChange={set('name')} required autoFocus placeholder="e.g. Credit Card Balance Transfer" />
         </FormField>
       </div>
 
@@ -403,7 +403,7 @@ function DebtForm({ initial, accounts, onSave, onCancel, saving }) {
           </select>
         </FormField>
         <FormField label="Lender / Creditor">
-          <input style={inputStyle} value={form.creditor} onChange={set('creditor')} placeholder="e.g. Virgin Money" />
+          <input style={inputStyle} value={form.creditor} onChange={set('creditor')} placeholder="e.g. Bank name" />
         </FormField>
       </div>
 

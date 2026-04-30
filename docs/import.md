@@ -56,7 +56,7 @@ For CSV files, enter the exact column header names from your file:
 | Credit column | For split files: the header of the credit (positive) column |
 | Debit column | For split files: the header of the debit (negative) column |
 
-**Split credit/debit columns:** Some banks (including ING) use separate columns for credits and debits rather than a single signed amount column. Select the split mode and map both columns. Tally handles both positive and already-negative debit values correctly.
+**Split credit/debit columns:** Some banks use separate columns for credits and debits rather than a single signed amount column. Select the split mode and map both columns. Tally handles both positive and already-negative debit values correctly.
 
 ### PDF Column Mapping
 

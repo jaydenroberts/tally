@@ -179,8 +179,8 @@ def import_csv(
     date_col: str = Query("Date"),
     desc_col: str = Query("Description"),
     amount_col: Optional[str] = Query(None, description="Single signed amount column (mutually exclusive with credit_col/debit_col)"),
-    credit_col: Optional[str] = Query(None, description="Credit column for split credit/debit format (e.g. ING Australia)"),
-    debit_col: Optional[str] = Query(None, description="Debit column for split credit/debit format (e.g. ING Australia)"),
+    credit_col: Optional[str] = Query(None, description="Credit column for split credit/debit format"),
+    debit_col: Optional[str] = Query(None, description="Debit column for split credit/debit format"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_owner),
 ):
@@ -191,7 +191,7 @@ def import_csv(
     - Single column: provide `amount_col` (signed value, credits positive)
     - Split columns: provide both `credit_col` and `debit_col`; combined amount =
       (credit or 0) - (debit or 0), producing a signed value where credits are positive.
-      This matches the ING Australia CSV export format (Date, Description, Credit, Debit, Balance).
+      This matches common Australian bank CSV export formats (Date, Description, Credit, Debit, Balance).
     """
     # Validate amount mode — must provide either amount_col or both credit_col + debit_col
     split_mode = credit_col is not None and debit_col is not None
@@ -260,16 +260,16 @@ def import_csv(
 
     for _, row in df.iterrows():
         try:
-            # ING Australia exports dates as DD/MM/YYYY. Specify the format explicitly
+            # Many banks export dates as DD/MM/YYYY. Specify the format explicitly
             # so pandas does not guess MM/DD/YYYY (its default), which would silently
             # corrupt dates where day ≤ 12 and raise ValueError where day > 12.
             bank_date = pd.to_datetime(row[date_col], format="%d/%m/%Y").date()
             bank_desc = str(row[desc_col]) if pd.notna(row[desc_col]) else None
 
             if split_mode:
-                # ING-style: Credit and Debit are separate columns; one will be empty per row.
+                # Split credit/debit: separate columns; one will be empty per row.
                 # Use abs(debit) so this works whether the bank exports debits as positive or
-                # already-negative values (ING exports debit as e.g. -200.00, not 200.00).
+                # already-negative values (some banks export debit as e.g. -200.00, not 200.00).
                 credit = _parse_split_amount(row[credit_col])
                 debit  = _parse_split_amount(row[debit_col])
                 bank_amount = credit - abs(debit)
@@ -358,7 +358,7 @@ def list_import_logs(
 def _extract_two_date_rows_from_text(file_path: Path) -> list[list[str]]:
     """
     Fallback text-based extraction for PDFs with two date columns
-    (e.g. Virgin Money: "Processed Date" + "Transaction Date").
+    (e.g. banks with "Processed Date" + "Transaction Date" columns).
 
     pdfplumber's table extraction can miss rows when the two dates differ
     and cell boundaries shift.  This function uses extract_text() and a
@@ -403,7 +403,7 @@ def _extract_pdf_dataframe(file_path: Path) -> pd.DataFrame:
        Selects the largest table by row count to skip header/summary tables,
        then concatenates all pages dropping repeated header rows.
 
-    2. Row-per-table layout (Virgin Money): each transaction is rendered as its
+    2. Row-per-table layout (some banks): each transaction is rendered as its
        own 1-row table by pdfplumber. Detected when single-row tables vastly
        outnumber multi-row tables. Flattens by finding the dominant column count,
        identifying the repeating header row (most common row value), and
@@ -592,7 +592,7 @@ def import_pdf(
         Handles three formats:
         - Signed numeric:       '-159.20' or '2000.00'
         - Dollar with commas:   '$1,234.56' or '-$1,234.56'
-        - Cr/Dr suffix (Virgin Money style): '$2,000.00 Cr' → +2000.00
+        - Cr/Dr suffix:                      '$2,000.00 Cr' → +2000.00
                                              '$91.34 Dr'    → -91.34
         Credits (Cr) are positive; debits (Dr) are negative.
         """
