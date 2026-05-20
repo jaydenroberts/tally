@@ -1,7 +1,7 @@
 from datetime import datetime, date
 import math
 from typing import Any, Literal, Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +269,17 @@ class TransactionUpdate(BaseModel):
     _validate_amount = field_validator("amount", mode="before")(_check_finite)
 
 
+class AllocationView(BaseModel):
+    """One leg of a transaction's link state — either a savings goal contribution
+    (positive amount), a savings goal withdrawal (negative amount), or a debt
+    payment. Returned inside TransactionResponse.allocations so the frontend can
+    render the full link state of a transaction in one round trip."""
+    kind: Literal["goal", "debt"]
+    ref_id: int
+    name: str
+    amount: float
+
+
 class TransactionResponse(BaseModel):
     id: int
     account_id: int
@@ -287,6 +298,7 @@ class TransactionResponse(BaseModel):
     debt_id: Optional[int] = None
     transaction_type: str = "expense"              # expense | income | transfer | debt_payment
     transfer_pair_id: Optional[int] = None         # groups the two sides of a transfer
+    allocations: list[AllocationView] = []         # populated by endpoints that load link detail
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -612,6 +624,22 @@ class WithdrawResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Batch allocations  (BACKLOG-019 — PATCH /transactions/{id}/allocations)
+# ---------------------------------------------------------------------------
+
+class AllocationItem(BaseModel):
+    kind: Literal["goal", "debt"]
+    ref_id: int
+    amount: float
+
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
+
+
+class BatchAllocationsRequest(BaseModel):
+    allocations: list[AllocationItem]
+
+
+# ---------------------------------------------------------------------------
 # Recurring Transactions
 # ---------------------------------------------------------------------------
 
@@ -664,3 +692,133 @@ class RecurringTransactionResponse(BaseModel):
 
 
 # ImportLogResponse is defined above (before ReconciliationSummary) to avoid forward refs.
+
+
+# ---------------------------------------------------------------------------
+# Import Drafts  (staged-import wizard — v1.4.0)
+# ---------------------------------------------------------------------------
+
+class ColumnMappingSchema(BaseModel):
+    """Validated column-index mapping for CSV import (MASON-4).
+
+    Amount can be supplied either as a single signed ``amount`` column, or as a
+    split ``credit`` / ``debit`` pair (FE-001 — separate money-in/out columns). At least one
+    of ``amount`` or (``credit`` and/or ``debit``) must be present.
+    """
+    date: int
+    description: int
+    amount: Optional[int] = None
+    credit: Optional[int] = None
+    debit: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _require_amount_source(self):
+        if self.amount is None and self.credit is None and self.debit is None:
+            raise ValueError(
+                "column_mapping must define 'amount' or at least one of 'credit'/'debit'"
+            )
+        return self
+
+
+_Date = date   # alias avoids Pydantic v2 field-name / type-name collision
+
+
+class ImportDraftPreviewRow(BaseModel):
+    id: int
+    row_index: int
+    raw: Optional[list] = None
+    date: Optional[_Date] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    category_id: Optional[int] = None
+    duplicate_of: Optional[int] = None
+    duplicate_score: Optional[float] = None
+    excluded: bool
+    user_edited: bool
+
+    model_config = {"from_attributes": True}
+
+
+class ImportDraftSummary(BaseModel):
+    total: int
+    duplicates: int
+    ready_to_import: int
+    detected_account_last4: Optional[str] = None  # present if a last-4 was found in the file
+
+
+class CandidateTableSchema(BaseModel):
+    """Wire-exposed shape for one PDF candidate table.
+
+    NOTE: ``header`` and ``rows`` from the server-side ``CandidateTable``
+    dataclass are deliberately NOT included here — the only preview surface
+    leaving the server is ``first_row_preview`` (≤5 cells, each ≤80 chars).
+    LOCKED (MASON-2 + BASTION-4 + IRIS-3).
+    """
+    index: int
+    row_count: int
+    column_count: int
+    first_row_preview: list[str]
+
+
+class ImportDraftPreviewResponse(BaseModel):
+    id: int
+    status: str
+    account: AccountResponse
+    parsed_meta: Optional[dict] = None
+    column_mapping: Optional[dict] = None
+    rows: list[ImportDraftPreviewRow]
+    summary: ImportDraftSummary
+    # Option B — PDF-import extensions (None for CSV path).
+    format: Optional[str] = None
+    extraction_strategy: Optional[str] = None
+    candidate_tables: Optional[list[CandidateTableSchema]] = None
+    selected_table_index: Optional[int] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ImportDraftRowUpdate(BaseModel):
+    id: int
+    excluded: Optional[bool] = None
+    category_id: Optional[int] = None
+    user_edited: Optional[bool] = None
+    date: Optional[_Date] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+
+    _validate_amount = field_validator("amount", mode="before")(_check_finite)
+
+
+class ImportDraftPatchRequest(BaseModel):
+    column_mapping: Optional[ColumnMappingSchema] = None
+    row_updates: Optional[list[ImportDraftRowUpdate]] = None
+
+
+class ImportCommitResponse(BaseModel):
+    id: int
+    status: str
+    committed_at: datetime
+    rollback_until: datetime
+    transactions_created: int            # NEW import rows inserted (source='import')
+    # FE-012 (A8): reconciliation results.
+    matched_count: int = 0              # unverified manual estimates matched + verified
+    amount_diff_warnings: list[MatchWarning] = []  # matches where the amount changed
+
+
+class ImportHistoryItem(BaseModel):
+    id: int
+    status: str
+    filename: str
+    account: AccountResponse
+    created_at: Optional[datetime] = None
+    committed_at: Optional[datetime] = None
+    rollback_until: Optional[datetime] = None
+    rollback_available: bool
+    transactions_count: int
+
+    model_config = {"from_attributes": True}
+
+
+class ImportHistoryResponse(BaseModel):
+    items: list[ImportHistoryItem]
+    total: int

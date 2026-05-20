@@ -22,7 +22,7 @@ When adding a debt, select the type that matches your account:
 ## Adding a Debt
 
 1. Click **Add Debt**
-2. Enter a name (e.g. "Visa Card", "Car Loan")
+2. Enter a name (e.g. "Rewards Card", "Car Loan")
 3. Select the debt type
 4. Enter the current balance (amount owed)
 5. Enter the interest rate (annual percentage rate)

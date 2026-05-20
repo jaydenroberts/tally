@@ -23,6 +23,7 @@ from __future__ import annotations
 import calendar
 import json
 import math
+import os
 import re
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -805,7 +806,7 @@ def _build_system_prompt(
     # context. A total content cap prevents runaway token usage.
     import logging
     _log = logging.getLogger("tally.chat")
-    MEMORY_FILE_CAP = 50_000  # characters
+    MEMORY_FILE_CAP = 15_000 if AI_PROVIDER == "ollama" else 50_000  # characters
 
     memory_files = (
         db.query(models.PersonaMemoryFile)
@@ -910,6 +911,13 @@ async def chat(
     if persona.can_modify_data:
         available_tools = available_tools + list(WRITE_TOOLS)
 
+    # Local provider write-tool kill switch: strip write tools when AI_PROVIDER=ollama
+    # unless explicitly opted in via TALLY_LOCAL_PROVIDER_WRITE_TOOLS=allow.
+    # Default deny — local models have weaker prompt-injection resistance.
+    if AI_PROVIDER == "ollama":
+        if os.getenv("TALLY_LOCAL_PROVIDER_WRITE_TOOLS", "deny").lower() != "allow":
+            available_tools = [t for t in available_tools if t not in WRITE_TOOLS]
+
     # SECURITY INVARIANT (F-CHAT-08): Personas are shared across users, but all
     # financial data injected into the AI context is scoped to current_user.id.
     # The persona controls data_access_level (full/summary/readonly), not data ownership.
@@ -998,7 +1006,7 @@ async def chat(
                     })
                 current_messages.append({"role": "user", "content": tool_result_blocks})
             else:
-                # OpenAI / compatible: assistant message with tool_calls array,
+                # OpenAI / ollama / compatible: assistant message with tool_calls array,
                 # then individual role="tool" messages with tool_call_id.
                 assistant_msg: dict = {
                     "role": "assistant",

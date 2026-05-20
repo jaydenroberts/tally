@@ -1,215 +1,680 @@
 import { useEffect, useState } from 'react'
+import useBreakpoint from '../hooks/useBreakpoint'
+import { useNavigate } from 'react-router-dom'
 import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useCurrency } from '../context/CurrencyContext'
 import { formatDate } from '../utils/dateFormat'
+import Icon from '../components/Icon'
+import Pill from '../components/Pill'
+import Sparkline from '../components/Sparkline'
+import Button from '../components/Button'
 
-function StatCard({ label, value, accent }) {
+const USE_MOCK_DATA = import.meta.env.VITE_MOCK_DASHBOARD === 'true'
+
+const MOCK = {
+  netWorth: 51248.92,
+  netWorthChange: 4120,
+  netWorthHistory: [12, 14, 15, 14, 17, 18, 20, 22, 21, 24, 26, 28, 31, 32, 35, 38, 42, 45, 47, 51],
+  monthIncome: 6840,
+  monthSpent: 2872,
+  monthBudget: 6800,
+  daysLeft: 17,
+  attention: [
+    { tone: 'warning', icon: 'warn',    title: '4 transactions unverified', sub: 'Imported from CSV on Apr 22', cta: 'Review', href: '/transactions?filter=unverified' },
+    { tone: 'info',    icon: 'repeat',  title: 'Netflix charges tomorrow',  sub: '$22.99 from Checking',           cta: 'See details', href: '/recurring' },
+    { tone: 'brand',   icon: 'target',  title: 'Dining over budget by $12', sub: '106% of $200 — 6 days left',     cta: 'Adjust', href: '/budgets' },
+  ],
+  budgetCategories: [
+    { name: 'Rent',          spent: 1800, budget: 1800, color: 'var(--chart-4)' },
+    { name: 'Groceries',     spent: 412,  budget: 600,  color: 'var(--chart-1)' },
+    { name: 'Dining',        spent: 186,  budget: 200,  color: 'var(--chart-5)' },
+    { name: 'Transport',     spent: 94,   budget: 150,  color: 'var(--chart-2)' },
+    { name: 'Entertainment', spent: 212,  budget: 150,  color: 'var(--chart-3)' },
+    { name: 'Utilities',     spent: 168,  budget: 250,  color: 'var(--chart-6)' },
+  ],
+}
+
+function StatCard({ label, value, accent, sparkline, sparklineColor }) {
   return (
-    <div style={{ ...styles.card, borderTop: `3px solid ${accent}` }}>
-      <p style={styles.cardLabel}>{label}</p>
-      <p style={{ ...styles.cardValue, color: accent }}>{value}</p>
+    <div style={dashStyles.card}>
+      <div style={dashStyles.cardLabel}>{label}</div>
+      <div style={{ ...dashStyles.cardValue, color: accent || 'var(--text)' }}>{value}</div>
+      {sparkline && (
+        <div style={{ marginTop: 10 }}>
+          <Sparkline points={sparkline} width={140} height={28} color={sparklineColor || accent} fill={false}/>
+        </div>
+      )}
     </div>
   )
 }
 
-function SectionHeader({ title }) {
-  return <h2 style={styles.sectionHeader}>{title}</h2>
+function SectionHeader({ title, subtitle, action }) {
+  return (
+    <div style={dashStyles.sectionHeader}>
+      <div>
+        <div style={dashStyles.sectionTitle}>{title}</div>
+        {subtitle && <div style={dashStyles.sectionSub}>{subtitle}</div>}
+      </div>
+      {action}
+    </div>
+  )
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const { user } = useAuth()
   const { formatCurrency } = useCurrency()
+  const { isMobile } = useBreakpoint()
   const [accounts, setAccounts] = useState([])
   const [recentTx, setRecentTx] = useState([])
+  const [summary, setSummary] = useState(USE_MOCK_DATA ? MOCK : null)
   const [loading, setLoading] = useState(true)
+  const [range, setRange] = useState('1Y')
 
   useEffect(() => {
-    Promise.all([
+    const calls = [
       client.get('/accounts'),
-      client.get('/transactions?limit=5'),
-    ])
-      .then(([accRes, txRes]) => {
-        setAccounts(accRes.data)
-        setRecentTx(txRes.data)
+      client.get('/transactions?limit=6'),
+    ]
+    if (!USE_MOCK_DATA) {
+      calls.push(client.get('/dashboard/summary'))
+    }
+    Promise.all(calls)
+      .then(results => {
+        setAccounts(results[0].data)
+        setRecentTx(results[1].data)
+        if (!USE_MOCK_DATA) setSummary(results[2].data)
       })
-      .catch(console.error)
+      .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
 
-  const totalBalance = accounts.reduce((sum, a) => sum + a.balance, 0)
-  const unverified = recentTx.filter((t) => !t.is_verified).length
-
-  if (loading) {
-    return <p style={{ color: 'var(--muted)' }}>Loading…</p>
+  if (loading || !summary) {
+    return <div style={{ padding: 32, color: 'var(--text-muted)' }}>Loading…</div>
   }
+
+  const totalBalance = accounts.reduce((sum, a) => sum + a.balance, 0)
+  const budgetPct = Math.round((summary.monthSpent / summary.monthBudget) * 100)
+  const monthNet = summary.monthIncome - summary.monthSpent
+  const greeting = greetingFor(new Date())
 
   return (
     <div>
-      <div style={styles.pageHeader}>
-        <h1 style={styles.pageTitle}>Dashboard</h1>
-        <p style={styles.welcome}>Welcome back, {user?.username}</p>
-      </div>
-
-      <div style={styles.statsRow}>
-        <StatCard
-          label="Total Balance"
-          value={formatCurrency(totalBalance)}
-          accent="var(--green)"
-        />
-        <StatCard
-          label="Accounts"
-          value={accounts.length}
-          accent="var(--cyan)"
-        />
-        <StatCard
-          label="Unverified Transactions"
-          value={unverified}
-          accent={unverified > 0 ? 'var(--orange)' : 'var(--muted)'}
-        />
-      </div>
-
-      <SectionHeader title="Accounts" />
-      {accounts.length === 0 ? (
-        <p style={styles.empty}>No accounts yet. Add one to get started.</p>
-      ) : (
-        <div style={styles.table}>
-          <div style={styles.tableHeader}>
-            <span>Name</span>
-            <span>Type</span>
-            <span>Institution</span>
-            <span style={{ textAlign: 'right' }}>Balance</span>
-          </div>
-          {accounts.map((a) => (
-            <div key={a.id} style={styles.tableRow}>
-              <span>{a.name}</span>
-              <span style={{ color: 'var(--muted)', textTransform: 'capitalize' }}>
-                {a.account_type ?? '—'}
-              </span>
-              <span style={{ color: 'var(--muted)' }}>{a.institution ?? '—'}</span>
-              <span style={{ textAlign: 'right', color: a.balance >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                {formatCurrency(a.balance)}
-              </span>
-            </div>
-          ))}
+<div className="page-header" data-page-header style={{ ...dashStyles.topbar, position: isMobile ? 'relative' : 'sticky' }}>
+        <div>
+          <h1 style={dashStyles.title}>{greeting}, {user?.username}</h1>
+          <p style={dashStyles.subtitle}>Here's where your household sits today</p>
         </div>
-      )}
+        <div className="actions" data-actions style={{ display: 'flex', gap: 10 }}>
+          <Button variant="secondary" onClick={() => navigate('/import')}><Icon name="upload" size={14}/>Import</Button>
+          <Button variant="primary" onClick={() => navigate('/transactions?action=add')}><Icon name="plus" size={14}/>Add transaction</Button>
+        </div>
+      </div>
 
-      <SectionHeader title="Recent Transactions" />
-      {recentTx.length === 0 ? (
-        <p style={styles.empty}>No transactions yet.</p>
-      ) : (
-        <div style={styles.table}>
-          <div style={styles.tableHeader}>
-            <span>Date</span>
-            <span>Description</span>
-            <span>Category</span>
-            <span style={{ textAlign: 'right' }}>Amount</span>
-            <span style={{ textAlign: 'center' }}>Status</span>
+      <div style={dashStyles.body}>
+        {/* Hero row */}
+        <div style={{ ...dashStyles.heroRow, gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+          <div style={{ ...dashStyles.card, padding: 0 }}>
+            <div style={{ ...dashStyles.heroHeader, ...(isMobile && { flexDirection: 'column', gap: 10 }) }}>
+              <div>
+                <div style={dashStyles.cardLabel}>Net worth</div>
+                <div style={dashStyles.heroValue}>{formatCurrency(summary.netWorth)}</div>
+                <div style={dashStyles.heroChange}>
+                  <Pill tone={summary.netWorthChange >= 0 ? 'positive' : 'negative'}>
+                    <Icon name={summary.netWorthChange >= 0 ? 'arrowUp' : 'arrowDown'} size={10} stroke={2.5}/>
+                    {summary.netWorthChange >= 0 ? '+' : ''}{formatCurrency(summary.netWorthChange)}
+                  </Pill>
+                  <span style={dashStyles.heroChangeNote}>vs. last month</span>
+                </div>
+              </div>
+              <div style={dashStyles.rangeSelector}>
+                {['1M', '3M', '6M', '1Y', 'All'].map(r => (
+                  <button
+                    key={r}
+                    onClick={() => setRange(r)}
+                    style={{
+                      ...dashStyles.rangeButton,
+                      ...(range === r ? dashStyles.rangeButtonActive : {}),
+                    }}
+                  >{r}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ padding: '0 16px 16px' }}>
+              <Sparkline
+                points={summary.netWorthHistory}
+                width={560}
+                height={130}
+                color="var(--brand)"
+                fill={true}
+              />
+            </div>
           </div>
-          {recentTx.map((tx) => (
-            <div key={tx.id} style={styles.tableRow}>
-              <span style={{ color: 'var(--muted)' }}>{formatDate(tx.date)}</span>
-              <span>{tx.description ?? '—'}</span>
-              <span style={{ color: 'var(--muted)' }}>{tx.category?.name ?? '—'}</span>
-              <span style={{ textAlign: 'right', color: tx.amount >= 0 ? 'var(--green)' : 'var(--pink)' }}>
-                {formatCurrency(tx.amount)}
-              </span>
-              <span style={{ textAlign: 'center' }}>
-                <span style={{
-                  fontSize: 11,
-                  padding: '2px 8px',
-                  borderRadius: 99,
-                  background: tx.is_verified ? '#50FA7B20' : '#FF79C620',
-                  color: tx.is_verified ? 'var(--green)' : 'var(--pink)',
+
+          <div style={dashStyles.card}>
+            <div style={dashStyles.cardLabel}>This month</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginTop: 12 }}>
+              <div>
+                <div style={dashStyles.miniLabel}>
+                  <span style={{ ...dashStyles.dot, background: 'var(--positive)' }}/>Income
+                </div>
+                <div style={dashStyles.miniValue}>{formatCurrency(summary.monthIncome)}</div>
+              </div>
+              <div>
+                <div style={dashStyles.miniLabel}>
+                  <span style={{ ...dashStyles.dot, background: 'var(--negative)' }}/>Spent
+                </div>
+                <div style={dashStyles.miniValue}>{formatCurrency(summary.monthSpent)}</div>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 16 }}>
+              <div style={dashStyles.budgetRow}>
+                <span>Budget used</span>
+                <span style={{ color: 'var(--text)', fontWeight: 600 }}>{budgetPct}%</span>
+              </div>
+              <div style={dashStyles.budgetTrack}>
+                <div style={{
+                  width: `${Math.min(budgetPct, 100)}%`,
+                  height: '100%',
+                  background: 'linear-gradient(90deg, var(--positive), var(--warning))',
+                }}/>
+              </div>
+              <div style={dashStyles.budgetMeta}>
+                <span>{formatCurrency(summary.monthSpent)} of {formatCurrency(summary.monthBudget)}</span>
+                <span>{summary.daysLeft} days left</span>
+              </div>
+            </div>
+
+            <div style={dashStyles.divider}/>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <div style={{ flex: 1 }}>
+                <div style={dashStyles.smallLabel}>Net this month</div>
+                <div style={{ ...dashStyles.netValue, color: monthNet >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
+                  {monthNet >= 0 ? '+' : ''}{formatCurrency(monthNet)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Needs attention */}
+        {summary.attention?.length > 0 && (
+          <div style={{ ...dashStyles.card, padding: 0 }}>
+            <SectionHeader
+              title="Needs your attention"
+              subtitle={`${summary.attention.length} items across transactions and bills`}
+              action={<Button variant="ghost" size="sm">View all</Button>}
+            />
+            <div style={dashStyles.divider}/>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : `repeat(${summary.attention.length}, 1fr)` }}>
+              {summary.attention.map((it, i) => (
+                <div key={i} style={{
+                  ...dashStyles.attentionCard,
+                  borderRight: i < summary.attention.length - 1 ? '1px solid var(--border)' : 'none',
                 }}>
-                  {tx.is_verified ? 'Verified' : 'Unverified'}
+                  <div style={{
+                    ...dashStyles.attentionIcon,
+                    background: `color-mix(in oklab, var(--${it.tone}) 18%, transparent)`,
+                    color: `var(--${it.tone})`,
+                  }}>
+                    <Icon name={it.icon} size={16}/>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={dashStyles.attentionTitle}>{it.title}</div>
+                    <div style={dashStyles.attentionSub}>{it.sub}</div>
+                    <a href={it.href} style={dashStyles.attentionCta}>{it.cta} →</a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Accounts + budgets */}
+        <div style={{ ...dashStyles.twoCol, gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+          <div style={{ ...dashStyles.card, padding: 0, minWidth: 0 }}>
+            <SectionHeader
+              title="Accounts"
+              action={<Button variant="ghost" size="sm"><Icon name="plus" size={12}/>Add</Button>}
+            />
+            <div style={dashStyles.divider}/>
+            {accounts.length === 0 ? (
+              <div style={dashStyles.empty}>No accounts yet.</div>
+            ) : accounts.slice(0, 5).map((a, i) => (
+              <div key={a.id} style={{
+                ...dashStyles.accountRow,
+                borderBottom: i < Math.min(accounts.length, 5) - 1 ? '1px solid var(--border)' : 'none',
+              }}>
+                <div>
+                  <div style={dashStyles.accountName}>{a.name}</div>
+                  <div style={dashStyles.accountMeta}>
+                    {a.institution ?? '—'} · <span style={{ textTransform: 'capitalize' }}>{a.account_type ?? 'account'}</span>
+                  </div>
+                </div>
+                <div style={{
+                  fontWeight: 700,
+                  fontVariantNumeric: 'tabular-nums',
+                  textAlign: 'right',
+                  color: a.balance >= 0 ? 'var(--text)' : 'var(--negative)',
+                }}>
+                  {formatCurrency(a.balance)}
+                </div>
+              </div>
+            ))}
+            {accounts.length > 0 && (
+              <div style={{ ...dashStyles.totalRow, borderTop: '1px solid var(--border)' }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Total</span>
+                <span style={{
+                  fontWeight: 700,
+                  fontVariantNumeric: 'tabular-nums',
+                  color: totalBalance >= 0 ? 'var(--positive)' : 'var(--negative)',
+                }}>
+                  {formatCurrency(totalBalance)}
                 </span>
-              </span>
+              </div>
+            )}
+          </div>
+
+          <div style={{ ...dashStyles.card, padding: 0, minWidth: 0 }}>
+            <SectionHeader
+              title="Budget progress"
+              action={<span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{monthName(new Date())}</span>}
+            />
+            <div style={dashStyles.divider}/>
+            <div style={{ padding: '14px 20px', display: 'grid', gap: 12 }}>
+              {summary.budgetCategories.map(c => {
+                const pct = (c.spent / c.budget) * 100
+                const over = pct > 100
+                return (
+                  <div key={c.name}>
+                    <div style={dashStyles.budgetCatRow}>
+                      <span style={dashStyles.budgetCatLabel}>
+                        <span style={{ ...dashStyles.dot, background: c.color }}/>{c.name}
+                      </span>
+                      <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', fontSize: 12 }}>
+                        ${c.spent} <span style={{ color: 'var(--text-faint)' }}>/ ${c.budget}</span>
+                      </span>
+                    </div>
+                    <div style={dashStyles.budgetCatTrack}>
+                      <div style={{
+                        width: `${Math.min(pct, 100)}%`,
+                        height: '100%',
+                        background: over ? 'var(--negative)' : c.color,
+                      }}/>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Recent transactions */}
+        <div style={{ ...dashStyles.card, padding: 0, minWidth: 0 }}>
+          <SectionHeader
+            title="Recent transactions"
+            subtitle={`Latest ${recentTx.length} across all accounts`}
+            action={<Button variant="ghost" size="sm">See all →</Button>}
+          />
+          <div style={dashStyles.divider}/>
+          {recentTx.length === 0 ? (
+            <div style={dashStyles.empty}>No transactions yet.</div>
+          ) : recentTx.map((tx, i) => (
+            <div key={tx.id} style={{
+              ...(isMobile ? dashStyles.txRowMobile : dashStyles.txRow),
+              borderBottom: i < recentTx.length - 1 ? '1px solid var(--border)' : 'none',
+            }}>
+              {isMobile ? (
+                <>
+                  <div style={{ minWidth: 0, display: 'grid', gap: 2 }}>
+                    <span style={dashStyles.txDesc}>{tx.description ?? '—'}</span>
+                    <span style={{ color: 'var(--text-faint)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {formatDate(tx.date)} · {tx.category?.name ?? '—'}
+                    </span>
+                  </div>
+                  <span style={{
+                    textAlign: 'right',
+                    fontWeight: 700,
+                    fontVariantNumeric: 'tabular-nums',
+                    color: tx.amount >= 0 ? 'var(--positive)' : 'var(--text)',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {formatCurrency(tx.amount)}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>{formatDate(tx.date)}</span>
+                  <span style={dashStyles.txDesc}>{tx.description ?? '—'}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                    {tx.category?.name ?? '—'}
+                  </span>
+                  <span style={{ textAlign: 'center' }}>
+                    <Pill tone={tx.is_verified ? 'positive' : 'warning'}>
+                      {tx.is_verified ? 'Verified' : 'Review'}
+                    </Pill>
+                  </span>
+                  <span style={{
+                    textAlign: 'right',
+                    fontWeight: 700,
+                    fontVariantNumeric: 'tabular-nums',
+                    color: tx.amount >= 0 ? 'var(--positive)' : 'var(--text)',
+                  }}>
+                    {formatCurrency(tx.amount)}
+                  </span>
+                </>
+              )}
             </div>
           ))}
         </div>
-      )}
+      </div>
     </div>
   )
 }
 
-const styles = {
-  pageHeader: {
-    marginBottom: 28,
-  },
-  pageTitle: {
-    fontSize: 24,
-    fontWeight: 700,
-    color: 'var(--white)',
-  },
-  welcome: {
-    color: 'var(--muted)',
-    fontSize: 14,
-    marginTop: 4,
-  },
-  statsRow: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+function greetingFor(date) {
+  const h = date.getHours()
+  if (h < 12) return 'Good morning'
+  if (h < 18) return 'Good afternoon'
+  return 'Good evening'
+}
+
+function monthName(date) {
+  return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+}
+
+const dashStyles = {
+  topbar: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: 16,
-    marginBottom: 36,
+    padding: '26px 32px 18px',
+    background: 'var(--bg)',
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: 700,
+    color: 'var(--text)',
+    letterSpacing: '-0.01em',
+    margin: 0,
+  },
+  subtitle: {
+    color: 'var(--text-faint)',
+    fontSize: 13,
+    marginTop: 3,
+  },
+  body: {
+    display: 'grid',
+    gap: 22,
+    minWidth: 0,
+    overflow: 'hidden',
   },
   card: {
-    background: 'var(--bg-card)',
+    background: 'var(--bg-elevated)',
     border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)',
-    padding: '20px 24px',
+    padding: 20,
   },
   cardLabel: {
-    fontSize: 12,
-    fontWeight: 500,
-    color: 'var(--muted)',
+    fontSize: 11,
+    fontWeight: 600,
+    color: 'var(--text-faint)',
     textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    marginBottom: 8,
+    letterSpacing: '0.08em',
   },
   cardValue: {
     fontSize: 26,
     fontWeight: 700,
+    marginTop: 6,
   },
-  sectionHeader: {
-    fontSize: 16,
-    fontWeight: 600,
-    color: 'var(--white)',
-    marginBottom: 12,
-    paddingBottom: 8,
-    borderBottom: '1px solid var(--border)',
-  },
-  table: {
-    background: 'var(--bg-card)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
-    overflow: 'hidden',
-    marginBottom: 32,
-  },
-  tableHeader: {
+
+  heroRow: {
     display: 'grid',
-    gridTemplateColumns: '120px 1fr 1fr 120px 100px',
-    padding: '10px 20px',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+    gap: 22,
+  },
+  heroHeader: {
+    padding: '22px 24px 10px',
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  heroValue: {
+    fontSize: 38,
+    fontWeight: 700,
+    color: 'var(--text)',
+    letterSpacing: '-0.02em',
+    marginTop: 4,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  heroChange: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  heroChangeNote: {
+    fontSize: 12,
+    color: 'var(--text-faint)',
+  },
+  rangeSelector: {
+    display: 'flex',
+    gap: 4,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
     background: 'var(--bg)',
+    padding: 3,
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+  },
+  rangeButton: {
+    padding: '4px 10px',
+    borderRadius: 6,
     fontSize: 11,
     fontWeight: 600,
-    textTransform: 'uppercase',
-    letterSpacing: '0.06em',
-    color: 'var(--muted)',
-    borderBottom: '1px solid var(--border)',
+    background: 'transparent',
+    color: 'var(--text-faint)',
+    border: 'none',
+    cursor: 'pointer',
   },
-  tableRow: {
-    display: 'grid',
-    gridTemplateColumns: '120px 1fr 1fr 120px 100px',
-    padding: '12px 20px',
+  rangeButtonActive: {
+    background: 'var(--bg-hover)',
+    color: 'var(--text)',
+  },
+
+  miniLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    color: 'var(--text-muted)',
+    fontSize: 12,
+  },
+  miniValue: {
+    fontSize: 22,
+    fontWeight: 700,
+    color: 'var(--text)',
+    marginTop: 4,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 2,
+    display: 'inline-block',
+  },
+  budgetRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: 12,
+    color: 'var(--text-muted)',
+    marginBottom: 6,
+  },
+  budgetTrack: {
+    height: 6,
+    borderRadius: 3,
+    background: 'var(--bg-input)',
+    overflow: 'hidden',
+  },
+  budgetMeta: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: 11,
+    color: 'var(--text-faint)',
+    marginTop: 5,
+  },
+  smallLabel: {
+    fontSize: 11,
+    color: 'var(--text-faint)',
+  },
+  netValue: {
+    fontSize: 16,
+    fontWeight: 700,
+    fontVariantNumeric: 'tabular-nums',
+    marginTop: 2,
+  },
+  divider: {
+    height: 1,
+    background: 'var(--border)',
+    width: '100%',
+    margin: '14px 0',
+  },
+
+  sectionHeader: {
+    padding: '16px 20px 12px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sectionTitle: {
     fontSize: 14,
-    borderBottom: '1px solid var(--border)',
+    fontWeight: 600,
+    color: 'var(--text)',
+  },
+  sectionSub: {
+    fontSize: 12,
+    color: 'var(--text-faint)',
+    marginTop: 2,
+  },
+
+  attentionCard: {
+    padding: '16px 20px',
+    display: 'flex',
+    gap: 12,
+    alignItems: 'flex-start',
+  },
+  attentionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    flexShrink: 0,
+    display: 'grid',
+    placeItems: 'center',
+  },
+  attentionTitle: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: 'var(--text)',
+  },
+  attentionSub: {
+    fontSize: 12,
+    color: 'var(--text-faint)',
+    marginTop: 2,
+  },
+  attentionCta: {
+    fontSize: 12,
+    color: 'var(--brand)',
+    fontWeight: 600,
+    marginTop: 8,
+    cursor: 'pointer',
+    display: 'inline-block',
+    textDecoration: 'none',
+  },
+
+  twoCol: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: 22,
+  },
+
+  accountRow: {
+    display: 'grid',
+    gridTemplateColumns: '1fr auto',
+    alignItems: 'center',
+    gap: 14,
+    padding: '12px 20px',
+  },
+  accountName: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: 'var(--text)',
+  },
+  accountMeta: {
+    fontSize: 11,
+    color: 'var(--text-faint)',
+    marginTop: 1,
+  },
+  totalRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '12px 20px',
+    background: 'var(--bg)',
+  },
+
+  budgetCatRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: 12,
+    marginBottom: 5,
     alignItems: 'center',
   },
+  budgetCatLabel: {
+    color: 'var(--text)',
+    fontWeight: 500,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 7,
+  },
+  budgetCatTrack: {
+    height: 5,
+    borderRadius: 3,
+    background: 'var(--bg-input)',
+    overflow: 'hidden',
+  },
+
+  txRow: {
+    display: 'grid',
+    gridTemplateColumns: '90px 1fr 140px 100px 110px',
+    padding: '11px 20px',
+    fontSize: 13,
+    alignItems: 'center',
+    gap: 14,
+  },
+  txRowMobile: {
+    display: 'grid',
+    gridTemplateColumns: '1fr auto',
+    padding: '11px 16px',
+    fontSize: 13,
+    alignItems: 'center',
+    gap: 12,
+    minWidth: 0,
+  },
+  txDesc: {
+    color: 'var(--text)',
+    fontWeight: 500,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+
   empty: {
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
     fontSize: 14,
-    padding: '20px 0',
+    padding: '24px 20px',
+    textAlign: 'center',
   },
 }

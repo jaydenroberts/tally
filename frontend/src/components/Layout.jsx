@@ -1,18 +1,16 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import Icon from './Icon'
 
-// Dracula purple — matches Chat.jsx accent
-const PURPLE = '#BD93F9'
-
-const navItems = [
-  { to: '/',             label: 'Dashboard' },
-  { to: '/accounts',     label: 'Accounts'  },
-  { to: '/transactions', label: 'Transactions' },
-  { to: '/recurring',    label: 'Recurring' },
-  { to: '/budgets',      label: 'Budgets'   },
-  { to: '/savings',      label: 'Savings'   },
-  { to: '/debt',         label: 'Debt'      },
+const mainNav = [
+  { to: '/',             label: 'Dashboard',    icon: 'dashboard' },
+  { to: '/accounts',     label: 'Accounts',     icon: 'wallet' },
+  { to: '/transactions', label: 'Transactions', icon: 'list' },
+  { to: '/recurring',    label: 'Recurring',    icon: 'repeat' },
+  { to: '/budgets',      label: 'Budgets',      icon: 'target' },
+  { to: '/savings',      label: 'Savings',      icon: 'piggy' },
+  { to: '/debt',         label: 'Debt',         icon: 'coins' },
 ]
 
 export default function Layout({ children }) {
@@ -25,81 +23,77 @@ export default function Layout({ children }) {
     navigate('/login')
   }
 
-  // Shared nav link style factory — used in both desktop sidebar and mobile drawer
-  function navLinkStyle({ isActive }) {
-    return {
-      ...styles.navLink,
-      ...(isActive ? styles.navLinkActive : {}),
-    }
-  }
-
-  // Closes the drawer when a nav link is clicked on mobile
   function handleNavClick() {
     setMenuOpen(false)
   }
 
-  // The sidebar content is shared between desktop (always visible) and mobile (drawer)
+  function NavItem({ to, label, icon, end }) {
+    return (
+      <NavLink
+        to={to}
+        end={end}
+        onClick={handleNavClick}
+        style={({ isActive }) => ({
+          ...layoutStyles.navLink,
+          ...(isActive ? layoutStyles.navLinkActive : {}),
+          position: 'relative',
+        })}
+      >
+        {({ isActive }) => (
+          <>
+            {isActive && <span style={layoutStyles.navLinkRail}/>}
+            <Icon name={icon} size={17} stroke={isActive ? 2 : 1.6}/>
+            <span style={{ flex: 1 }}>{label}</span>
+          </>
+        )}
+      </NavLink>
+    )
+  }
+
+  function SectionLabel({ children }) {
+    return <div style={layoutStyles.sectionLabel}>{children}</div>
+  }
+
   function SidebarContent() {
+    const initial = (user?.username || '?').charAt(0).toUpperCase()
     return (
       <>
-        <div style={styles.logo}>
-          <img src="/android-chrome-512x512.png" alt="" style={styles.logoMark} />
-          <span style={styles.logoText}>Tally</span>
+        <div style={layoutStyles.brand}>
+          <div style={layoutStyles.brandMark}>T</div>
+          <div style={layoutStyles.brandText}>
+            <span style={layoutStyles.brandName}>Tally</span>
+            <span style={layoutStyles.brandSub}>Household</span>
+          </div>
         </div>
 
-        <nav style={styles.nav}>
-          {navItems.map(({ to, label }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              style={navLinkStyle}
-              onClick={handleNavClick}
-            >
-              {label}
-            </NavLink>
+        <SectionLabel>Main</SectionLabel>
+        <nav style={layoutStyles.nav}>
+          {mainNav.map(item => (
+            <NavItem key={item.to} {...item} end={item.to === '/'}/>
           ))}
-
-          {/* Chat — purple accent to signal AI feature */}
-          <NavLink
-            to="/chat"
-            style={({ isActive }) => ({
-              ...styles.navLink,
-              color: isActive ? PURPLE : 'var(--muted)',
-              background: isActive ? `${PURPLE}18` : 'transparent',
-            })}
-            onClick={handleNavClick}
-          >
-            Chat
-          </NavLink>
-
-          {isOwner && (
-            <NavLink
-              to="/imports"
-              style={navLinkStyle}
-              onClick={handleNavClick}
-            >
-              Import History
-            </NavLink>
-          )}
-          {isOwner && (
-            <NavLink
-              to="/settings"
-              style={navLinkStyle}
-              onClick={handleNavClick}
-            >
-              Settings
-            </NavLink>
-          )}
         </nav>
 
-        <div style={styles.userBar}>
-          <div style={styles.userInfo}>
-            <span style={styles.username}>{user?.username}</span>
-            <span style={styles.roleBadge}>{user?.role?.display_name}</span>
+        <SectionLabel>Tools</SectionLabel>
+        <nav style={layoutStyles.nav}>
+          <NavItem to="/chat" label="AI Coach" icon="chat"/>
+          {isOwner && <NavItem to="/imports" label="Import history" icon="upload"/>}
+          {isOwner && <NavItem to="/settings" label="Settings" icon="settings"/>}
+        </nav>
+
+        <div style={{ flex: 1 }}/>
+
+        <div style={layoutStyles.userCard}>
+          <div style={layoutStyles.userAvatar}>{initial}</div>
+          <div style={layoutStyles.userInfo}>
+            <span style={layoutStyles.username}>{user?.username}</span>
+            <span style={layoutStyles.userRole}>{user?.role?.display_name}</span>
           </div>
-          <button style={styles.logoutBtn} onClick={handleLogout}>
-            Sign out
+          <button
+            style={layoutStyles.logoutBtn}
+            onClick={handleLogout}
+            aria-label="Sign out"
+          >
+            <Icon name="logout" size={15}/>
           </button>
         </div>
       </>
@@ -107,20 +101,12 @@ export default function Layout({ children }) {
   }
 
   return (
-    <div style={styles.shell}>
-      {/*
-        Inject a single <style> block to handle the media query breakpoint.
-        This avoids any new CSS file or package dependency.
-        - .app-sidebar is hidden on mobile; shown on desktop.
-        - .app-topbar is shown on mobile; hidden on desktop.
-        - .app-main padding is reduced on mobile.
-      */}
+    <div style={layoutStyles.shell} data-app-shell>
       <style>{`
         @media (max-width: 768px) {
           .app-sidebar  { display: none !important; }
           .app-topbar   { display: flex !important; }
-          /* Reduce side padding and push content below the fixed 56px top bar */
-          .app-main     { padding: 72px 16px 16px !important; }
+          .app-main     { padding: 72px 16px 16px !important; overflow-x: hidden !important; }
         }
         @media (min-width: 769px) {
           .app-topbar              { display: none !important; }
@@ -129,92 +115,208 @@ export default function Layout({ children }) {
         }
       `}</style>
 
-      {/* ── Desktop sidebar (hidden on mobile via media query above) ── */}
-      <aside style={styles.sidebar} className="app-sidebar">
-        <SidebarContent />
+      <aside style={layoutStyles.sidebar} className="app-sidebar">
+        <SidebarContent/>
       </aside>
 
-      {/* ── Mobile top bar (hidden on desktop via media query above) ── */}
-      <div style={styles.topBar} className="app-topbar">
-        <div style={styles.topBarLogo}>
-          <img src="/android-chrome-512x512.png" alt="" style={styles.logoMark} />
-          <span style={styles.logoText}>Tally</span>
+      <div style={layoutStyles.topBar} className="app-topbar">
+        <div style={layoutStyles.topBarBrand}>
+          <div style={layoutStyles.brandMark}>T</div>
+          <span style={layoutStyles.brandName}>Tally</span>
         </div>
         <button
-          style={styles.burgerBtn}
-          onClick={() => setMenuOpen(prev => !prev)}
+          style={layoutStyles.burgerBtn}
+          onClick={() => setMenuOpen(p => !p)}
           aria-label={menuOpen ? 'Close menu' : 'Open menu'}
         >
-          {menuOpen ? '✕' : '☰'}
+          <Icon name={menuOpen ? 'plus' : 'menu'} size={20}/>
         </button>
       </div>
 
-      {/* ── Mobile drawer backdrop (closes drawer on click) ── */}
       {menuOpen && (
         <div
-          style={styles.backdrop}
+          style={layoutStyles.backdrop}
           className="app-drawer-backdrop"
           onClick={() => setMenuOpen(false)}
           aria-hidden="true"
         />
       )}
 
-      {/* ── Mobile drawer (slides in from left when menuOpen) ── */}
       <aside
         style={{
-          ...styles.drawer,
+          ...layoutStyles.drawer,
           transform: menuOpen ? 'translateX(0)' : 'translateX(-100%)',
         }}
         className="app-drawer"
         aria-hidden={!menuOpen}
       >
-        <SidebarContent />
+        <SidebarContent/>
       </aside>
 
-      {/* ── Main content area ── */}
-      <main style={styles.main} className="app-main">
+      <main style={layoutStyles.main} className="app-main">
         {children}
       </main>
     </div>
   )
 }
 
-const styles = {
+const layoutStyles = {
   shell: {
     display: 'flex',
-    height: '100vh',
+    height: '100dvh',
+    minHeight: '100vh',          // fallback for browsers without dvh
     overflow: 'hidden',
   },
-
-  // ── Desktop sidebar ──────────────────────────────────────────────────────────
   sidebar: {
-    width: 220,
-    minWidth: 220,
-    background: 'var(--bg-card)',
+    width: 232,
+    minWidth: 232,
+    background: 'var(--bg-elevated)',
     borderRight: '1px solid var(--border)',
     display: 'flex',
     flexDirection: 'column',
-    padding: '24px 0',
+    padding: '18px 14px',
   },
 
-  // ── Mobile top bar ───────────────────────────────────────────────────────────
+  brand: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '4px 8px 18px',
+  },
+  brandMark: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    background: 'linear-gradient(135deg, var(--brand), var(--accent))',
+    display: 'grid',
+    placeItems: 'center',
+    color: 'var(--brand-ink)',
+    fontWeight: 800,
+    fontSize: 15,
+    boxShadow: '0 2px 10px color-mix(in oklab, var(--brand) 40%, transparent)',
+    flexShrink: 0,
+  },
+  brandText: {
+    display: 'flex',
+    flexDirection: 'column',
+    lineHeight: 1.15,
+  },
+  brandName: {
+    fontWeight: 700,
+    fontSize: 15,
+    color: 'var(--text)',
+  },
+  brandSub: {
+    fontSize: 11,
+    color: 'var(--text-faint)',
+  },
+
+  sectionLabel: {
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '0.08em',
+    color: 'var(--text-faint)',
+    padding: '14px 12px 6px',
+    textTransform: 'uppercase',
+  },
+
+  nav: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 1,
+  },
+  navLink: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '9px 12px',
+    borderRadius: 'var(--radius)',
+    color: 'var(--text-muted)',
+    fontSize: 13,
+    fontWeight: 500,
+    textDecoration: 'none',
+    transition: 'color 0.15s, background 0.15s',
+  },
+  navLinkActive: {
+    color: 'var(--text)',
+    background: 'var(--bg-hover)',
+    fontWeight: 600,
+  },
+  navLinkRail: {
+    position: 'absolute',
+    left: -10,
+    top: 8,
+    bottom: 8,
+    width: 3,
+    borderRadius: 2,
+    background: 'var(--brand)',
+  },
+
+  userCard: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 10,
+    background: 'var(--bg)',
+    border: '1px solid var(--border)',
+  },
+  userAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: '50%',
+    background: 'color-mix(in oklab, var(--info) 30%, var(--bg-hover))',
+    color: 'var(--info)',
+    display: 'grid',
+    placeItems: 'center',
+    fontWeight: 700,
+    fontSize: 13,
+    flexShrink: 0,
+  },
+  userInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minWidth: 0,
+    lineHeight: 1.2,
+  },
+  username: {
+    color: 'var(--text)',
+    fontWeight: 600,
+    fontSize: 13,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  userRole: {
+    color: 'var(--text-faint)',
+    fontSize: 11,
+  },
+  logoutBtn: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-faint)',
+    cursor: 'pointer',
+    padding: 4,
+    display: 'grid',
+    placeItems: 'center',
+  },
+
+  // Mobile chrome
   topBar: {
-    // Always present in the DOM; media query shows/hides it.
-    // Default display:none is overridden to flex by the media query on mobile.
     display: 'none',
     alignItems: 'center',
     justifyContent: 'space-between',
     position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
+    top: 0, left: 0, right: 0,
     height: 56,
     padding: '0 16px',
-    background: 'var(--bg-card)',
+    background: 'var(--bg-elevated)',
     borderBottom: '1px solid var(--border)',
     zIndex: 200,
   },
-  topBarLogo: {
+  topBarBrand: {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
@@ -222,121 +324,36 @@ const styles = {
   burgerBtn: {
     background: 'none',
     border: 'none',
-    color: 'var(--white)',
-    fontSize: 22,
+    color: 'var(--text)',
     cursor: 'pointer',
-    padding: '4px 8px',
-    lineHeight: 1,
+    padding: 6,
+    display: 'grid',
+    placeItems: 'center',
   },
-
-  // ── Mobile drawer backdrop ───────────────────────────────────────────────────
   backdrop: {
     position: 'fixed',
     inset: 0,
     background: 'rgba(0, 0, 0, 0.55)',
     zIndex: 300,
   },
-
-  // ── Mobile drawer ────────────────────────────────────────────────────────────
   drawer: {
     position: 'fixed',
-    top: 0,
-    left: 0,
-    bottom: 0,
+    top: 0, left: 0, bottom: 0,
     width: 260,
-    background: 'var(--bg-card)',
+    background: 'var(--bg-elevated)',
     borderRight: '1px solid var(--border)',
     display: 'flex',
     flexDirection: 'column',
-    padding: '24px 0',
+    padding: '18px 14px',
     zIndex: 400,
     transition: 'transform 0.25s ease',
-    // Default hidden state; open state applied inline via transform above
     transform: 'translateX(-100%)',
   },
 
-  // ── Shared sidebar / drawer internals ────────────────────────────────────────
-  logo: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    padding: '0 20px 24px',
-    borderBottom: '1px solid var(--border)',
-    marginBottom: 16,
-  },
-  logoMark: {
-    width: 83,
-    height: 83,
-    objectFit: 'contain',
-    display: 'block',
-    flexShrink: 0,
-  },
-  logoText: {
-    color: 'var(--white)',
-    fontSize: 28,
-    fontWeight: 700,
-    letterSpacing: '-0.5px',
-  },
-  nav: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 2,
-    padding: '0 10px',
-    flex: 1,
-  },
-  navLink: {
-    display: 'block',
-    padding: '9px 12px',
-    borderRadius: 'var(--radius)',
-    color: 'var(--muted)',
-    fontSize: 14,
-    fontWeight: 500,
-    transition: 'color 0.15s, background 0.15s',
-    textDecoration: 'none',
-  },
-  navLinkActive: {
-    color: 'var(--white)',
-    background: 'var(--bg)',
-  },
-  userBar: {
-    padding: '16px 20px 0',
-    borderTop: '1px solid var(--border)',
-    marginTop: 16,
-  },
-  userInfo: {
-    display: 'flex',
-    flexDirection: 'column',
-    marginBottom: 10,
-  },
-  username: {
-    fontWeight: 600,
-    fontSize: 14,
-    color: 'var(--white)',
-  },
-  roleBadge: {
-    fontSize: 11,
-    color: 'var(--cyan)',
-    marginTop: 2,
-  },
-  logoutBtn: {
-    background: 'none',
-    border: '1px solid var(--border)',
-    color: 'var(--muted)',
-    padding: '6px 12px',
-    borderRadius: 'var(--radius)',
-    fontSize: 13,
-    width: '100%',
-    transition: 'color 0.15s, border-color 0.15s',
-  },
-
-  // ── Main content ─────────────────────────────────────────────────────────────
   main: {
     flex: 1,
     overflow: 'auto',
-    padding: 32,
-    // On mobile the top bar is 56px fixed; push content down to avoid overlap.
-    // The media query class override handles the padding reduction,
-    // but paddingTop must account for the fixed topbar on mobile.
-    // This is handled via the injected <style> block below the shell.
+    background: 'var(--bg)',
+    padding: '22px 32px 60px',
   },
 }

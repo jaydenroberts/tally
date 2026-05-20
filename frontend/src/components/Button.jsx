@@ -1,26 +1,36 @@
+// Button — token-driven, four semantic variants.
+// `brand` and `primary` are aliases for now (purple action button).
+// Existing call sites using variant="primary" don't need to change.
+
 const variants = {
+  brand: {
+    background: 'var(--brand)',
+    color: 'var(--brand-ink)',
+    border: '1px solid var(--brand)',
+    fontWeight: 600,
+  },
   primary: {
-    background: 'var(--green)',
-    color: '#282A36',
-    border: 'none',
-    fontWeight: 700,
+    background: 'var(--brand)',
+    color: 'var(--brand-ink)',
+    border: '1px solid var(--brand)',
+    fontWeight: 600,
   },
   secondary: {
-    background: 'none',
-    color: 'var(--white)',
+    background: 'var(--bg-elevated)',
+    color: 'var(--text)',
     border: '1px solid var(--border)',
     fontWeight: 500,
   },
-  danger: {
-    background: 'none',
-    color: 'var(--red)',
-    border: '1px solid var(--red)',
+  ghost: {
+    background: 'transparent',
+    color: 'var(--text-muted)',
+    border: '1px solid transparent',
     fontWeight: 500,
   },
-  ghost: {
-    background: 'none',
-    color: 'var(--muted)',
-    border: 'none',
+  danger: {
+    background: 'transparent',
+    color: 'var(--negative)',
+    border: '1px solid color-mix(in oklab, var(--negative) 40%, transparent)',
     fontWeight: 500,
   },
 }
@@ -42,9 +52,9 @@ export default function Button({
     cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.5 : 1,
     fontFamily: 'inherit',
-    fontSize: size === 'sm' ? 13 : 14,
-    padding: size === 'sm' ? '5px 12px' : '9px 16px',
-    transition: 'opacity 0.15s',
+    fontSize: size === 'sm' ? 12 : 13,
+    padding: size === 'sm' ? '5px 10px' : '8px 14px',
+    transition: 'opacity 0.12s, background 0.12s',
     whiteSpace: 'nowrap',
   }
 

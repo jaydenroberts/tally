@@ -1,2718 +1,1174 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import client from '../api/client'
-import { useAuth } from '../context/AuthContext'
 import { useCurrency } from '../context/CurrencyContext'
-import Modal from '../components/Modal'
+import useBreakpoint from '../hooks/useBreakpoint'
 import Button from '../components/Button'
-import FormField, { inputStyle, selectStyle } from '../components/FormField'
+import Modal from '../components/Modal'
+import PageHeader from '../components/PageHeader'
 import { formatDate } from '../utils/dateFormat'
+
+import AddTransactionForm   from './Transactions.legacy/AddTransactionForm'
 
 const PAGE_SIZE = 50
 
-// ─── Status badge ────────────────────────────────────────────────────────────
+// ─── Category dot colors ─────────────────────────────────────────────────────
+const CAT_COLOR = {
+  Groceries:     'var(--chart-1)',
+  Dining:        'var(--chart-5)',
+  Transport:     'var(--chart-2)',
+  Rent:          'var(--chart-4)',
+  Utilities:     'var(--chart-6)',
+  Entertainment: 'var(--chart-3)',
+  Salary:        'var(--positive)',
+  Transfer:      'var(--text-faint)',
+  Health:        'var(--info)',
+  Subscriptions: 'var(--accent)',
+}
 
-function StatusBadge({ tx }) {
-  if (tx.is_verified) {
-    return (
-      <span style={badge.verified} title="Verified by bank statement">
-        ✓ verified
-      </span>
-    )
+const KIND_COLOR = {
+  goal: 'var(--positive)',
+  debt: 'var(--warning)',
+}
+
+// ─── Pill ────────────────────────────────────────────────────────────────────
+function Pill({ children, tone = 'neutral' }) {
+  const tones = {
+    neutral:  { bg: 'var(--bg-hover)',                                          fg: 'var(--text-muted)', ring: 'var(--border)' },
+    positive: { bg: 'color-mix(in oklab, var(--positive) 15%, transparent)',    fg: 'var(--positive)',   ring: 'color-mix(in oklab, var(--positive) 35%, transparent)' },
+    negative: { bg: 'color-mix(in oklab, var(--negative) 15%, transparent)',    fg: 'var(--negative)',   ring: 'color-mix(in oklab, var(--negative) 35%, transparent)' },
+    warning:  { bg: 'color-mix(in oklab, var(--warning) 15%, transparent)',     fg: 'var(--warning)',    ring: 'color-mix(in oklab, var(--warning) 35%, transparent)' },
+    info:     { bg: 'color-mix(in oklab, var(--info) 15%, transparent)',        fg: 'var(--info)',       ring: 'color-mix(in oklab, var(--info) 35%, transparent)' },
   }
+  const t = tones[tone]
   return (
-    <span style={badge.estimate} title="Manual estimate — not yet matched to a bank statement">
-      ~ estimate
-    </span>
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      padding: '2px 9px', borderRadius: 999,
+      background: t.bg, color: t.fg, fontSize: 11, fontWeight: 600,
+      border: `1px solid ${t.ring}`, lineHeight: 1.4, whiteSpace: 'nowrap',
+    }}>{children}</span>
   )
 }
 
-const badge = {
-  verified: {
-    display: 'inline-flex', alignItems: 'center', gap: 4,
-    fontSize: 11, padding: '2px 8px', borderRadius: 99,
-    background: '#50FA7B18', color: 'var(--green)',
-    fontWeight: 600, whiteSpace: 'nowrap',
-  },
-  estimate: {
-    display: 'inline-flex', alignItems: 'center', gap: 4,
-    fontSize: 11, padding: '2px 8px', borderRadius: 99,
-    background: '#FF79C618', color: 'var(--pink)',
-    fontWeight: 600, whiteSpace: 'nowrap',
-  },
-  savings: {
-    display: 'inline-flex', alignItems: 'center', gap: 4,
-    fontSize: 11, padding: '2px 8px', borderRadius: 99,
-    background: '#8BE9FD18', color: 'var(--cyan)',
-    fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 6,
-  },
-  debt: {
-    display: 'inline-flex', alignItems: 'center', gap: 4,
-    fontSize: 11, padding: '2px 8px', borderRadius: 99,
-    background: '#BD93F918', color: 'var(--purple)',
-    fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 6,
-  },
-  income: {
-    display: 'inline-flex', alignItems: 'center', gap: 3,
-    fontSize: 10, fontWeight: 600, padding: '2px 6px',
-    borderRadius: 4, marginLeft: 6,
-    background: '#50FA7B18', color: 'var(--green)',
-    border: '1px solid #50FA7B40',
-  },
-  transfer: {
-    display: 'inline-flex', alignItems: 'center', gap: 3,
-    fontSize: 10, fontWeight: 600, padding: '2px 6px',
-    borderRadius: 4, marginLeft: 6,
-    background: '#8BE9FD20', color: 'var(--cyan)',
-    border: '1px solid #8BE9FD40',
-  },
-  savingsTransfer: {
-    display: 'inline-flex', alignItems: 'center', gap: 4,
-    fontSize: 11, padding: '2px 8px', borderRadius: 99,
-    background: '#50FA7B18', color: 'var(--green)',
-    fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 6,
-  },
-}
+// ─── Page header ─────────────────────────────────────────────────────────────
+// ─── Filter bar ──────────────────────────────────────────────────────────────
+const SEGMENTS = ['All', 'Unverified', 'Income', 'Expenses', 'Transfers']
 
-// ─── Amount display (estimates shown muted with ~) ───────────────────────────
-
-function AmountDisplay({ tx, currency }) {
+function FilterBar({ segment, onSegmentChange, unverifiedCount, selectedSum, selectedCount, onBulkDelete, onClearSelection }) {
   const { formatCurrency } = useCurrency()
-  const formatted = formatCurrency(tx.amount, currency)
-  if (!tx.is_verified) {
-    return (
-      <span style={{ color: 'var(--pink)', opacity: 0.8 }}>
-        ~{formatted}
-      </span>
-    )
-  }
   return (
-    <span style={{ color: tx.amount >= 0 ? 'var(--green)' : 'var(--white)' }}>
-      {formatted}
-    </span>
-  )
-}
-
-// ─── Match warning banner ─────────────────────────────────────────────────────
-
-function ReconciliationBanner({ summary, onDismiss }) {
-  const { formatCurrency } = useCurrency()
-  if (!summary) return null
-  const { matched_count, new_from_bank_count, estimates_pending, amount_diff_warnings } = summary
-  return (
-    <div style={bannerStyle.wrap}>
-      <div style={bannerStyle.row}>
-        <strong style={{ color: 'var(--cyan)' }}>Import complete</strong>
-        <button style={bannerStyle.close} onClick={onDismiss}>✕</button>
-      </div>
-      <div style={bannerStyle.stats}>
-        <span style={{ color: 'var(--green)' }}>✓ {matched_count} matched</span>
-        <span style={{ color: 'var(--cyan)' }}>+ {new_from_bank_count} new from bank</span>
-        {estimates_pending > 0 && (
-          <span style={{ color: 'var(--pink)' }}>~ {estimates_pending} estimates still pending</span>
-        )}
-      </div>
-      {amount_diff_warnings.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <p style={{ fontSize: 12, color: 'var(--orange)', marginBottom: 4 }}>
-            Amount differences found:
-          </p>
-          {amount_diff_warnings.map((w) => (
-            <p key={w.transaction_id} style={{ fontSize: 12, color: 'var(--muted)' }}>
-              · {w.description ?? 'Transaction'}: you estimated {formatCurrency(w.manual_amount)},
-              bank says {formatCurrency(w.bank_amount)}
-            </p>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-const bannerStyle = {
-  wrap: {
-    background: 'var(--bg-card)',
-    border: '1px solid var(--cyan)',
-    borderRadius: 'var(--radius-lg)',
-    padding: '14px 18px',
-    marginBottom: 20,
-  },
-  row: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  stats: {
-    display: 'flex',
-    gap: 20,
-    fontSize: 13,
-    flexWrap: 'wrap',
-  },
-  close: {
-    background: 'none',
-    border: 'none',
-    color: 'var(--muted)',
-    cursor: 'pointer',
-    fontSize: 14,
-  },
-}
-
-// ─── Quick / Full add form ────────────────────────────────────────────────────
-
-// Transaction type toggle config — label and accent colour per type.
-const TX_TYPES = [
-  { key: 'expense',  label: '− Expense',   accent: 'var(--red)'   },
-  { key: 'income',   label: '+ Income',    accent: 'var(--green)' },
-  { key: 'transfer', label: '↔ Transfer',  accent: 'var(--cyan)'  },
-]
-
-function AddTransactionForm({ accounts, categories, onSave, onCancel, saving }) {
-  const today = new Date().toISOString().split('T')[0]
-
-  // Transaction type: 'expense' | 'income' | 'transfer'
-  const [txType, setTxType] = useState('expense')
-
-  const [form, setForm] = useState({
-    account_id: accounts[0]?.id ?? '',
-    amount: '',
-    category_id: '',
-    date: today,
-    description: '',
-    notes: '',
-  })
-
-  // Transfer-specific fields
-  const [transferForm, setTransferForm] = useState({
-    source_account_id: accounts[0]?.id ?? '',
-    destination_account_id: accounts[1]?.id ?? '',
-    amount: '',
-    date: today,
-    description: '',
-    notes: '',
-  })
-
-  const [showMore, setShowMore] = useState(false)
-  const [error, setError] = useState('')
-
-  function set(field) {
-    return (e) => setForm((f) => ({ ...f, [field]: e.target.value }))
-  }
-
-  function setTransfer(field) {
-    return (e) => setTransferForm((f) => ({ ...f, [field]: e.target.value }))
-  }
-
-  function handleSubmit(e) {
-    e.preventDefault()
-
-    if (txType === 'transfer') {
-      const amount = parseFloat(transferForm.amount)
-      if (isNaN(amount) || amount <= 0) { setError('Transfer amount must be a positive number'); return }
-      if (!transferForm.source_account_id) { setError('Select a source account'); return }
-      if (!transferForm.destination_account_id) { setError('Select a destination account'); return }
-      if (parseInt(transferForm.source_account_id) === parseInt(transferForm.destination_account_id)) {
-        setError('Source and destination accounts must be different')
-        return
-      }
-      setError('')
-      onSave({
-        _isTransfer: true,
-        source_account_id: parseInt(transferForm.source_account_id),
-        destination_account_id: parseInt(transferForm.destination_account_id),
-        amount,
-        date: transferForm.date || today,
-        description: transferForm.description || null,
-        notes: transferForm.notes || null,
-      })
-      return
-    }
-
-    // Expense / Income — user always enters a positive number.
-    // Expenses are negated before saving; income is stored positive.
-    const raw = parseFloat(form.amount)
-    if (isNaN(raw) || raw <= 0) { setError('Enter a positive amount'); return }
-    if (!form.account_id) { setError('Select an account'); return }
-    setError('')
-    onSave({
-      account_id: parseInt(form.account_id),
-      amount: txType === 'expense' ? -raw : raw,
-      category_id: form.category_id ? parseInt(form.category_id) : null,
-      date: form.date || today,
-      description: form.description || null,
-      notes: form.notes || null,
-      transaction_type: txType,
-    })
-  }
-
-  const activeAccent = TX_TYPES.find((t) => t.key === txType)?.accent ?? 'var(--cyan)'
-
-  return (
-    <form onSubmit={handleSubmit}>
-      {/* ── Transaction type toggle ── */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-        {TX_TYPES.map(({ key, label, accent }) => (
+    <div style={{
+      display: 'flex', gap: 8, padding: 10, alignItems: 'center', flexWrap: 'wrap',
+      background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+      borderRadius: 10,
+    }}>
+      {SEGMENTS.map(s => {
+        const active     = s === segment
+        const unverified = s === 'Unverified'
+        return (
           <button
-            key={key}
-            type="button"
-            onClick={() => { setTxType(key); setError('') }}
+            key={s}
+            onClick={() => onSegmentChange(s)}
             style={{
-              padding: '6px 16px',
-              borderRadius: 'var(--radius)',
-              border: `1px solid ${txType === key ? accent : 'var(--border)'}`,
-              background: txType === key ? `${accent}18` : 'transparent',
-              color: txType === key ? accent : 'var(--muted)',
-              fontSize: 13,
-              fontWeight: 600,
+              padding: '5px 12px', borderRadius: 7, fontSize: 12, fontWeight: 600,
               cursor: 'pointer',
-              transition: 'all 0.15s',
+              background:
+                active && unverified ? 'color-mix(in oklab, var(--warning) 18%, transparent)' :
+                active                ? 'var(--bg-hover)' :
+                                        'transparent',
+              color:
+                active && unverified ? 'var(--warning)' :
+                active                ? 'var(--text)' :
+                                        'var(--text-muted)',
+              border:
+                active && unverified
+                  ? '1px solid color-mix(in oklab, var(--warning) 35%, transparent)'
+                  : '1px solid transparent',
             }}
           >
-            {label}
+            {s}{unverified && unverifiedCount > 0 && ` · ${unverifiedCount}`}
           </button>
-        ))}
-      </div>
+        )
+      })}
 
-      {txType === 'transfer' ? (
-        /* ── Transfer mode ── */
+      <div style={{ flex: 1 }}/>
+
+      {selectedCount > 0 && (
         <>
-          <FormField label="From account *">
-            <select
-              style={selectStyle}
-              value={transferForm.source_account_id}
-              onChange={setTransfer('source_account_id')}
-              required
-              autoFocus
-            >
-              <option value="">Select account…</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          </FormField>
-
-          <FormField label="To account *">
-            <select
-              style={selectStyle}
-              value={transferForm.destination_account_id}
-              onChange={setTransfer('destination_account_id')}
-              required
-            >
-              <option value="">Select account…</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          </FormField>
-
-          <FormField label="Amount *" hint="Enter the transfer amount (positive)">
-            <input
-              style={inputStyle}
-              type="number"
-              step="0.01"
-              placeholder="100.00"
-              value={transferForm.amount}
-              onChange={setTransfer('amount')}
-              required
-              inputMode="decimal"
-            />
-          </FormField>
-
-          <FormField label="Date">
-            <input style={inputStyle} type="date" value={transferForm.date} onChange={setTransfer('date')} />
-          </FormField>
-
-          <FormField label="Description">
-            <input style={inputStyle} value={transferForm.description} onChange={setTransfer('description')} placeholder="e.g. Move savings" />
-          </FormField>
-
-          <FormField label="Notes">
-            <textarea style={{ ...inputStyle, resize: 'vertical', minHeight: 60 }} value={transferForm.notes} onChange={setTransfer('notes')} />
-          </FormField>
-
-          {error && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
-
-          <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>
-            Transfers create a <span style={{ color: 'var(--cyan)' }}>linked pair</span> of transactions and are excluded from budget calculations.
-          </p>
-
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-            <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-            <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Create transfer'}</Button>
-          </div>
-        </>
-      ) : (
-        /* ── Expense / Income mode ── */
-        <>
-          <FormField label="Account *">
-            <select style={selectStyle} value={form.account_id} onChange={set('account_id')} required autoFocus>
-              <option value="">Select account…</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          </FormField>
-
-          {/* Amount — user enters a positive value; sign is applied automatically by type */}
-          <FormField label="Amount *">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: activeAccent, fontWeight: 700, fontSize: 18, lineHeight: 1, userSelect: 'none' }}>
-                {txType === 'expense' ? '−' : '+'}
-              </span>
-              <input
-                style={{ ...inputStyle, flex: 1 }}
-                type="number"
-                step="0.01"
-                min="0.01"
-                placeholder="45.00"
-                value={form.amount}
-                onChange={set('amount')}
-                required
-                inputMode="decimal"
-              />
-            </div>
-          </FormField>
-
-          {/* Description is prominent for income — who paid you is the key fact */}
-          {txType === 'income' && (
-            <FormField label="Description" hint="e.g. John — rent reimbursement">
-              <input
-                style={inputStyle}
-                value={form.description}
-                onChange={set('description')}
-                placeholder="Who paid you / what for"
-              />
-            </FormField>
-          )}
-
-          <FormField label="Category">
-            <select style={selectStyle} value={form.category_id} onChange={set('category_id')}>
-              <option value="">Uncategorised</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </FormField>
-
-          {/* Optional fields */}
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{selectedCount} selected</span>
           <button
-            type="button"
-            style={styles.moreToggle}
-            onClick={() => setShowMore((v) => !v)}
+            onClick={onClearSelection}
+            style={{
+              padding: '5px 10px', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)',
+            }}
           >
-            {showMore ? '▲ Fewer options' : '▼ More options'}
+            Clear
           </button>
-
-          {showMore && (
-            <>
-              <FormField label="Date">
-                <input style={inputStyle} type="date" value={form.date} onChange={set('date')} />
-              </FormField>
-              {/* Description for expenses lives here; for income it's already shown above */}
-              {txType === 'expense' && (
-                <FormField label="Description">
-                  <input style={inputStyle} value={form.description} onChange={set('description')} placeholder="e.g. Groceries run" />
-                </FormField>
-              )}
-              <FormField label="Notes">
-                <textarea style={{ ...inputStyle, resize: 'vertical', minHeight: 60 }} value={form.notes} onChange={set('notes')} />
-              </FormField>
-            </>
-          )}
-
-          {error && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
-
-          <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>
-            Manual entries are saved as <span style={{ color: 'var(--pink)' }}>~ estimates</span> until
-            matched by a bank statement import.
-          </p>
-
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-            <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-            <Button type="submit" disabled={saving}>
-              {saving ? 'Saving…' : txType === 'income' ? 'Add income' : 'Add expense'}
-            </Button>
-          </div>
+          <button
+            onClick={onBulkDelete}
+            style={{
+              padding: '5px 12px', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              background: 'color-mix(in oklab, var(--negative) 18%, transparent)', color: 'var(--negative)',
+              border: '1px solid color-mix(in oklab, var(--negative) 35%, transparent)',
+            }}
+          >
+            Delete {selectedCount}
+          </button>
         </>
       )}
-    </form>
+
+      <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+        Sum selected:&nbsp;
+        <span style={{ color: 'var(--text)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+          {formatCurrency(selectedSum)}
+        </span>
+      </span>
+    </div>
   )
 }
 
-// ─── Filter bar ───────────────────────────────────────────────────────────────
-
-function FilterBar({ accounts, categories, filters, onChange }) {
-  function set(field) {
-    return (e) => onChange({ ...filters, [field]: e.target.value })
-  }
-  function reset() {
-    onChange({ account_id: '', category_id: '', is_verified: '', date_from: '', date_to: '' })
-  }
-  const active = Object.values(filters).some(Boolean)
+// ─── Stats strip ─────────────────────────────────────────────────────────────
+function StatsStrip({ stats }) {
+  const { formatCurrency } = useCurrency()
+  const cards = [
+    { label: 'Income (MTD)',   value: formatCurrency(stats.incomeMtd),   tone: 'var(--positive)', signed: true },
+    { label: 'Expenses (MTD)', value: formatCurrency(stats.expensesMtd), tone: 'var(--text)' },
+    { label: 'Net (MTD)',      value: formatCurrency(stats.netMtd),      tone: stats.netMtd >= 0 ? 'var(--positive)' : 'var(--negative)', signed: true },
+    { label: 'Unverified',     value: `${stats.unverifiedCount} items`,  tone: stats.unverifiedCount > 0 ? 'var(--warning)' : 'var(--text-faint)' },
+  ]
   return (
-    <div style={styles.filterBar}>
-      <select style={{ ...selectStyle, flex: '1 1 140px' }} value={filters.account_id} onChange={set('account_id')}>
-        <option value="">All accounts</option>
-        {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-      </select>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12 }}>
+      {cards.map(c => (
+        <div key={c.label} style={{
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+          borderRadius: 10, padding: '12px 16px',
+        }}>
+          <div style={{
+            fontSize: 11, color: 'var(--text-faint)', fontWeight: 600,
+            textTransform: 'uppercase', letterSpacing: '0.06em',
+          }}>{c.label}</div>
+          <div style={{
+            fontSize: 20, fontWeight: 700, color: c.tone, marginTop: 4,
+            fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.01em',
+          }}>{c.signed && !c.value.startsWith('-') ? '+' : ''}{c.value}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
-      <select style={{ ...selectStyle, flex: '1 1 140px' }} value={filters.category_id} onChange={set('category_id')}>
-        <option value="">All categories</option>
-        {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-      </select>
+// ─── Single row ──────────────────────────────────────────────────────────────
+const ROW_GRID = '34px 80px 1fr 130px 140px 170px 90px 120px'
 
-      <select style={{ ...selectStyle, flex: '1 1 130px' }} value={filters.is_verified} onChange={set('is_verified')}>
-        <option value="">All statuses</option>
-        <option value="false">Estimates only</option>
-        <option value="true">Verified only</option>
-      </select>
+function TxRow({ tx, isHover, onHover, onSelect, selected, onLink, onOpen, onDelete }) {
+  const { formatCurrency } = useCurrency()
+  const verified = tx.is_verified
+  const transfer = tx.transaction_type === 'transfer'
 
+  return (
+    <div
+      className="tx-table-row"
+      onMouseEnter={() => onHover(tx.id)}
+      onMouseLeave={() => onHover(null)}
+      onClick={() => onOpen(tx)}
+      style={{
+        display: 'grid', gridTemplateColumns: ROW_GRID,
+        padding: '12px 18px',
+        borderBottom: '1px solid var(--border)',
+        alignItems: 'center', fontSize: 13, position: 'relative',
+        cursor: 'pointer',
+        background:
+          isHover                ? 'var(--bg-hover)' :
+          !verified && !transfer ? 'color-mix(in oklab, var(--warning) 5%, transparent)' :
+                                   'transparent',
+      }}
+    >
       <input
-        style={{ ...inputStyle, flex: '1 1 130px' }}
-        type="date"
-        value={filters.date_from}
-        onChange={set('date_from')}
-        title="From date"
-      />
-      <input
-        style={{ ...inputStyle, flex: '1 1 130px' }}
-        type="date"
-        value={filters.date_to}
-        onChange={set('date_to')}
-        title="To date"
+        type="checkbox"
+        checked={selected}
+        onChange={e => onSelect(tx.id, e.target.checked, e.nativeEvent.shiftKey)}
+        onClick={e => e.stopPropagation()}
+        style={{ width: 14, height: 14, accentColor: 'var(--brand)' }}
       />
 
-      {active && (
-        <Button variant="ghost" size="sm" onClick={reset}>Clear</Button>
+      <span style={{ color: 'var(--text-faint)', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+        {formatDate(tx.date, 'short')}
+      </span>
+
+      <span style={{ color: 'var(--text)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {tx.description}
+      </span>
+
+      <CategoryChip category={tx.category_name}/>
+
+      <span style={{ color: 'var(--text-muted)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {tx.account_name}
+      </span>
+
+      <LinkedToCell tx={tx} isHover={isHover} onLink={onLink}/>
+
+      <span style={{ textAlign: 'center' }}>
+        {transfer ? <Pill tone="neutral">Transfer</Pill>
+         : verified ? <Pill tone="positive">✓ Verified</Pill>
+         :            <Pill tone="warning">Review</Pill>}
+      </span>
+
+      <span style={{
+        textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+        color: tx.amount >= 0 ? 'var(--positive)' : 'var(--text)',
+      }}>{formatCurrency(tx.amount)}</span>
+
+      {isHover && <HoverActionRail tx={tx} onLink={onLink} onDelete={onDelete}/>}
+    </div>
+  )
+}
+
+function CategoryChip({ category }) {
+  if (!category) {
+    return <span style={{ color: 'var(--text-faint)', fontSize: 11 }}>—</span>
+  }
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      padding: '3px 8px', borderRadius: 6, fontSize: 12,
+      background: 'var(--bg-hover)', color: 'var(--text-muted)',
+      justifySelf: 'start', maxWidth: '100%',
+    }}>
+      <span style={{
+        width: 7, height: 7, borderRadius: 2,
+        background: CAT_COLOR[category] || 'var(--text-faint)',
+      }}/>
+      {category}
+    </span>
+  )
+}
+
+function LinkedToCell({ tx, isHover, onLink }) {
+  if (tx.link) {
+    const color = KIND_COLOR[tx.link.kind] ?? 'var(--text-faint)'
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+        background: `color-mix(in oklab, ${color} 14%, transparent)`,
+        color,
+        border: `1px solid color-mix(in oklab, ${color} 30%, transparent)`,
+        maxWidth: '100%',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {tx.link.kind === 'goal' ? '🎯' : '◎'} {tx.link.name}
+      </span>
+    )
+  }
+  if (isHover) {
+    return (
+      <span
+        onClick={e => { e.stopPropagation(); onLink(tx) }}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 500,
+          border: '1px dashed var(--border)', color: 'var(--text-faint)',
+          cursor: 'pointer',
+        }}>
+        + Link
+      </span>
+    )
+  }
+  return <span style={{ color: 'var(--text-faint)', fontSize: 11 }}>—</span>
+}
+
+function HoverActionRail({ tx, onLink, onDelete }) {
+  const actions = [
+    { key: 'goal', icon: '🎯', label: 'Link to goal', tone: 'var(--positive)' },
+    { key: 'debt', icon: '◎',  label: 'Link to debt', tone: 'var(--warning)' },
+    { key: 'open', icon: '›',  label: 'Open',         tone: 'var(--text-muted)' },
+  ]
+  return (
+    <div
+      onClick={e => e.stopPropagation()}
+      style={{
+        position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+        display: 'flex', gap: 4, padding: 4,
+        background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+        borderRadius: 8, boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
+      }}>
+      {actions.map(a => (
+        <button
+          key={a.key}
+          title={a.label}
+          onClick={() => onLink(tx, a.key)}
+          style={{
+            width: 26, height: 26, borderRadius: 6, border: 'none',
+            display: 'grid', placeItems: 'center',
+            background: 'var(--bg-hover)', color: a.tone, cursor: 'pointer',
+            fontSize: 13,
+          }}>
+          {a.icon}
+        </button>
+      ))}
+      <button
+        title="Delete transaction"
+        onClick={() => onDelete(tx)}
+        style={{
+          width: 26, height: 26, borderRadius: 6, border: 'none',
+          display: 'grid', placeItems: 'center',
+          background: 'var(--bg-hover)', color: 'var(--negative)', cursor: 'pointer',
+          fontSize: 13,
+        }}>
+        🗑
+      </button>
+    </div>
+  )
+}
+
+// ─── Table ───────────────────────────────────────────────────────────────────
+function TxTable({ rows, hoverId, onHover, selectedIds, onSelect, onSelectAll, onDelete, onOpen, onLink }) {
+  const allSelected  = rows.length > 0 && rows.every(r => selectedIds.has(r.id))
+  const someSelected = rows.some(r => selectedIds.has(r.id))
+  return (
+    <div className="table-scroll" style={{
+      background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+      borderRadius: 10, overflow: 'hidden',
+    }}>
+      <div className="tx-table-header" style={{
+        display: 'grid', gridTemplateColumns: ROW_GRID,
+        padding: '10px 18px', background: 'var(--bg)',
+        borderBottom: '1px solid var(--border)',
+        fontSize: 10, fontWeight: 700, color: 'var(--text-faint)',
+        textTransform: 'uppercase', letterSpacing: '0.08em',
+      }}>
+        <input
+          type="checkbox"
+          checked={allSelected}
+          ref={el => { if (el) el.indeterminate = someSelected && !allSelected }}
+          onChange={e => onSelectAll(e.target.checked)}
+          title={allSelected ? 'Deselect all' : 'Select all'}
+          style={{ width: 14, height: 14, accentColor: 'var(--brand)', cursor: 'pointer' }}
+        />
+        <span>Date</span>
+        <span>Description</span>
+        <span>Category</span>
+        <span>Account</span>
+        <span>Linked to</span>
+        <span style={{ textAlign: 'center' }}>Status</span>
+        <span style={{ textAlign: 'right' }}>Amount</span>
+      </div>
+      {rows.map(tx => (
+        <TxRow
+          key={tx.id}
+          tx={tx}
+          isHover={hoverId === tx.id}
+          selected={selectedIds.has(tx.id)}
+          onHover={onHover}
+          onSelect={onSelect}
+          onOpen={onOpen}
+          onLink={onLink}
+          onDelete={onDelete}
+        />
+      ))}
+      {rows.length === 0 && (
+        <div style={{ padding: 60, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>
+          No transactions match these filters.
+        </div>
       )}
     </div>
   )
 }
 
-// ─── Import modal (multi-step) ────────────────────────────────────────────────
+// ─── Add allocation picker ───────────────────────────────────────────────────
+// Lists all available goals + debts that aren't already in the current allocation
+// set. Click one to append. Withdrawals (debit tx → goal) are surfaced.
+function AddAllocationPicker({ tx, currentRefs, goals, debts, defaultAmount, onAdd, onClose }) {
+  const { formatCurrency } = useCurrency()
+  const isDebit = tx.amount < 0
 
-/**
- * Step 1 — File & account selection
- * Step 2 — Column mapping (+ PDF preview table)
- * Step 3 — Result (reconciliation summary)
- */
-function ImportModal({ accounts, onDone, onClose }) {
-  const [step, setStep]           = useState(1)
-  const [files, setFiles]         = useState([])
-  const [filesLoading, setFilesLoading] = useState(true)
-  const [filesError, setFilesError]     = useState('')
+  // Withdrawals (debit + goal) ARE allowed against completed goals — the
+  // backend handles this by un-completing the goal as the balance drops.
+  const availableGoals = goals.filter(g =>
+    !currentRefs.has(`goal:${g.id}`) && (isDebit || !g.is_completed)
+  )
+  // Debt allocations only valid on debit transactions, max one debt per tx
+  const hasDebtAlready = [...currentRefs].some(r => r.startsWith('debt:'))
+  const availableDebts = isDebit && !hasDebtAlready
+    ? debts.filter(d => !d.is_paid_off)
+    : []
 
-  // Step 1 state
-  const [selectedFile, setSelectedFile] = useState(null)
-  const [accountId, setAccountId]       = useState(accounts[0]?.id ?? '')
-
-  // Step 2 state
-  const [preview, setPreview]     = useState(null)   // { columns, sample_rows, total_rows }
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [dateCol, setDateCol]     = useState('')
-  const [descCol, setDescCol]     = useState('')
-  const [amtCol, setAmtCol]       = useState('')
-  // Split credit/debit mode (e.g. Date, Description, Credit, Debit, Balance)
-  const [splitMode, setSplitMode] = useState(false)
-  const [creditCol, setCreditCol] = useState('')
-  const [debitCol, setDebitCol]   = useState('')
-  const [mappingError, setMappingError] = useState('')
-
-  // Previously-imported warning
-  const [prevImportWarning, setPrevImportWarning] = useState(null)
-
-  // Step 3 state
-  const [result, setResult]       = useState(null)
-  const [importing, setImporting] = useState(false)
-  const [importError, setImportError] = useState('')
-
-  // Load file list on mount
-  useEffect(() => {
-    client.get('/import/files')
-      .then((r) => setFiles(r.data))
-      .catch(() => setFilesError('Could not load file list. Make sure /financial-data is mounted.'))
-      .finally(() => setFilesLoading(false))
-  }, [])
-
-  // Auto-select columns and detect split mode when preview loads
-  useEffect(() => {
-    if (!preview) return
-    const cols = preview.columns
-
-    // Auto-detect split format: headers contain both "credit" and "debit"
-    const hasCreditCol = cols.some((c) => /^credit$/i.test(c.trim()))
-    const hasDebitCol  = cols.some((c) => /^debit$/i.test(c.trim()))
-    const detectedSplit = hasCreditCol && hasDebitCol
-    setSplitMode(detectedSplit)
-
-    setDateCol(cols.find((c) => /date/i.test(c)) ?? cols[0] ?? '')
-    setDescCol(cols.find((c) => /desc|narr|detail|name|memo/i.test(c)) ?? cols[1] ?? '')
-
-    if (detectedSplit) {
-      // Pre-select the Credit and Debit columns
-      setCreditCol(cols.find((c) => /^credit$/i.test(c.trim())) ?? '')
-      setDebitCol(cols.find((c) => /^debit$/i.test(c.trim())) ?? '')
-      setAmtCol('')
-    } else {
-      setAmtCol(cols.find((c) => /amount|amt|value/i.test(c)) ?? cols[2] ?? '')
-      setCreditCol('')
-      setDebitCol('')
-    }
-  }, [preview])
-
-  function fileTypeOf(file) {
-    return file?.filename?.toLowerCase().endsWith('.pdf') ? 'pdf' : 'csv'
-  }
-
-  async function handleStep1Next() {
-    if (!selectedFile) return
-    if (!accountId) return
-    const type = fileTypeOf(selectedFile)
-
-    if (type === 'pdf') {
-      // Fetch preview to populate column choices
-      setPreviewLoading(true)
-      try {
-        const r = await client.get('/import/pdf/preview', {
-          params: { filename: selectedFile.filename, rows: 5 },
-        })
-        setPreview(r.data)
-        if (r.data.previously_imported) {
-          const d = new Date(r.data.last_import_at)
-          setPrevImportWarning(`This file was previously imported on ${d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}.`)
-        } else {
-          setPrevImportWarning(null)
-        }
-      } catch (e) {
-        setMappingError(e.response?.data?.detail ?? 'Failed to preview PDF')
-      } finally {
-        setPreviewLoading(false)
-      }
-    } else {
-      // Fetch CSV preview — populates column dropdowns and triggers split-mode auto-detection
-      setPreviewLoading(true)
-      try {
-        const r = await client.get('/import/csv/preview', {
-          params: { filename: selectedFile.filename, rows: 5 },
-        })
-        setPreview(r.data)
-        if (r.data.previously_imported) {
-          const d = new Date(r.data.last_import_at)
-          setPrevImportWarning(`This file was previously imported on ${d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}.`)
-        } else {
-          setPrevImportWarning(null)
-        }
-      } catch {
-        // If preview fails, fall back to manual text entry with no auto-detection
-        setPreview(null)
-        setPrevImportWarning(null)
-      } finally {
-        setPreviewLoading(false)
-      }
-    }
-    setStep(2)
-  }
-
-  async function handleImport() {
-    const type = fileTypeOf(selectedFile)
-
-    // Validate required column mapping based on mode
-    if (!dateCol || !descCol) {
-      setMappingError('Date and description columns are required')
-      return
-    }
-    if (type === 'csv' && splitMode) {
-      if (!creditCol || !debitCol) {
-        setMappingError('Both credit and debit columns are required in split mode')
-        return
-      }
-    } else {
-      if (!amtCol) {
-        setMappingError('Amount column is required')
-        return
-      }
-    }
-
-    setMappingError('')
-    setImporting(true)
-    try {
-      const endpoint = type === 'pdf' ? '/import/pdf' : '/import/csv'
-
-      // Build params — CSV supports split credit/debit mode; PDF uses single amount column
-      const params = {
-        filename:   selectedFile.filename,
-        account_id: accountId,
-        date_col:   dateCol,
-        desc_col:   descCol,
-      }
-      if (type === 'csv' && splitMode) {
-        params.credit_col = creditCol
-        params.debit_col  = debitCol
-      } else {
-        params.amount_col = amtCol
-      }
-
-      const r = await client.post(endpoint, null, { params })
-      setResult(r.data)
-      setStep(3)
-    } catch (e) {
-      setImportError(e.response?.data?.detail ?? 'Import failed')
-    } finally {
-      setImporting(false)
-    }
-  }
-
-  const type = selectedFile ? fileTypeOf(selectedFile) : null
+  const itemRow = (kind, item) => (
+    <button
+      key={`${kind}:${item.id}`}
+      onClick={() => onAdd({
+        kind,
+        ref_id: item.id,
+        name: item.name,
+        amount: defaultAmount,
+      })}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        width: '100%', padding: '10px 12px', marginBottom: 6,
+        background: 'var(--bg)', border: '1px solid var(--border)',
+        borderRadius: 8, cursor: 'pointer', textAlign: 'left',
+      }}
+    >
+      <span style={{ width: 10, height: 10, borderRadius: 999, background: KIND_COLOR[kind] }}/>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13, color: 'var(--text)', fontWeight: 600 }}>{item.name}</div>
+        {kind === 'goal' && (
+          <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+            {formatCurrency(item.current_amount)} of {formatCurrency(item.target_amount)}
+          </div>
+        )}
+        {kind === 'debt' && (
+          <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+            Balance {formatCurrency(item.current_balance)}
+          </div>
+        )}
+      </div>
+      <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>+ Add</span>
+    </button>
+  )
 
   return (
-    <Modal title="Import bank statement" onClose={onClose} width={620}>
-      {/* Step indicator */}
-      <div style={importStyles.steps}>
-        {['File & account', 'Column mapping', 'Results'].map((label, i) => {
-          const n = i + 1
-          const active = step === n
-          const done   = step > n
-          return (
-            <div key={n} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{
-                width: 22, height: 22, borderRadius: '50%',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 11, fontWeight: 700,
-                background: done ? 'var(--green)' : active ? 'var(--cyan)' : 'var(--border)',
-                color: done || active ? '#282A36' : 'var(--muted)',
-              }}>
-                {done ? '✓' : n}
-              </span>
-              <span style={{ fontSize: 12, color: active ? 'var(--white)' : 'var(--muted)' }}>
-                {label}
-              </span>
-              {i < 2 && <span style={{ color: 'var(--border)', fontSize: 12, marginLeft: 6 }}>›</span>}
-            </div>
-          )
-        })}
-      </div>
-
-      {/* ── Step 1: File & account ── */}
-      {step === 1 && (
-        <div>
-          {filesLoading ? (
-            <p style={{ color: 'var(--muted)' }}>Loading files…</p>
-          ) : filesError ? (
-            <p style={{ color: 'var(--red)', marginBottom: 16 }}>{filesError}</p>
-          ) : files.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--muted)' }}>
-              <p style={{ fontWeight: 600, marginBottom: 8 }}>No files found</p>
-              <p style={{ fontSize: 13 }}>
-                Place CSV or PDF bank statements in your <code>/financial-data</code> volume.
-              </p>
-            </div>
-          ) : (
-            <>
-              {/* File list */}
-              <p style={importStyles.stepLabel}>Select file</p>
-              <div style={importStyles.fileList}>
-                {files.map((f) => {
-                  const isSelected = selectedFile?.filename === f.filename
-                  return (
-                    <div
-                      key={f.filename}
-                      onClick={() => setSelectedFile(f)}
-                      style={{
-                        ...importStyles.fileRow,
-                        background: isSelected ? 'var(--bg)' : 'transparent',
-                        borderColor: isSelected ? 'var(--cyan)' : 'var(--border)',
-                      }}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--white)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {f.filename}
-                        </p>
-                        <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-                          {(f.size_bytes / 1024).toFixed(1)} KB
-                        </p>
-                      </div>
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, padding: '2px 6px',
-                        borderRadius: 4, textTransform: 'uppercase',
-                        color: f.file_type === 'pdf' ? '#BD93F9' : '#8BE9FD',
-                        background: f.file_type === 'pdf' ? '#BD93F920' : '#8BE9FD20',
-                      }}>
-                        {f.file_type}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-
-              {/* Account picker */}
-              <div style={{ marginTop: 16 }}>
-                <p style={importStyles.stepLabel}>Select account</p>
-                <select
-                  style={{ ...selectStyle, width: '100%' }}
-                  value={accountId}
-                  onChange={(e) => setAccountId(e.target.value)}
-                >
-                  <option value="">Select account…</option>
-                  {accounts.filter((a) => a.is_active).map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}{a.institution ? ` · ${a.institution}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </>
-          )}
-
-          <div style={importStyles.footer}>
-            <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button
-              onClick={handleStep1Next}
-              disabled={!selectedFile || !accountId || filesLoading}
-            >
-              {previewLoading ? 'Loading…' : 'Next →'}
-            </Button>
-          </div>
-        </div>
+    <Modal title="Add allocation" onClose={onClose} width={420}>
+      {availableGoals.length === 0 && availableDebts.length === 0 && (
+        <p style={{ color: 'var(--text-faint)', fontSize: 13 }}>
+          No goals or debts available to link. {isDebit
+            ? 'A debit can only link to one debt at a time, and goals must not be completed.'
+            : 'Goals must not be already linked here or completed.'}
+        </p>
       )}
 
-      {/* ── Step 2: Column mapping ── */}
-      {step === 2 && (
-        <div>
-          {prevImportWarning && (
-            <div style={{
-              background: 'rgba(255,170,0,0.12)',
-              border: '1px solid rgba(255,170,0,0.4)',
-              borderRadius: '6px',
-              padding: '10px 14px',
-              marginBottom: '16px',
-              color: '#ffaa00',
-              fontSize: '13px',
-            }}>
-              &#9888; {prevImportWarning} Duplicate transactions will be skipped automatically.
-            </div>
-          )}
-          <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-            File: <strong style={{ color: 'var(--white)' }}>{selectedFile?.filename}</strong>
-            {preview && (
-              <span style={{ marginLeft: 8, color: 'var(--cyan)' }}>
-                ({preview.total_rows} rows, {preview.columns.length} columns)
-              </span>
-            )}
-          </p>
-
-          {/* PDF preview table */}
-          {type === 'pdf' && preview && preview.sample_rows.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <p style={importStyles.stepLabel}>Preview (first {preview.sample_rows.length} rows)</p>
-              <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                  <thead>
-                    <tr style={{ background: 'var(--bg)' }}>
-                      {preview.columns.map((c) => (
-                        <th key={c} style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--muted)', fontWeight: 600, whiteSpace: 'nowrap', borderBottom: '1px solid var(--border)' }}>
-                          {c}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.sample_rows.map((row, i) => (
-                      <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                        {preview.columns.map((c) => (
-                          <td key={c} style={{ padding: '5px 10px', color: 'var(--white)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {row[c] ?? ''}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Column mapping fields */}
-          <p style={importStyles.stepLabel}>Map columns</p>
-
-          {/* Amount mode toggle — CSV only (PDF always uses single amount column) */}
-          {type === 'csv' && (
-            <div style={{ marginBottom: 16 }}>
-              <p style={importStyles.stepLabel}>Amount format</p>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  onClick={() => setSplitMode(false)}
-                  style={{
-                    ...importStyles.modeBtn,
-                    background: !splitMode ? 'var(--cyan)' : 'var(--bg)',
-                    color:      !splitMode ? '#282A36'     : 'var(--muted)',
-                    borderColor: !splitMode ? 'var(--cyan)' : 'var(--border)',
-                  }}
-                >
-                  Single amount column
-                </button>
-                <button
-                  onClick={() => setSplitMode(true)}
-                  style={{
-                    ...importStyles.modeBtn,
-                    background: splitMode ? 'var(--cyan)' : 'var(--bg)',
-                    color:      splitMode ? '#282A36'    : 'var(--muted)',
-                    borderColor: splitMode ? 'var(--cyan)' : 'var(--border)',
-                  }}
-                >
-                  Separate credit / debit columns
-                </button>
-              </div>
-              {splitMode && (
-                <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
-                  Use this for banks that export Credit and Debit as separate columns.
-                </p>
-              )}
-            </div>
-          )}
-
-          {preview ? (
-            // Dropdown selectors when we have a preview (CSV or PDF)
-            <div style={{ display: 'grid', gridTemplateColumns: type === 'csv' && splitMode ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
-              <FormField label="Date column *">
-                <select style={selectStyle} value={dateCol} onChange={(e) => setDateCol(e.target.value)}>
-                  <option value="">Select…</option>
-                  {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </FormField>
-              <FormField label="Description column *">
-                <select style={selectStyle} value={descCol} onChange={(e) => setDescCol(e.target.value)}>
-                  <option value="">Select…</option>
-                  {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </FormField>
-              {type === 'csv' && splitMode ? (
-                <>
-                  <FormField label="Credit column *">
-                    <select style={selectStyle} value={creditCol} onChange={(e) => setCreditCol(e.target.value)}>
-                      <option value="">Select…</option>
-                      {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </FormField>
-                  <FormField label="Debit column *">
-                    <select style={selectStyle} value={debitCol} onChange={(e) => setDebitCol(e.target.value)}>
-                      <option value="">Select…</option>
-                      {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </FormField>
-                </>
-              ) : (
-                <FormField label="Amount column *">
-                  <select style={selectStyle} value={amtCol} onChange={(e) => setAmtCol(e.target.value)}>
-                    <option value="">Select…</option>
-                    {preview.columns.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </FormField>
-              )}
-            </div>
-          ) : (
-            // Text inputs for CSV where preview failed, or PDF where preview failed
-            <>
-              <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-                Enter the exact column header names from your {type === 'pdf' ? 'PDF' : 'CSV'} file.
-              </p>
-              <div style={{ display: 'grid', gridTemplateColumns: type === 'csv' && splitMode ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
-                <FormField label="Date column *">
-                  <input style={inputStyle} value={dateCol} onChange={(e) => setDateCol(e.target.value)} placeholder="e.g. Date" />
-                </FormField>
-                <FormField label="Description column *">
-                  <input style={inputStyle} value={descCol} onChange={(e) => setDescCol(e.target.value)} placeholder="e.g. Description" />
-                </FormField>
-                {type === 'csv' && splitMode ? (
-                  <>
-                    <FormField label="Credit column *">
-                      <input style={inputStyle} value={creditCol} onChange={(e) => setCreditCol(e.target.value)} placeholder="e.g. Credit" />
-                    </FormField>
-                    <FormField label="Debit column *">
-                      <input style={inputStyle} value={debitCol} onChange={(e) => setDebitCol(e.target.value)} placeholder="e.g. Debit" />
-                    </FormField>
-                  </>
-                ) : (
-                  <FormField label="Amount column *">
-                    <input style={inputStyle} value={amtCol} onChange={(e) => setAmtCol(e.target.value)} placeholder="e.g. Amount" />
-                  </FormField>
-                )}
-              </div>
-            </>
-          )}
-
-          {mappingError && <p style={{ color: 'var(--red)', fontSize: 13, marginTop: 8 }}>{mappingError}</p>}
-          {importError  && <p style={{ color: 'var(--red)', fontSize: 13, marginTop: 8 }}>{importError}</p>}
-
-          <div style={importStyles.footer}>
-            <Button variant="secondary" onClick={() => { setStep(1); setPreview(null); setImportError(''); setPrevImportWarning(null) }}>← Back</Button>
-            <Button
-              onClick={handleImport}
-              disabled={
-                importing || !dateCol || !descCol ||
-                (type === 'csv' && splitMode ? (!creditCol || !debitCol) : !amtCol)
-              }
-            >
-              {importing ? 'Importing…' : 'Run import'}
-            </Button>
-          </div>
-        </div>
+      {availableGoals.length > 0 && (
+        <>
+          <h4 style={{
+            fontSize: 11, fontWeight: 700, color: 'var(--text-faint)',
+            textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8,
+          }}>
+            Savings goals {isDebit && <span style={{ textTransform: 'none', color: 'var(--warning)', fontWeight: 500 }}> · linking will withdraw</span>}
+          </h4>
+          {availableGoals.map(g => itemRow('goal', g))}
+        </>
       )}
 
-      {/* ── Step 3: Results ── */}
-      {step === 3 && result && (
-        <div>
-          <div style={importStyles.resultGrid}>
-            <ResultTile value={result.matched_count}         label="Estimates matched"  color="#50FA7B" />
-            <ResultTile value={result.new_from_bank_count}   label="New from bank"       color="#8BE9FD" />
-            <ResultTile value={result.estimates_pending}     label="Estimates pending"   color="#FF79C6" />
-          </div>
-          {result.skipped_duplicates > 0 && (
-            <div style={{ marginTop: 12, padding: '8px 14px', background: 'rgba(255,170,0,0.08)', border: '1px solid rgba(255,170,0,0.3)', borderRadius: 'var(--radius)', fontSize: 13, color: '#ffaa00' }}>
-              Skipped (already imported): {result.skipped_duplicates}
-            </div>
-          )}
-
-          {result.amount_diff_warnings.length > 0 && (
-            <div style={{ marginTop: 16 }}>
-              <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--orange)', marginBottom: 8 }}>
-                Amount differences ({result.amount_diff_warnings.length})
-              </p>
-              <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-                {result.amount_diff_warnings.map((w) => (
-                  <div key={w.transaction_id} style={importStyles.warnRow}>
-                    <span style={{ fontSize: 12, color: 'var(--white)', flex: 1 }}>
-                      {w.description ?? 'Transaction'}
-                    </span>
-                    <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
-                      estimated {w.manual_amount >= 0 ? '+' : ''}{w.manual_amount.toFixed(2)}
-                      {' → '}{w.bank_amount >= 0 ? '+' : ''}{w.bank_amount.toFixed(2)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div style={importStyles.footer}>
-            <Button onClick={() => { onDone(result); onClose() }}>Done</Button>
-          </div>
-        </div>
+      {availableDebts.length > 0 && (
+        <>
+          <h4 style={{
+            fontSize: 11, fontWeight: 700, color: 'var(--text-faint)',
+            textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 14, marginBottom: 8,
+          }}>Debt accounts</h4>
+          {availableDebts.map(d => itemRow('debt', d))}
+        </>
       )}
     </Modal>
   )
 }
 
-function ResultTile({ value, label, color }) {
+// ─── Link drawer ─────────────────────────────────────────────────────────────
+function LinkDrawer({ tx, goals, debts, categories = [], onClose, onSaveAllocations, onUpdateCategory, isMobile = false }) {
+  const { formatCurrency } = useCurrency()
+  const [catSaving, setCatSaving] = useState(false)
+  const [catError, setCatError] = useState(null)
+  // Initial allocations come from the API (TransactionResponse.allocations).
+  // Magnitude only — the backend infers direction from tx.amount sign.
+  const initialAllocations = useMemo(
+    () => (tx?.allocations ?? []).map(a => ({
+      kind: a.kind,
+      ref_id: a.ref_id,
+      name: a.name,
+      amount: Math.abs(a.amount),
+    })),
+    [tx],
+  )
+  const [allocations, setAllocations] = useState(initialAllocations)
+  const [showPicker, setShowPicker] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
+
+  if (!tx) return null
+
+  const allocated = allocations.reduce((a, x) => a + x.amount, 0)
+  const total     = Math.abs(tx.amount)
+  const remaining = Math.max(0, total - allocated)
+  const overSpent = allocated - total > 0.01
+
+  const currentRefs = new Set(allocations.map(a => `${a.kind}:${a.ref_id}`))
+
+  const isDirty = JSON.stringify(initialAllocations) !== JSON.stringify(allocations)
+  const canSave = !saving && !overSpent && isDirty
+
+  const handleSave = async () => {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      await onSaveAllocations(tx, allocations)
+    } catch (e) {
+      setSaveError(e?.response?.data?.detail ?? e?.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
-    <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '16px 20px', textAlign: 'center' }}>
-      <p style={{ fontSize: 28, fontWeight: 700, color }}>{value}</p>
-      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{label}</p>
+    <aside style={isMobile ? {
+      position: 'fixed', inset: 0, zIndex: 300,
+      background: 'var(--bg-elevated)',
+      display: 'flex', flexDirection: 'column',
+      overflowY: 'auto',
+    } : {
+      position: 'fixed', top: 0, right: 0, bottom: 0, width: 420, zIndex: 300,
+      background: 'var(--bg-elevated)', borderLeft: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column', overflowY: 'auto',
+    }}>
+      <header style={{
+        padding: '20px 24px', borderBottom: '1px solid var(--border)',
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+      }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Linking
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', marginTop: 4 }}>
+            {tx.description}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-faint)', marginTop: 2 }}>
+            {formatDate(tx.date)} · {tx.account_name} · {formatCurrency(tx.amount)}
+          </div>
+          {tx.amount < 0 && (
+            <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 6 }}>
+              Debit transaction — goal allocations will count as withdrawals.
+            </div>
+          )}
+        </div>
+        <button
+          onClick={onClose}
+          style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', fontSize: 18 }}>
+          ✕
+        </button>
+      </header>
+
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
+          Category
+        </div>
+        <select
+          value={tx.category_id ?? ''}
+          disabled={catSaving || !onUpdateCategory}
+          onChange={async (e) => {
+            const next = e.target.value
+            setCatSaving(true)
+            setCatError(null)
+            try {
+              await onUpdateCategory(tx, next)
+            } catch (err) {
+              setCatError(err?.response?.data?.detail ?? err?.message ?? 'Update failed')
+            } finally {
+              setCatSaving(false)
+            }
+          }}
+          style={{
+            width: '100%', padding: '8px 10px', fontSize: 14,
+            background: 'var(--bg-input)', color: 'var(--text)',
+            border: '1px solid var(--border)', borderRadius: 6,
+          }}
+        >
+          <option value="">Uncategorised</option>
+          {categories.map(c => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
+        {catError && (
+          <div style={{ fontSize: 11, color: 'var(--negative)', marginTop: 6 }}>{catError}</div>
+        )}
+      </div>
+
+      <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 6 }}>
+          <span style={{ color: 'var(--text-faint)' }}>Allocated</span>
+          <span style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text)' }}>
+            {formatCurrency(allocated)} of {formatCurrency(total)}
+          </span>
+        </div>
+        <div style={{ height: 6, borderRadius: 3, background: 'var(--bg-input)', overflow: 'hidden' }}>
+          <div style={{
+            height: '100%',
+            width: `${Math.min(100, total > 0 ? (allocated / total) * 100 : 0)}%`,
+            background: overSpent ? 'var(--negative)' : 'var(--positive)',
+          }}/>
+        </div>
+        {overSpent && (
+          <div style={{ fontSize: 11, marginTop: 6, color: 'var(--negative)' }}>
+            Over-allocated by {formatCurrency(allocated - total)}
+          </div>
+        )}
+        {!overSpent && remaining > 0.01 && (
+          <div style={{ fontSize: 11, marginTop: 6, color: 'var(--text-faint)' }}>
+            {formatCurrency(remaining)} unallocated
+          </div>
+        )}
+      </div>
+
+      <div style={{ flex: 1, overflow: 'auto', padding: '16px 24px' }}>
+        {allocations.map((a, i) => (
+          <AllocationRow
+            key={`${a.kind}:${a.ref_id}`}
+            allocation={a}
+            onChangeAmount={amt => {
+              const next = [...allocations]
+              next[i] = { ...a, amount: amt }
+              setAllocations(next)
+            }}
+            onRemove={() => setAllocations(allocations.filter((_, j) => j !== i))}
+          />
+        ))}
+        <button
+          onClick={() => setShowPicker(true)}
+          style={{
+            width: '100%', padding: '10px 12px', marginTop: 8,
+            border: '1px dashed var(--border)', background: 'transparent',
+            borderRadius: 8, color: 'var(--text-faint)', cursor: 'pointer', fontSize: 13,
+          }}>
+          + Add allocation
+        </button>
+      </div>
+
+      {saveError && (
+        <div style={{
+          padding: '10px 24px', background: 'color-mix(in oklab, var(--negative) 12%, transparent)',
+          color: 'var(--negative)', fontSize: 12, borderTop: '1px solid var(--border)',
+        }}>{saveError}</div>
+      )}
+
+      <footer style={{
+        padding: '16px 24px', borderTop: '1px solid var(--border)',
+        display: 'flex', gap: 10, justifyContent: 'flex-end',
+      }}>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={handleSave} disabled={!canSave}>
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
+      </footer>
+
+      {showPicker && (
+        <AddAllocationPicker
+          tx={tx}
+          currentRefs={currentRefs}
+          goals={goals}
+          debts={debts}
+          defaultAmount={Math.round(remaining * 100) / 100 || 0}
+          onAdd={(item) => {
+            setAllocations([...allocations, item])
+            setShowPicker(false)
+          }}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
+    </aside>
+  )
+}
+
+function AllocationRow({ allocation, onChangeAmount, onRemove }) {
+  const color = KIND_COLOR[allocation.kind] ?? 'var(--text-faint)'
+  return (
+    <div style={{
+      display: 'grid', gridTemplateColumns: '12px 1fr auto auto', gap: 10,
+      padding: '10px 12px', marginBottom: 8,
+      background: 'var(--bg)', border: '1px solid var(--border)',
+      borderRadius: 8, alignItems: 'center',
+    }}>
+      <span style={{ width: 10, height: 10, borderRadius: 999, background: color }}/>
+      <div>
+        <div style={{ fontSize: 13, color: 'var(--text)', fontWeight: 600 }}>{allocation.name}</div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', textTransform: 'capitalize' }}>{allocation.kind}</div>
+      </div>
+      <input
+        type="number"
+        step="0.01"
+        min="0"
+        value={allocation.amount}
+        onChange={e => onChangeAmount(parseFloat(e.target.value) || 0)}
+        style={{
+          width: 90, textAlign: 'right',
+          padding: '6px 8px', borderRadius: 6,
+          background: 'var(--bg-input)', border: '1px solid var(--border)',
+          color: 'var(--text)', fontVariantNumeric: 'tabular-nums', fontSize: 13,
+        }}
+      />
+      <button
+        onClick={onRemove}
+        style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', fontSize: 14 }}
+        title="Remove">
+        ✕
+      </button>
     </div>
   )
 }
 
-const importStyles = {
-  steps: {
-    display: 'flex', alignItems: 'center', gap: 8,
-    marginBottom: 20, paddingBottom: 16,
-    borderBottom: '1px solid var(--border)',
-  },
-  stepLabel: {
-    fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
-    letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 8,
-  },
-  fileList: {
-    display: 'flex', flexDirection: 'column', gap: 6,
-    maxHeight: 240, overflowY: 'auto',
-    border: '1px solid var(--border)', borderRadius: 'var(--radius)',
-    padding: 8,
-  },
-  fileRow: {
-    display: 'flex', alignItems: 'center', gap: 10,
-    padding: '8px 10px', borderRadius: 'var(--radius)',
-    border: '1px solid transparent', cursor: 'pointer',
-  },
-  footer: {
-    display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20,
-  },
-  resultGrid: {
-    display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12,
-    marginBottom: 16,
-  },
-  warnRow: {
-    display: 'flex', alignItems: 'center', gap: 12,
-    padding: '8px 12px', borderBottom: '1px solid var(--border)',
-  },
-  modeBtn: {
-    padding: '6px 14px', borderRadius: 'var(--radius)', border: '1px solid',
-    fontSize: 12, fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
-  },
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function deriveLink(tx, debtMap) {
+  // Surface a single primary link for the row "Linked to" cell. Specific debt
+  // name (via debtMap) takes precedence; savings_transfer transactions show a
+  // generic label since the list endpoint doesn't return per-row goal detail
+  // for performance.
+  if (tx.debt_id && debtMap[tx.debt_id]) {
+    return { kind: 'debt', name: debtMap[tx.debt_id].name }
+  }
+  if (tx.transaction_type === 'savings_transfer') {
+    return { kind: 'goal', name: 'Savings goal' }
+  }
+  return null
 }
 
-// ─── Main page ────────────────────────────────────────────────────────────────
+function normalizeTx(tx, accountMap, debtMap) {
+  return {
+    ...tx,
+    account_name:  accountMap[tx.account_id] ?? '—',
+    category_name: tx.category?.name ?? null,
+    link:          deriveLink(tx, debtMap),
+  }
+}
 
+// FE-011: a segment now maps to backend filter params so paging, counts and stats
+// are computed server-side over the whole dataset (not just the loaded page).
+function segmentParams(segment) {
+  switch (segment) {
+    case 'Unverified': return { is_verified: false, exclude_transfers: true }
+    case 'Income':     return { amount_sign: 'positive', exclude_transfers: true }
+    case 'Expenses':   return { amount_sign: 'negative', exclude_transfers: true }
+    case 'Transfers':  return { transaction_type: 'transfer' }
+    default:           return {}
+  }
+}
+
+// First day of the current month, as a YYYY-MM-DD string for the MTD summary window.
+function monthStartISO() {
+  const now = new Date()
+  const d = new Date(now.getFullYear(), now.getMonth(), 1)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
+// ─── Page controls ─────────────────────────────────────────────────────────
+// Numbered pager: Prev / 1 2 3 / Next, 50 per page. Works on mobile (wraps).
+// Cross-page select-all is intentionally OUT OF SCOPE — the header checkbox
+// selects only the current page (documented in handleSelectAll).
+function Pager({ page, pageCount, onPage }) {
+  if (pageCount <= 1) return null
+
+  // Windowed page numbers so a 40-page dataset doesn't render 40 buttons.
+  const window = []
+  const span = 2
+  let lo = Math.max(0, page - span)
+  let hi = Math.min(pageCount - 1, page + span)
+  if (lo > 0) window.push(0, lo > 1 ? '…l' : null)
+  for (let i = lo; i <= hi; i++) window.push(i)
+  if (hi < pageCount - 1) window.push(hi < pageCount - 2 ? '…r' : null, pageCount - 1)
+
+  const btn = (label, target, active = false, disabled = false) => (
+    <button
+      key={label}
+      onClick={disabled ? undefined : () => onPage(target)}
+      disabled={disabled}
+      style={{
+        minWidth: 34, padding: '6px 10px', borderRadius: 7, fontSize: 12, fontWeight: 600,
+        cursor: disabled ? 'default' : 'pointer',
+        background: active ? 'var(--bg-hover)' : 'transparent',
+        color: disabled ? 'var(--text-faint)' : active ? 'var(--text)' : 'var(--text-muted)',
+        border: `1px solid ${active ? 'var(--border)' : 'transparent'}`,
+      }}
+    >
+      {label}
+    </button>
+  )
+
+  return (
+    <div style={{
+      display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'center',
+      flexWrap: 'wrap', padding: '4px 0',
+    }}>
+      {btn('‹ Prev', page - 1, false, page === 0)}
+      {window.filter(x => x !== null).map((x, i) =>
+        typeof x === 'string'
+          ? <span key={`gap${i}`} style={{ color: 'var(--text-faint)', padding: '0 4px' }}>…</span>
+          : btn(String(x + 1), x, x === page)
+      )}
+      {btn('Next ›', page + 1, false, page >= pageCount - 1)}
+    </div>
+  )
+}
+
+// ─── Page shell ──────────────────────────────────────────────────────────────
 export default function Transactions() {
-  const { isOwner } = useAuth()
-  const { formatCurrency } = useCurrency()
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const { isMobile } = useBreakpoint()
 
   const [transactions, setTransactions] = useState([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(0)
-  const [loading, setLoading] = useState(true)
+  const [accounts,     setAccounts]     = useState([])
+  const [categories,   setCategories]   = useState([])
+  const [goals,        setGoals]        = useState([])
+  const [debts,        setDebts]        = useState([])
+  const [loading,      setLoading]      = useState(true)
+  const [pageLoading,  setPageLoading]  = useState(false)
+  const [error,        setError]        = useState(null)
 
-  const [accounts, setAccounts] = useState([])
-  const [categories, setCategories] = useState([])
-  const [debts, setDebts] = useState([])
-  const [savingsGoals, setSavingsGoals] = useState([])
+  const [segment,        setSegment]        = useState('All')
+  const [page,           setPage]           = useState(0)         // 0-based; page 0 = rows 1–50
+  const [totalCount,     setTotalCount]     = useState(0)         // count for the active segment
+  const [stats,          setStats]          = useState({ incomeMtd: 0, expensesMtd: 0, netMtd: 0, unverifiedCount: 0 })
+  const [selectedIds,    setSelectedIds]    = useState(new Set())
+  const [hoverId,        setHoverId]        = useState(null)
+  const [openTx,         setOpenTx]         = useState(null)
+  const [openingTxId,    setOpeningTxId]    = useState(null)
+  const [showAdd,        setShowAdd]        = useState(false)
+  const [savingAdd,      setSavingAdd]      = useState(false)
+  const [lastSelectedId, setLastSelectedId] = useState(null)
+  const [confirmDelete,  setConfirmDelete]  = useState(null)
+  const [deleting,       setDeleting]       = useState(false)
 
-  const [filters, setFilters] = useState({
-    account_id: '', category_id: '', is_verified: '', date_from: '', date_to: '',
-  })
+  const pageCount = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
 
-  // Sort state — default: date descending (most recent first)
-  const [sort, setSort] = useState({ by: 'date', dir: 'desc' })
-
-  const [showAdd, setShowAdd]       = useState(false)
-  const [showImport, setShowImport] = useState(false)
-  const [editing, setEditing]       = useState(null)
-  const [deleting, setDeleting]     = useState(null)
-  const [saving, setSaving]         = useState(false)
-  const [actionError, setActionError] = useState('')
-  const [reconciliation, setReconciliation] = useState(null)
-  const [selectedIds, setSelectedIds] = useState(new Set())
-  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
-  const [bulkDeleteError, setBulkDeleteError] = useState('')
-
-  // Bulk category update state
-  const [bulkCategoryPickerOpen, setBulkCategoryPickerOpen] = useState(false)
-  const [bulkCategoryValue, setBulkCategoryValue] = useState('')
-  const [bulkCategoryConfirm, setBulkCategoryConfirm] = useState(false)
-  const [bulkCategoryPatching, setBulkCategoryPatching] = useState(false)
-  const [bulkCategoryError, setBulkCategoryError] = useState('')
-
-  // Debt linkage state
-  const [linkingTx, setLinkingTx]       = useState(null)  // tx to link to a debt
-  const [linkDebtId, setLinkDebtId]     = useState('')
-  const [linkError, setLinkError]       = useState('')
-  const [linkLoading, setLinkLoading]   = useState(false)
-
-  // Savings allocation state (credit tx → savings contribution)
-  const [allocatingTx, setAllocatingTx]   = useState(null)  // tx to allocate to savings goals
-  const [allocations, setAllocations]     = useState([])     // [{goal_id, amount}]
-  const [allocError, setAllocError]       = useState('')
-  const [allocLoading, setAllocLoading]   = useState(false)
-
-  // Transfer pair linking state
-  const [linkingTransfer, setLinkingTransfer]       = useState(null)  // source tx for pair selection
-  const [transferPairError, setTransferPairError]   = useState('')
-  const [transferPairLoading, setTransferPairLoading] = useState(false)
-
-  // Savings withdrawal linking state (debit tx → savings withdrawal)
-  const [withdrawLinkingTx, setWithdrawLinkingTx]     = useState(null)
-  const [withdrawGoalId, setWithdrawGoalId]           = useState('')
-  const [withdrawError, setWithdrawError]             = useState('')
-  const [withdrawLoading, setWithdrawLoading]         = useState(false)
-
-  // Inline category editing — tracks which tx row has the dropdown open
-  const [categoryEditId, setCategoryEditId] = useState(null)
-  const [categoryPatching, setCategoryPatching] = useState(null)
-  const categorySelectRef = useRef(null)
-
-  const load = useCallback((p = 0) => {
-    setLoading(true)
-    const params = new URLSearchParams()
-    params.set('skip', p * PAGE_SIZE)
-    params.set('limit', PAGE_SIZE)
-    if (filters.account_id)  params.set('account_id',  filters.account_id)
-    if (filters.category_id) params.set('category_id', filters.category_id)
-    if (filters.is_verified !== '') params.set('is_verified', filters.is_verified)
-    if (filters.date_from)   params.set('date_from',   filters.date_from)
-    if (filters.date_to)     params.set('date_to',     filters.date_to)
-    params.set('sort_by',  sort.by)
-    params.set('sort_dir', sort.dir)
-
-    const countParams = new URLSearchParams(params)
-    countParams.delete('skip')
-    countParams.delete('limit')
-    countParams.delete('sort_by')
-    countParams.delete('sort_dir')
-
-    Promise.all([
-      client.get(`/transactions?${params.toString()}`),
-      client.get(`/transactions/count?${countParams.toString()}`),
-    ])
-      .then(([txRes, countRes]) => {
-        setTransactions(txRes.data)
-        setTotal(countRes.data.count)
-        setSelectedIds(new Set())
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false))
-  }, [filters, sort])
-
-  // Load meta (accounts + categories + active debts + savings goals) once
+  // ?action=add → open the add modal immediately, then scrub the param
   useEffect(() => {
-    Promise.all([
-      client.get('/accounts'),
-      client.get('/categories'),
-      client.get('/debt'),
-      client.get('/savings'),
-    ]).then(([a, c, d, s]) => {
-      setAccounts(a.data)
-      setCategories(c.data)
-      setDebts(d.data.filter((debt) => !debt.is_paid_off))
-      setSavingsGoals(s.data.filter((g) => !g.is_completed))
-    })
+    if (searchParams.get('action') === 'add') {
+      setShowAdd(true)
+      setSearchParams({}, { replace: true })
+    }
   }, [])
 
-  // Reload on filter or sort change, reset to page 0
-  useEffect(() => {
-    setPage(0)
-    load(0)
-  }, [filters, sort])
-
-  function changePage(newPage) {
-    setPage(newPage)
-    load(newPage)
-  }
-
-  // ── Account lookup for currency display
-  const accountMap = Object.fromEntries(accounts.map((a) => [a.id, a]))
-
-  // ── Add / Edit / Delete ──────────────────────────────────────────────────
-
-  async function handleAdd(form) {
-    setSaving(true)
-    setActionError('')
-    try {
-      if (form._isTransfer) {
-        // Transfer flow — POST to dedicated endpoint; response includes both sides
-        const { _isTransfer: _, ...transferPayload } = form
-        await client.post('/transactions/transfer', transferPayload)
-      } else {
-        await client.post('/transactions', form)
-      }
-      setShowAdd(false)
-      load(0)
-      setPage(0)
-    } catch (e) {
-      setActionError(e.response?.data?.detail ?? 'Failed to add transaction')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function handleEdit(form) {
-    setSaving(true)
-    setActionError('')
-    try {
-      await client.patch(`/transactions/${editing.id}`, form)
-      setEditing(null)
-      load(page)
-    } catch (e) {
-      setActionError(e.response?.data?.detail ?? 'Failed to update transaction')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function handleDelete() {
-    setSaving(true)
-    try {
-      await client.delete(`/transactions/${deleting.id}`)
-      setDeleting(null)
-      load(page)
-    } catch (e) {
-      setActionError(e.response?.data?.detail ?? 'Failed to delete transaction')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleBulkDelete = async () => {
-    setBulkDeleteError('')
-    try {
-      const ids = Array.from(selectedIds)
-      await client.delete('/transactions/bulk', {
-        params: { ids },
-        paramsSerializer: params => params.ids.map(id => `ids=${id}`).join('&'),
-      })
-      setBulkDeleteConfirm(false)
-      setBulkDeleteError('')
-      setSelectedIds(new Set())
-      load(page)
-    } catch (err) {
-      console.error('Bulk delete failed', err)
-      setBulkDeleteError(err.response?.data?.detail ?? 'Delete failed — see console for details')
-    }
-  }
-
-  // Bulk category update — fires PATCH in parallel for all selected IDs, updates in-place
-  const handleBulkSetCategory = async () => {
-    setBulkCategoryPatching(true)
-    setBulkCategoryError('')
-    const newCatId = bulkCategoryValue ? parseInt(bulkCategoryValue) : null
-    const ids = Array.from(selectedIds)
-    try {
-      const results = await Promise.allSettled(
-        ids.map((id) =>
-          client.patch(`/transactions/${id}`, { category_id: newCatId })
-        )
-      )
-      // Collect successful responses and failed IDs
-      const successMap = new Map()
-      const failedIds = []
-      results.forEach((result, idx) => {
-        if (result.status === 'fulfilled') {
-          successMap.set(ids[idx], result.value.data)
-        } else {
-          failedIds.push(ids[idx])
-        }
-      })
-      // Update all successful rows in-place using server response data
-      if (successMap.size > 0) {
-        setTransactions((prev) =>
-          prev.map((t) =>
-            successMap.has(t.id) ? successMap.get(t.id) : t
-          )
-        )
-      }
-      if (failedIds.length > 0) {
-        setBulkCategoryError(`${failedIds.length} update${failedIds.length !== 1 ? 's' : ''} failed (verified transactions cannot be edited).`)
-      } else {
-        // Full success — reset bulk category state and clear selection
-        setBulkCategoryConfirm(false)
-        setBulkCategoryPickerOpen(false)
-        setBulkCategoryValue('')
-      }
-      // Deselect successful IDs, keep failed ones selected for visibility
-      setSelectedIds(new Set(failedIds))
-    } catch (err) {
-      console.error('Bulk category update failed', err)
-      setBulkCategoryError('Some updates failed — please try again.')
-    } finally {
-      setBulkCategoryPatching(false)
-    }
-  }
-
-  // Close inline category dropdown when clicking outside it
-  useEffect(() => {
-    if (!categoryEditId) return
-    function handleClickOutside(e) {
-      if (categorySelectRef.current && !categorySelectRef.current.contains(e.target)) {
-        setCategoryEditId(null)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [categoryEditId])
-
-  // Patch just the category on a transaction, update in-place
-  async function handleCategoryChange(tx, newCategoryId) {
-    setCategoryPatching(tx.id)
-    try {
-      const payload = { category_id: newCategoryId ? parseInt(newCategoryId) : null }
-      const res = await client.patch(`/transactions/${tx.id}`, payload)
-      // Use the full server response (includes nested category object) to update in-place
-      setTransactions((prev) =>
-        prev.map((t) =>
-          t.id === tx.id ? res.data : t
-        )
-      )
-    } catch (e) {
-      console.error('Failed to update category', e)
-    } finally {
-      setCategoryPatching(null)
-      setCategoryEditId(null)
-    }
-  }
-
-  // When the allocation modal opens, seed one row per active goal with amount=''
-  useEffect(() => {
-    if (!allocatingTx) return
-    setAllocations(savingsGoals.map((g) => ({ goal_id: g.id, amount: '' })))
-  }, [allocatingTx])
-
-  // Debt name lookup by id (active debts only)
+  const accountMap = useMemo(
+    () => Object.fromEntries(accounts.map(a => [a.id, a])),
+    [accounts]
+  )
+  const accountNameMap = useMemo(
+    () => Object.fromEntries(accounts.map(a => [a.id, a.name])),
+    [accounts]
+  )
   const debtMap = useMemo(
-    () => Object.fromEntries(debts.map((d) => [d.id, d.name])),
+    () => Object.fromEntries(debts.map(d => [d.id, d])),
     [debts]
   )
 
-  // Link a transaction to a debt — POST /api/transactions/{id}/link-debt
-  async function handleLinkDebt() {
-    if (!linkingTx || !linkDebtId) return
-    setLinkLoading(true)
-    setLinkError('')
-    try {
-      const res = await client.post(`/transactions/${linkingTx.id}/link-debt`, {
-        debt_id: parseInt(linkDebtId),
+  // One-time load of reference data (accounts/categories/goals/debts) + MTD summary.
+  useEffect(() => {
+    let ignore = false
+    Promise.all([
+      client.get('/accounts'),
+      client.get('/categories'),
+      client.get('/savings'),
+      client.get('/debt'),
+    ])
+      .then(([acctRes, catRes, savRes, debtRes]) => {
+        if (ignore) return
+        setAccounts(acctRes.data)
+        setCategories(catRes.data)
+        setGoals(savRes.data)
+        setDebts(debtRes.data)
       })
-      // Update the transaction in local state with the server's response
-      setTransactions((prev) =>
-        prev.map((t) => (t.id === linkingTx.id ? res.data : t))
-      )
-      // Refresh active debt list so the name map stays current
-      client.get('/debt').then((r) => setDebts(r.data.filter((d) => !d.is_paid_off)))
-      setLinkingTx(null)
-      setLinkDebtId('')
-    } catch (e) {
-      setLinkError(e.response?.data?.detail ?? 'Failed to link transaction to debt')
-    } finally {
-      setLinkLoading(false)
-    }
-  }
+      .catch(e => { if (!ignore) setError(e.message) })
+    return () => { ignore = true }
+  }, [])
 
-  // Unlink a transaction from its debt — DELETE /api/transactions/{id}/link-debt
-  async function handleUnlinkDebt(tx) {
-    if (!window.confirm('Remove debt linkage from this transaction? This will reverse the payment on the debt.')) return
-    try {
-      await client.delete(`/transactions/${tx.id}/link-debt`)
-      // Clear debt_id and reset transaction_type in local state
-      setTransactions((prev) =>
-        prev.map((t) =>
-          t.id === tx.id ? { ...t, debt_id: null, transaction_type: 'expense' } : t
-        )
-      )
-      // Refresh active debts so balances are current
-      client.get('/debt').then((r) => setDebts(r.data.filter((d) => !d.is_paid_off)))
-    } catch (e) {
-      console.error('Failed to unlink debt', e)
-    }
-  }
-
-  // Allocate a credit transaction to one or more savings goals
-  async function handleLinkSavings() {
-    if (!allocatingTx) return
-    const filtered = allocations.filter((a) => parseFloat(a.amount) > 0).map((a) => ({
-      goal_id: a.goal_id,
-      amount: parseFloat(a.amount),
-    }))
-    if (filtered.length === 0) {
-      setAllocError('Enter an amount for at least one savings goal')
-      return
-    }
-    setAllocLoading(true)
-    setAllocError('')
-    try {
-      await client.post(`/transactions/${allocatingTx.id}/link-savings`, { allocations: filtered })
-      // Update the transaction in local state — type is now savings_transfer
-      setTransactions((prev) =>
-        prev.map((t) =>
-          t.id === allocatingTx.id ? { ...t, transaction_type: 'savings_transfer' } : t
-        )
-      )
-      // Refresh savings goals so balances are current
-      client.get('/savings').then((r) => setSavingsGoals(r.data.filter((g) => !g.is_completed)))
-      setAllocatingTx(null)
-      setAllocations([])
-    } catch (e) {
-      setAllocError(e.response?.data?.detail ?? 'Failed to allocate to savings goals')
-    } finally {
-      setAllocLoading(false)
-    }
-  }
-
-  // Link two existing transactions as a transfer pair
-  async function handleLinkTransferPair(pairTxId) {
-    if (!linkingTransfer) return
-    setTransferPairLoading(true)
-    setTransferPairError('')
-    try {
-      const res = await client.post('/transactions/link-transfer-pair', {
-        transaction_a_id: linkingTransfer.id,
-        transaction_b_id: pairTxId,
-      })
-      // Update both sides in local state
-      const { debit_transaction, credit_transaction } = res.data
-      setTransactions((prev) =>
-        prev.map((t) => {
-          if (t.id === debit_transaction.id) return debit_transaction
-          if (t.id === credit_transaction.id) return credit_transaction
-          return t
+  // FE-011: MTD stat cards reflect the WHOLE month (transfers excluded), computed
+  // server-side so they never depend on which page is loaded. `refreshKey` lets
+  // mutations (add/delete/allocate) re-pull the summary.
+  const [refreshKey, setRefreshKey] = useState(0)
+  useEffect(() => {
+    let ignore = false
+    client.get('/transactions/summary', { params: { date_from: monthStartISO() } })
+      .then(({ data }) => {
+        if (ignore) return
+        setStats({
+          incomeMtd: data.income,
+          expensesMtd: data.expenses,
+          netMtd: data.net,
+          unverifiedCount: data.unverified_count,
         })
-      )
-      setLinkingTransfer(null)
-    } catch (e) {
-      setTransferPairError(e.response?.data?.detail ?? 'Failed to link transfer pair')
-    } finally {
-      setTransferPairLoading(false)
-    }
-  }
-
-  // Unlink both sides of a transfer pair
-  async function handleUnlinkTransferPair(tx) {
-    if (!window.confirm('Remove transfer pair linkage? Both transactions will be reset to expense type.')) return
-    try {
-      await client.delete(`/transactions/${tx.id}/link-transfer-pair`)
-      // Reset both sides — we know the pair by transfer_pair_id
-      const pairId = tx.transfer_pair_id
-      setTransactions((prev) =>
-        prev.map((t) =>
-          t.transfer_pair_id === pairId
-            ? { ...t, transaction_type: 'expense', transfer_pair_id: null }
-            : t
-        )
-      )
-    } catch (e) {
-      console.error('Failed to unlink transfer pair', e)
-    }
-  }
-
-  // Link a debit transaction to a savings goal as a withdrawal
-  async function handleLinkSavingsWithdrawal() {
-    if (!withdrawLinkingTx || !withdrawGoalId) return
-    setWithdrawLoading(true)
-    setWithdrawError('')
-    try {
-      const res = await client.post(`/transactions/${withdrawLinkingTx.id}/link-savings-withdrawal`, {
-        goal_id: parseInt(withdrawGoalId),
       })
-      setTransactions((prev) =>
-        prev.map((t) => (t.id === withdrawLinkingTx.id ? res.data : t))
-      )
-      // Refresh savings goals so balances are current
-      client.get('/savings').then((r) => setSavingsGoals(r.data.filter((g) => !g.is_completed)))
-      setWithdrawLinkingTx(null)
-      setWithdrawGoalId('')
-    } catch (e) {
-      setWithdrawError(e.response?.data?.detail ?? 'Failed to link savings withdrawal')
-    } finally {
-      setWithdrawLoading(false)
-    }
+      .catch(() => {})
+    return () => { ignore = true }
+  }, [refreshKey])
+
+  // FE-011: fetch the current page + the segment's total count server-side.
+  // Re-runs on page/segment change and after mutations (refreshKey).
+  useEffect(() => {
+    let ignore = false
+    setPageLoading(true)
+    const params = segmentParams(segment)
+    const acctNameMap = Object.fromEntries(accounts.map(a => [a.id, a.name]))
+    const dMap        = Object.fromEntries(debts.map(d => [d.id, d]))
+    Promise.all([
+      client.get('/transactions', { params: { ...params, skip: page * PAGE_SIZE, limit: PAGE_SIZE } }),
+      client.get('/transactions/count', { params }),
+    ])
+      .then(([txRes, countRes]) => {
+        if (ignore) return
+        const rows = (txRes.data.items ?? txRes.data).map(tx => normalizeTx(tx, acctNameMap, dMap))
+        setTransactions(rows)
+        setTotalCount(countRes.data.count ?? 0)
+      })
+      .catch(e => { if (!ignore) setError(e.message) })
+      .finally(() => { if (!ignore) { setLoading(false); setPageLoading(false) } })
+    return () => { ignore = true }
+  }, [segment, page, refreshKey, accounts, debts])
+
+  // The loaded page IS the visible set — all server-side filtering already applied.
+  const filtered    = transactions
+  const selectedSum = useMemo(
+    () => filtered.filter(t => selectedIds.has(t.id)).reduce((a, t) => a + t.amount, 0),
+    [filtered, selectedIds]
+  )
+
+  // Reset to the first page whenever the segment changes; clear page selection too.
+  const handleSegmentChange = (s) => {
+    setSegment(s)
+    setPage(0)
+    setSelectedIds(new Set())
+    setLastSelectedId(null)
   }
 
-  // Unlink a savings withdrawal from a debit transaction
-  async function handleUnlinkSavingsWithdrawal(tx) {
-    if (!window.confirm('Remove savings withdrawal linkage? This will restore the goal\'s balance.')) return
+  const goToPage = (p) => {
+    const clamped = Math.max(0, Math.min(p, pageCount - 1))
+    if (clamped === page) return
+    setPage(clamped)
+    setSelectedIds(new Set())   // selection is per-page (cross-page select-all out of scope)
+    setLastSelectedId(null)
+  }
+
+  const handleSelect = (id, on, shiftKey = false) => {
+    // Shift-click extends a range from the last-clicked row to this one,
+    // in the currently-filtered visual order.
+    if (shiftKey && lastSelectedId != null && lastSelectedId !== id) {
+      const ids = filtered.map(t => t.id)
+      const a = ids.indexOf(lastSelectedId)
+      const b = ids.indexOf(id)
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a < b ? [a, b] : [b, a]
+        const next = new Set(selectedIds)
+        ids.slice(lo, hi + 1).forEach(rid => on ? next.add(rid) : next.delete(rid))
+        setSelectedIds(next)
+        setLastSelectedId(id)
+        return
+      }
+    }
+    const next = new Set(selectedIds)
+    on ? next.add(id) : next.delete(id)
+    setSelectedIds(next)
+    setLastSelectedId(id)
+  }
+
+  // Cross-page select-all is OUT OF SCOPE (FE-011): the header checkbox selects
+  // only the rows on the current page. Selecting across all pages would require a
+  // server-side bulk-by-filter delete contract that doesn't exist yet.
+  const handleSelectAll = (on) => {
+    setSelectedIds(on ? new Set(filtered.map(t => t.id)) : new Set())
+    setLastSelectedId(null)
+  }
+
+  const handleDeleteConfirmed = async () => {
+    const ids = confirmDelete?.ids ?? []
+    if (ids.length === 0) return
+    setDeleting(true)
     try {
-      await client.delete(`/transactions/${tx.id}/link-savings-withdrawal`)
-      setTransactions((prev) =>
-        prev.map((t) =>
-          t.id === tx.id ? { ...t, transaction_type: 'expense' } : t
-        )
-      )
-      // Refresh savings goals so balances are current
-      client.get('/savings').then((r) => setSavingsGoals(r.data.filter((g) => !g.is_completed)))
+      if (ids.length === 1) {
+        await client.delete(`/transactions/${ids[0]}`)
+      } else {
+        await client.delete('/transactions/bulk', {
+          params: { ids },
+          paramsSerializer: { indexes: null },   // ids=1&ids=2 (FastAPI repeated query)
+        })
+      }
+      const idSet = new Set(ids)
+      setSelectedIds(prev => {
+        const n = new Set(prev)
+        ids.forEach(i => n.delete(i))
+        return n
+      })
+      if (openTx && idSet.has(openTx.id)) setOpenTx(null)
+      setConfirmDelete(null)
+      // If we just emptied the last page, step back one. Otherwise re-pull.
+      if (transactions.length === ids.length && page > 0) {
+        setPage(page - 1)
+      }
+      setRefreshKey(k => k + 1)
     } catch (e) {
-      console.error('Failed to unlink savings withdrawal', e)
+      setError(`Delete failed: ${e.response?.data?.detail || e.message}`)
+    } finally {
+      setDeleting(false)
     }
   }
 
-  // Toggle sort: clicking the active column flips direction; clicking a new column sets it asc
-  function handleSort(column) {
-    setSort((prev) =>
-      prev.by === column
-        ? { by: column, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
-        : { by: column, dir: 'asc' }
-    )
+  // Row open / link click → fetch the full tx (includes allocations) and then
+  // surface it in the drawer. Avoids opening a stale-state drawer.
+  const handleOpen = async (tx) => {
+    setOpeningTxId(tx.id)
+    try {
+      const { data } = await client.get(`/transactions/${tx.id}`)
+      setOpenTx(normalizeTx(data, accountNameMap, debtMap))
+    } catch (e) {
+      setError(`Failed to load transaction: ${e.message}`)
+    } finally {
+      setOpeningTxId(null)
+    }
   }
 
-  const totalPages = Math.ceil(total / PAGE_SIZE)
+  const handleUpdateCategory = async (tx, categoryId) => {
+    const { data } = await client.patch(`/transactions/${tx.id}`, {
+      category_id: categoryId === '' ? null : Number(categoryId),
+    })
+    const updated = normalizeTx(data, accountNameMap, debtMap)
+    setTransactions(prev => prev.map(t => t.id === tx.id ? updated : t))
+    setOpenTx(updated)
+  }
+
+  const handleSaveAllocations = async (tx, allocations) => {
+    // Drawer sends magnitudes; backend infers direction from tx.amount sign
+    const payload = {
+      allocations: allocations.map(a => ({
+        kind: a.kind, ref_id: a.ref_id, amount: Math.abs(a.amount),
+      })),
+    }
+    const { data } = await client.patch(`/transactions/${tx.id}/allocations`, payload)
+    const updated = normalizeTx(data, accountNameMap, debtMap)
+    setTransactions(prev => prev.map(t => t.id === tx.id ? updated : t))
+    // Refresh debts/goals so changed balances show on the next picker open. Setting
+    // debts also re-pulls the current page; bump refreshKey for the MTD summary
+    // (allocation may have re-typed the row, changing the segment totals).
+    const [savRes, debtRes] = await Promise.all([client.get('/savings'), client.get('/debt')])
+    setGoals(savRes.data)
+    setDebts(debtRes.data)
+    setRefreshKey(k => k + 1)
+    setOpenTx(null)
+  }
+
+  const handleAddSave = async (payload) => {
+    setSavingAdd(true)
+    try {
+      if (payload._isTransfer) {
+        const { _isTransfer, ...body } = payload
+        await client.post('/transactions/transfer', body)
+      } else {
+        await client.post('/transactions', payload)
+      }
+      setShowAdd(false)
+      // Jump to page 1 (newest-first sort puts the new row at the top) and re-pull.
+      setPage(0)
+      setRefreshKey(k => k + 1)
+    } finally {
+      setSavingAdd(false)
+    }
+  }
+
+  if (loading) return <div style={{ padding: 32, color: 'var(--text-faint)' }}>Loading…</div>
+  if (error)   return <div style={{ padding: 32, color: 'var(--negative)' }}>Error: {error}</div>
 
   return (
-    <div style={{ paddingBottom: 80 }}>
-      {/* Header */}
-      <div style={styles.pageHeader}>
-        <div>
-          <h1 style={styles.pageTitle}>Transactions</h1>
-          <p style={styles.pageSubtitle}>
-            {total} transaction{total !== 1 ? 's' : ''}
-          </p>
-        </div>
-        {isOwner && (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button
-              variant="secondary"
-              onClick={() => setShowImport(true)}
-            >
-              Import statement
-            </Button>
-            <Button
-              onClick={() => { setShowAdd(true); setActionError('') }}
-              style={{ display: 'none' }}  /* hidden on mobile — FAB used instead */
-            >
-              + Add
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {/* Reconciliation banner */}
-      <ReconciliationBanner summary={reconciliation} onDismiss={() => setReconciliation(null)} />
-
-      {/* Filters */}
-      <FilterBar
-        accounts={accounts}
-        categories={categories}
-        filters={filters}
-        onChange={(f) => setFilters(f)}
+    <>
+      <PageHeader
+        title="Transactions"
+        subtitle={<>
+          {totalCount.toLocaleString()} {segment === 'All' ? '' : `${segment.toLowerCase()} `}across {accounts.length} accounts
+          {stats.unverifiedCount > 0 && <> · <span style={{ color: 'var(--warning)' }}>{stats.unverifiedCount} need review</span></>}
+        </>}
+        isMobile={isMobile}
+        actions={<>
+          <Button variant="secondary" onClick={() => navigate('/import')}>Import</Button>
+          <Button variant="primary"   onClick={() => setShowAdd(true)}>+ Add</Button>
+        </>}
       />
 
-      {/* Bulk action toolbar */}
-      {selectedIds.size > 0 && (
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '8px',
-          padding: '10px 14px',
-          marginBottom: '10px',
-          background: 'rgba(255,85,85,0.08)',
-          border: '1px solid rgba(255,85,85,0.25)',
-          borderRadius: '8px',
-          fontSize: '13px',
-          color: 'var(--text)',
-        }}>
-          {/* Top row: count + actions */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <span>{selectedIds.size} transaction{selectedIds.size !== 1 ? 's' : ''} selected</span>
+      <div style={isMobile
+        ? { padding: '0 0 24px', display: 'grid', gap: 16, minWidth: 0 }
+        : { display: 'grid', alignContent: 'start', gap: 18 }
+      }>
+          <FilterBar
+            segment={segment}
+            onSegmentChange={handleSegmentChange}
+            unverifiedCount={stats.unverifiedCount}
+            selectedSum={selectedSum}
+            selectedCount={selectedIds.size}
+            onBulkDelete={() => setConfirmDelete({ ids: [...selectedIds] })}
+            onClearSelection={() => { setSelectedIds(new Set()); setLastSelectedId(null) }}
+          />
 
-            {/* Set category button / picker */}
-            {!bulkCategoryPickerOpen ? (
-              <button
-                onClick={() => { setBulkCategoryPickerOpen(true); setBulkCategoryConfirm(false); setBulkCategoryValue(''); setBulkCategoryError('') }}
-                style={{
-                  background: 'rgba(139,233,253,0.1)',
-                  border: '1px solid rgba(139,233,253,0.35)',
-                  borderRadius: '6px',
-                  color: 'var(--cyan)',
-                  padding: '5px 14px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                }}
-              >
-                Set category…
-              </button>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <select
-                  value={bulkCategoryValue}
-                  onChange={(e) => { setBulkCategoryValue(e.target.value); setBulkCategoryConfirm(false); setBulkCategoryError('') }}
-                  style={{
-                    ...selectStyle,
-                    fontSize: 12,
-                    padding: '3px 8px',
-                    height: 30,
-                    minWidth: 140,
-                  }}
-                >
-                  <option value="">Uncategorised</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => setBulkCategoryConfirm(true)}
-                  disabled={bulkCategoryConfirm}
-                  style={{
-                    background: 'rgba(139,233,253,0.15)',
-                    border: '1px solid rgba(139,233,253,0.4)',
-                    borderRadius: '6px',
-                    color: 'var(--cyan)',
-                    padding: '5px 12px',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    opacity: bulkCategoryConfirm ? 0.5 : 1,
-                  }}
-                >
-                  Apply
-                </button>
-                <button
-                  onClick={() => { setBulkCategoryPickerOpen(false); setBulkCategoryConfirm(false); setBulkCategoryValue(''); setBulkCategoryError('') }}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--comment)',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    padding: '5px 4px',
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            )}
+          <StatsStrip stats={stats}/>
 
-            <button
-              onClick={() => setBulkDeleteConfirm(true)}
-              style={{
-                background: 'rgba(255,85,85,0.15)',
-                border: '1px solid rgba(255,85,85,0.4)',
-                borderRadius: '6px',
-                color: '#ff5555',
-                padding: '5px 14px',
-                cursor: 'pointer',
-                fontSize: '13px',
-              }}
-            >
-              Delete selected
-            </button>
-            <button
-              onClick={() => { setSelectedIds(new Set()); setBulkCategoryPickerOpen(false); setBulkCategoryConfirm(false); setBulkCategoryValue(''); setBulkCategoryError('') }}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--comment)',
-                cursor: 'pointer',
-                fontSize: '13px',
-                padding: '5px 8px',
-                marginLeft: 'auto',
-              }}
-            >
-              Clear selection
-            </button>
+          <TxTable
+            rows={filtered}
+            hoverId={hoverId}
+            onHover={setHoverId}
+            selectedIds={selectedIds}
+            onSelect={handleSelect}
+            onSelectAll={handleSelectAll}
+            onDelete={(tx) => setConfirmDelete({ ids: [tx.id] })}
+            onOpen={handleOpen}
+            onLink={handleOpen}
+          />
+
+          {/* FE-011: numbered pager under the table. Hidden when only one page. */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+              {totalCount === 0
+                ? 'No transactions'
+                : `${(page * PAGE_SIZE) + 1}–${Math.min((page + 1) * PAGE_SIZE, totalCount)} of ${totalCount.toLocaleString()}`}
+              {pageLoading && <span style={{ marginLeft: 8 }}>· loading…</span>}
+            </span>
+            <Pager page={page} pageCount={pageCount} onPage={goToPage}/>
           </div>
 
-          {/* Inline confirm strip — only shown after clicking Apply */}
-          {bulkCategoryConfirm && !bulkCategoryPatching && (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '8px 12px',
-              background: 'rgba(139,233,253,0.06)',
-              border: '1px solid rgba(139,233,253,0.25)',
-              borderRadius: '6px',
-              flexWrap: 'wrap',
-            }}>
-              <span style={{ color: 'var(--cyan)', fontSize: 13 }}>
-                This will update the category of <strong>{selectedIds.size}</strong> transaction{selectedIds.size !== 1 ? 's' : ''} to{' '}
-                <strong>{bulkCategoryValue ? (categories.find((c) => c.id === parseInt(bulkCategoryValue))?.name ?? 'Unknown') : 'Uncategorised'}</strong>. Continue?
-              </span>
-              <button
-                onClick={handleBulkSetCategory}
-                style={{
-                  background: 'var(--cyan)',
-                  border: 'none',
-                  borderRadius: '6px',
-                  color: '#282A36',
-                  padding: '5px 16px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                }}
-              >
-                Confirm
-              </button>
-              <button
-                onClick={() => { setBulkCategoryConfirm(false); setBulkCategoryError('') }}
-                style={{
-                  background: 'transparent',
-                  border: '1px solid var(--border)',
-                  borderRadius: '6px',
-                  color: 'var(--comment)',
-                  padding: '5px 12px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                }}
-              >
-                Cancel
-              </button>
+          {openingTxId && (
+            <div style={{ position: 'fixed', bottom: 20, right: 20, padding: '10px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-muted)', fontSize: 12 }}>
+              Loading transaction…
             </div>
           )}
+      </div>
 
-          {/* Patching in-progress */}
-          {bulkCategoryPatching && (
-            <p style={{ fontSize: 13, color: 'var(--cyan)', margin: 0 }}>Updating categories…</p>
-          )}
-
-          {/* Error */}
-          {bulkCategoryError && (
-            <p style={{ fontSize: 13, color: 'var(--red)', margin: 0 }}>{bulkCategoryError}</p>
-          )}
-        </div>
+      {openTx && (
+        <LinkDrawer
+          key={openTx.id}
+          tx={openTx}
+          goals={goals}
+          debts={debts}
+          categories={categories}
+          onClose={() => setOpenTx(null)}
+          onSaveAllocations={handleSaveAllocations}
+          onUpdateCategory={handleUpdateCategory}
+          isMobile={isMobile}
+        />
       )}
 
-      {/* Table */}
-      {loading ? (
-        <p style={{ color: 'var(--muted)', marginTop: 24 }}>Loading…</p>
-      ) : transactions.length === 0 ? (
-        <div style={styles.empty}>
-          <p style={styles.emptyTitle}>No transactions found</p>
-          <p style={{ color: 'var(--muted)', fontSize: 14 }}>
-            {Object.values(filters).some(Boolean)
-              ? 'Try clearing the filters.'
-              : 'Add a manual entry or import a bank statement.'}
-          </p>
-        </div>
-      ) : (
-        <>
-          <div style={styles.table}>
-            {/* Desktop header */}
-            <div className="tx-table-header" style={{ ...styles.tableHeader, gridTemplateColumns: isOwner ? '36px 100px 1fr 120px 120px 110px 110px 150px' : '100px 1fr 120px 120px 110px 110px 150px' }}>
-              {isOwner && (
-                <th style={{ width: '36px', padding: '10px 8px' }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.size > 0 && selectedIds.size === transactions.length}
-                    ref={el => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < transactions.length; }}
-                    onChange={e => {
-                      if (e.target.checked) {
-                        setSelectedIds(new Set(transactions.map(t => t.id)));
-                      } else {
-                        setSelectedIds(new Set());
-                      }
-                    }}
-                    style={{ cursor: 'pointer' }}
-                  />
-                </th>
-              )}
-              {/* Sortable: Date */}
-              <button style={sortHeaderBtn(sort, 'date')} onClick={() => handleSort('date')}>
-                Date{sort.by === 'date' ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
-              </button>
-              <span>Description</span>
-              <span>Category</span>
-              {/* Sortable: Account */}
-              <button style={sortHeaderBtn(sort, 'account_id')} onClick={() => handleSort('account_id')}>
-                Account{sort.by === 'account_id' ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
-              </button>
-              {/* Sortable: Amount */}
-              <button style={{ ...sortHeaderBtn(sort, 'amount'), textAlign: 'right', justifyContent: 'flex-end' }} onClick={() => handleSort('amount')}>
-                Amount{sort.by === 'amount' ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
-              </button>
-              {/* Sortable: Status */}
-              <button style={{ ...sortHeaderBtn(sort, 'is_verified'), justifyContent: 'center' }} onClick={() => handleSort('is_verified')}>
-                Status{sort.by === 'is_verified' ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
-              </button>
-              {isOwner && <span />}
-            </div>
-
-            {transactions.map((tx) => {
-              const account = accountMap[tx.account_id]
-              const isEstimate = !tx.is_verified
-              return (
-                <div
-                  key={tx.id}
-                  className="tx-table-row"
-                  style={{
-                    ...styles.tableRow,
-                    opacity: isEstimate ? 0.82 : 1,
-                    gridTemplateColumns: isOwner ? '36px 100px 1fr 120px 120px 110px 110px 150px' : '100px 1fr 120px 120px 110px 110px 150px',
-                  }}
-                >
-                  {isOwner && (
-                    <span style={{ padding: '10px 8px' }}>
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(tx.id)}
-                        onChange={e => {
-                          setSelectedIds(prev => {
-                            const next = new Set(prev);
-                            if (e.target.checked) next.add(tx.id); else next.delete(tx.id);
-                            return next;
-                          });
-                        }}
-                        style={{ cursor: 'pointer' }}
-                      />
-                    </span>
-                  )}
-                  <span style={{ color: 'var(--muted)', fontSize: 13 }}>{formatDate(tx.date)}</span>
-
-                  <span style={{ color: isEstimate ? 'var(--muted)' : 'var(--white)' }}>
-                    {tx.description ?? <span style={{ color: 'var(--border)' }}>—</span>}
-                    {tx.match_note && (
-                      <span title={tx.match_note} style={{ marginLeft: 6, fontSize: 11, color: 'var(--orange)', cursor: 'help' }}>⚠</span>
-                    )}
-                    {tx.savings_goal_id && (
-                      <span style={badge.savings} title="Created by savings goal withdrawal">⬡ Savings</span>
-                    )}
-                    {tx.debt_id && (
-                      <span style={badge.debt} title="Click to unlink">
-                        ⬡ {debtMap[tx.debt_id] ?? 'Debt'}
-                      </span>
-                    )}
-                    {tx.transaction_type === 'income' && (
-                      <span style={badge.income} title="Income">
-                        + Income
-                      </span>
-                    )}
-                    {tx.transaction_type === 'transfer' && (
-                      <span style={badge.transfer} title={tx.transfer_pair_id ? `Transfer pair #${tx.transfer_pair_id}` : 'Transfer'}>
-                        ↔ Transfer
-                      </span>
-                    )}
-                    {tx.transaction_type === 'savings_transfer' && (
-                      <span style={badge.savingsTransfer} title="Allocated to savings goals">
-                        ⬡ Savings
-                      </span>
-                    )}
-                  </span>
-
-                  {/* Category cell — clickable for owners to set/override inline */}
-                  {isOwner ? (
-                    categoryEditId === tx.id ? (
-                      // Inline dropdown — open state
-                      <select
-                        ref={categorySelectRef}
-                        autoFocus
-                        disabled={categoryPatching === tx.id}
-                        defaultValue={tx.category_id ?? ''}
-                        onChange={(e) => handleCategoryChange(tx, e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Escape') setCategoryEditId(null) }}
-                        style={{
-                          ...selectStyle,
-                          fontSize: 12,
-                          padding: '2px 6px',
-                          height: 28,
-                          minWidth: 0,
-                          width: '100%',
-                          opacity: categoryPatching === tx.id ? 0.5 : 1,
-                        }}
-                      >
-                        <option value="">Uncategorised</option>
-                        {categories.map((c) => (
-                          <option key={c.id} value={c.id}>{c.name}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      // Clickable label — closed state
-                      <span
-                        onClick={() => setCategoryEditId(tx.id)}
-                        title="Click to set category"
-                        style={{
-                          color: 'var(--muted)',
-                          fontSize: 13,
-                          cursor: 'pointer',
-                          borderRadius: 'var(--radius)',
-                          padding: '2px 4px',
-                          margin: '-2px -4px',
-                          display: 'inline-block',
-                          transition: 'background 0.12s',
-                        }}
-                        className="tx-category-cell"
-                      >
-                        {tx.category?.name ?? '—'}
-                      </span>
-                    )
-                  ) : (
-                    // Viewer — static display
-                    <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-                      {tx.category?.name ?? '—'}
-                    </span>
-                  )}
-
-                  <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-                    {account?.name ?? '—'}
-                  </span>
-
-                  <span style={{ textAlign: 'right' }} className="tx-row-amount">
-                    <AmountDisplay tx={tx} currency={account?.currency} />
-                  </span>
-
-                  <span style={{ textAlign: 'center' }}>
-                    <StatusBadge tx={tx} />
-                  </span>
-
-                  {isOwner && (
-                    <span className="tx-row-actions" style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                      {/* Allocate to savings goals — credit transactions not already typed */}
-                      {tx.amount > 0
-                        && tx.transaction_type !== 'transfer'
-                        && tx.transaction_type !== 'debt_payment'
-                        && tx.transaction_type !== 'savings_transfer'
-                        && savingsGoals.length > 0 && (
-                        <button
-                          style={{ ...styles.iconBtn, color: 'var(--green)' }}
-                          onClick={() => { setAllocatingTx(tx); setAllocError('') }}
-                          title="Allocate to savings goals"
-                        >⬡</button>
-                      )}
-                      {/* Link debit transaction to savings withdrawal */}
-                      {tx.amount < 0
-                        && tx.transaction_type === 'expense'
-                        && savingsGoals.length > 0 && (
-                        <button
-                          style={{ ...styles.iconBtn, color: 'var(--green)' }}
-                          onClick={() => { setWithdrawLinkingTx(tx); setWithdrawGoalId(''); setWithdrawError('') }}
-                          title="Link to savings goal withdrawal"
-                        >⬡</button>
-                      )}
-                      {/* Unlink savings withdrawal — debit savings_transfer rows */}
-                      {tx.amount < 0 && tx.transaction_type === 'savings_transfer' && (
-                        <button
-                          style={{ ...styles.iconBtn, color: 'var(--green)' }}
-                          onClick={() => handleUnlinkSavingsWithdrawal(tx)}
-                          title="Unlink savings withdrawal"
-                        >✂</button>
-                      )}
-                      {/* Mark as transfer pair — for transactions not yet typed as transfer/debt/savings */}
-                      {tx.transaction_type !== 'transfer'
-                        && tx.transaction_type !== 'debt_payment'
-                        && tx.transaction_type !== 'savings_transfer'
-                        && !tx.transfer_pair_id && (
-                        <button
-                          style={{ ...styles.iconBtn, color: 'var(--cyan)' }}
-                          onClick={() => { setLinkingTransfer(tx); setTransferPairError('') }}
-                          title="Link as transfer pair"
-                        >↔</button>
-                      )}
-                      {/* Unlink transfer pair */}
-                      {tx.transaction_type === 'transfer' && tx.transfer_pair_id && (
-                        <button
-                          style={{ ...styles.iconBtn, color: 'var(--cyan)' }}
-                          onClick={() => handleUnlinkTransferPair(tx)}
-                          title="Unlink transfer pair"
-                        >✂</button>
-                      )}
-                      {/* Link to debt — only for unlinked debit transactions that are not transfers */}
-                      {tx.amount < 0 && !tx.debt_id && tx.transaction_type !== 'transfer' && debts.length > 0 && (
-                        <button
-                          style={{ ...styles.iconBtn, color: 'var(--purple)' }}
-                          onClick={() => { setLinkingTx(tx); setLinkDebtId(''); setLinkError('') }}
-                          title="Link to debt"
-                        >⛓</button>
-                      )}
-                      {/* Unlink from debt — only for linked transactions */}
-                      {tx.debt_id && (
-                        <button
-                          style={{ ...styles.iconBtn, color: 'var(--purple)' }}
-                          onClick={() => handleUnlinkDebt(tx)}
-                          title="Unlink from debt"
-                        >✂</button>
-                      )}
-                      {/* Only manual/unverified entries are editable */}
-                      {tx.source === 'manual' && (
-                        <button
-                          style={styles.iconBtn}
-                          onClick={() => { setEditing(tx); setActionError('') }}
-                          title="Edit"
-                        >✎</button>
-                      )}
-                      <button
-                        style={{ ...styles.iconBtn, color: 'var(--red)' }}
-                        onClick={() => { setDeleting(tx); setActionError('') }}
-                        title="Delete"
-                      >✕</button>
-                    </span>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div style={styles.pagination}>
-              <Button variant="secondary" size="sm" disabled={page === 0} onClick={() => changePage(page - 1)}>
-                ← Prev
-              </Button>
-              <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-                Page {page + 1} of {totalPages}
-              </span>
-              <Button variant="secondary" size="sm" disabled={page >= totalPages - 1} onClick={() => changePage(page + 1)}>
-                Next →
-              </Button>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* ── FAB (floating action button) — visible on all screen sizes ── */}
-      {isOwner && (
-        <button
-          className="fab"
-          onClick={() => { setShowAdd(true); setActionError('') }}
-          aria-label="Add transaction"
-          title="Quick add transaction"
-        >+</button>
-      )}
-
-      {/* Add modal */}
       {showAdd && (
         <Modal title="Add transaction" onClose={() => setShowAdd(false)}>
-          {actionError && <p style={styles.modalError}>{actionError}</p>}
           <AddTransactionForm
             accounts={accounts}
             categories={categories}
-            onSave={handleAdd}
+            saving={savingAdd}
+            onSave={handleAddSave}
             onCancel={() => setShowAdd(false)}
-            saving={saving}
           />
         </Modal>
       )}
 
-      {/* Edit modal */}
-      {editing && (
-        <Modal title="Edit transaction" onClose={() => setEditing(null)}>
-          {actionError && <p style={styles.modalError}>{actionError}</p>}
-          <EditTransactionForm
-            tx={editing}
-            accounts={accounts}
-            categories={categories}
-            onSave={handleEdit}
-            onCancel={() => setEditing(null)}
-            saving={saving}
-          />
-        </Modal>
-      )}
-
-      {/* Delete confirmation */}
-      {deleting && (
-        <Modal title="Delete transaction?" onClose={() => setDeleting(null)} width={400}>
-          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
-            <strong>{deleting.description ?? 'This transaction'}</strong> on {formatDate(deleting.date)} (
-            {formatCurrency(deleting.amount)}) will be permanently removed.
+      {confirmDelete && (
+        <Modal
+          title={`Delete ${confirmDelete.ids.length} transaction${confirmDelete.ids.length > 1 ? 's' : ''}?`}
+          onClose={() => !deleting && setConfirmDelete(null)}
+        >
+          <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 18 }}>
+            {confirmDelete.ids.length === 1
+              ? 'This permanently removes the transaction.'
+              : `This permanently removes these ${confirmDelete.ids.length} transactions.`}
+            {' '}Any debt or savings links are unlinked first. This cannot be undone.
           </p>
-          {actionError && <p style={styles.modalError}>{actionError}</p>}
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
-            <Button variant="secondary" onClick={() => setDeleting(null)}>Cancel</Button>
-            <Button variant="danger" onClick={handleDelete} disabled={saving}>
-              {saving ? 'Deleting…' : 'Delete'}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <Button variant="secondary" onClick={() => setConfirmDelete(null)} disabled={deleting}>Cancel</Button>
+            <Button variant="danger" onClick={handleDeleteConfirmed} disabled={deleting}>
+              {deleting ? 'Deleting…' : 'Delete'}
             </Button>
           </div>
         </Modal>
       )}
-
-      {/* Import modal */}
-      {showImport && (
-        <ImportModal
-          accounts={accounts}
-          onDone={(result) => {
-            setReconciliation(result)
-            load(0)
-          }}
-          onClose={() => setShowImport(false)}
-        />
-      )}
-
-      {/* Link to debt modal */}
-      {linkingTx && (
-        <LinkToDebtModal
-          tx={linkingTx}
-          debts={debts}
-          linkDebtId={linkDebtId}
-          onDebtChange={(id) => { setLinkDebtId(id); setLinkError('') }}
-          linkError={linkError}
-          linkLoading={linkLoading}
-          onConfirm={handleLinkDebt}
-          onCancel={() => { setLinkingTx(null); setLinkDebtId(''); setLinkError('') }}
-        />
-      )}
-
-      {/* Allocate to savings goals modal */}
-      {allocatingTx && (
-        <AllocateToGoalsModal
-          tx={allocatingTx}
-          savingsGoals={savingsGoals}
-          allocations={allocations}
-          onAllocationChange={(goalId, amount) =>
-            setAllocations((prev) =>
-              prev.map((a) => (a.goal_id === goalId ? { ...a, amount } : a))
-            )
-          }
-          allocError={allocError}
-          allocLoading={allocLoading}
-          onConfirm={handleLinkSavings}
-          onCancel={() => { setAllocatingTx(null); setAllocations([]); setAllocError('') }}
-        />
-      )}
-
-      {/* Link as transfer pair modal */}
-      {linkingTransfer && (
-        <LinkTransferPairModal
-          sourceTx={linkingTransfer}
-          allTransactions={transactions}
-          accounts={accounts}
-          error={transferPairError}
-          loading={transferPairLoading}
-          onConfirm={handleLinkTransferPair}
-          onCancel={() => { setLinkingTransfer(null); setTransferPairError('') }}
-        />
-      )}
-
-      {/* Link savings withdrawal modal */}
-      {withdrawLinkingTx && (
-        <LinkSavingsWithdrawalModal
-          tx={withdrawLinkingTx}
-          savingsGoals={savingsGoals}
-          goalId={withdrawGoalId}
-          onGoalChange={(id) => { setWithdrawGoalId(id); setWithdrawError('') }}
-          error={withdrawError}
-          loading={withdrawLoading}
-          onConfirm={handleLinkSavingsWithdrawal}
-          onCancel={() => { setWithdrawLinkingTx(null); setWithdrawGoalId(''); setWithdrawError('') }}
-        />
-      )}
-
-      {/* Bulk delete confirmation */}
-      {bulkDeleteConfirm && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div style={{ background: 'var(--bg)', border: '1px solid var(--selection)', borderRadius: '12px', padding: '28px', width: '360px' }}>
-            <h3 style={{ marginTop: 0, color: '#ff5555' }}>Delete {selectedIds.size} transaction{selectedIds.size !== 1 ? 's' : ''}?</h3>
-            <p style={{ color: 'var(--comment)', fontSize: '14px', marginBottom: '24px' }}>This cannot be undone.</p>
-            {bulkDeleteError && (
-              <p style={{ color: '#ff5555', fontSize: '13px', marginBottom: '16px', marginTop: 0 }}>{bulkDeleteError}</p>
-            )}
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button onClick={() => { setBulkDeleteConfirm(false); setBulkDeleteError('') }} style={{ background: 'transparent', border: '1px solid var(--selection)', borderRadius: '6px', color: 'var(--text)', padding: '8px 16px', cursor: 'pointer' }}>Cancel</button>
-              <button onClick={handleBulkDelete} style={{ background: 'rgba(255,85,85,0.15)', border: '1px solid rgba(255,85,85,0.4)', borderRadius: '6px', color: '#ff5555', padding: '8px 16px', cursor: 'pointer' }}>Delete</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+    </>
   )
-}
-
-// ─── Link to debt modal ───────────────────────────────────────────────────────
-
-function LinkToDebtModal({ tx, debts, linkDebtId, onDebtChange, linkError, linkLoading, onConfirm, onCancel }) {
-  const { formatCurrency } = useCurrency()
-  return (
-    <Modal title="Link transaction to debt" onClose={onCancel} width={460}>
-      {/* Transaction summary */}
-      <div style={{
-        background: 'var(--bg)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)',
-        padding: '12px 16px',
-        marginBottom: 20,
-      }}>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>{formatDate(tx.date)}</p>
-        <p style={{ fontSize: 14, color: 'var(--white)', marginBottom: 4 }}>
-          {tx.description ?? <span style={{ color: 'var(--border)' }}>No description</span>}
-        </p>
-        <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--pink)' }}>
-          {formatCurrency(tx.amount)}
-        </p>
-      </div>
-
-      <FormField label="Debt to link">
-        <select
-          style={selectStyle}
-          value={linkDebtId}
-          onChange={(e) => onDebtChange(e.target.value)}
-          autoFocus
-        >
-          <option value="">Select debt…</option>
-          {debts.map((d) => (
-            <option key={d.id} value={d.id}>{d.name}</option>
-          ))}
-        </select>
-      </FormField>
-
-      <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>
-        This will reduce the selected debt's balance by{' '}
-        <strong style={{ color: 'var(--white)' }}>{formatCurrency(Math.abs(tx.amount))}</strong>{' '}
-        and create an audit entry in the debt's payment history.
-      </p>
-
-      {linkError && (
-        <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{linkError}</p>
-      )}
-
-      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-        <Button onClick={onConfirm} disabled={!linkDebtId || linkLoading}>
-          {linkLoading ? 'Linking…' : 'Link to debt'}
-        </Button>
-      </div>
-    </Modal>
-  )
-}
-
-// ─── Allocate to savings goals modal ─────────────────────────────────────────
-
-function AllocateToGoalsModal({
-  tx, savingsGoals, allocations, onAllocationChange,
-  allocError, allocLoading, onConfirm, onCancel,
-}) {
-  const { formatCurrency } = useCurrency()
-
-  const totalAllocated = allocations.reduce((sum, a) => {
-    const v = parseFloat(a.amount)
-    return sum + (isNaN(v) ? 0 : v)
-  }, 0)
-  const txAbs = Math.abs(tx.amount)
-  const isOverAllocated = totalAllocated > txAbs + 0.001
-  const hasAnyAllocation = allocations.some((a) => parseFloat(a.amount) > 0)
-
-  return (
-    <Modal title="Allocate to savings goals" onClose={onCancel} width={500}>
-      {/* Transaction summary */}
-      <div style={{
-        background: 'var(--bg)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)',
-        padding: '12px 16px',
-        marginBottom: 16,
-      }}>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>{formatDate(tx.date)}</p>
-        <p style={{ fontSize: 14, color: 'var(--white)', marginBottom: 4 }}>
-          {tx.description ?? <span style={{ color: 'var(--border)' }}>No description</span>}
-        </p>
-        <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--green)' }}>
-          {formatCurrency(txAbs)}
-        </p>
-      </div>
-
-      <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
-        Allocate this amount across your savings goals. Partial allocation is fine — you
-        don't need to assign every cent.
-      </p>
-
-      {/* Goal rows */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-        {savingsGoals.map((goal) => {
-          const row = allocations.find((a) => a.goal_id === goal.id)
-          return (
-            <div key={goal.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span style={{ flex: 1, fontSize: 14, color: 'var(--white)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {goal.name}
-              </span>
-              <span style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
-                {formatCurrency(goal.current_amount)} saved
-              </span>
-              <input
-                style={{ ...inputStyle, width: 110, textAlign: 'right' }}
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                value={row?.amount ?? ''}
-                onChange={(e) => onAllocationChange(goal.id, e.target.value)}
-              />
-            </div>
-          )
-        })}
-      </div>
-
-      {/* Running total */}
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        padding: '10px 0',
-        borderTop: '1px solid var(--border)',
-        marginBottom: 16,
-        fontSize: 14,
-        fontWeight: 600,
-      }}>
-        <span style={{ color: 'var(--muted)' }}>Total allocated</span>
-        <span style={{ color: isOverAllocated ? 'var(--red)' : 'var(--white)' }}>
-          {formatCurrency(totalAllocated)} of {formatCurrency(txAbs)}
-        </span>
-      </div>
-
-      {isOverAllocated && (
-        <p style={{ fontSize: 13, color: 'var(--red)', marginBottom: 12 }}>
-          Total exceeds the transaction amount.
-        </p>
-      )}
-
-      {allocError && (
-        <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{allocError}</p>
-      )}
-
-      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-        <Button
-          onClick={onConfirm}
-          disabled={!hasAnyAllocation || isOverAllocated || allocLoading}
-        >
-          {allocLoading ? 'Allocating…' : 'Confirm allocation'}
-        </Button>
-      </div>
-    </Modal>
-  )
-}
-
-// ─── Link as transfer pair modal ─────────────────────────────────────────────
-
-function LinkTransferPairModal({ sourceTx, allTransactions, accounts, error, loading, onConfirm, onCancel }) {
-  const { formatCurrency } = useCurrency()
-  const [selectedId, setSelectedId] = useState(null)
-
-  // Account lookup
-  const accountMap = Object.fromEntries(accounts.map((a) => [a.id, a]))
-  const sourceAccount = accountMap[sourceTx.account_id]
-
-  // Filter candidate transactions:
-  //   - different account from source
-  //   - similar amount (within 20% of abs source amount)
-  //   - similar date (±7 days)
-  //   - not already in a transfer pair
-  //   - not already typed as transfer
-  const sourceAbs  = Math.abs(sourceTx.amount)
-  const sourceDate = new Date(sourceTx.date)
-
-  const candidates = allTransactions.filter((tx) => {
-    if (tx.id === sourceTx.id) return false
-    if (tx.account_id === sourceTx.account_id) return false
-    if (tx.transfer_pair_id != null) return false
-    if (tx.transaction_type === 'transfer') return false
-
-    // Amount within 20% (or within $1 for very small amounts)
-    const txAbs = Math.abs(tx.amount)
-    const tolerance = Math.max(sourceAbs * 0.2, 1)
-    if (Math.abs(txAbs - sourceAbs) > tolerance) return false
-
-    // Date within ±7 days
-    const txDate = new Date(tx.date)
-    const dayDiff = Math.abs((txDate - sourceDate) / 86400000)
-    if (dayDiff > 7) return false
-
-    return true
-  })
-
-  return (
-    <Modal title="Link as transfer pair" onClose={onCancel} width={520}>
-      {/* Source transaction summary */}
-      <div style={{
-        background: 'var(--bg)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)',
-        padding: '12px 16px',
-        marginBottom: 20,
-      }}>
-        <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: 6 }}>
-          Source transaction
-        </p>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 2 }}>{formatDate(sourceTx.date)} · {sourceAccount?.name ?? '—'}</p>
-        <p style={{ fontSize: 14, color: 'var(--white)', marginBottom: 4 }}>
-          {sourceTx.description ?? <span style={{ color: 'var(--border)' }}>No description</span>}
-        </p>
-        <p style={{ fontSize: 16, fontWeight: 700, color: sourceTx.amount >= 0 ? 'var(--green)' : 'var(--white)' }}>
-          {formatCurrency(sourceTx.amount)}
-        </p>
-      </div>
-
-      <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14 }}>
-        Select the matching transaction on another account (filtered to different account, similar amount ±20%, ±7 days):
-      </p>
-
-      {candidates.length === 0 ? (
-        <div style={{
-          padding: '20px',
-          textAlign: 'center',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)',
-          color: 'var(--muted)',
-          fontSize: 13,
-          marginBottom: 16,
-        }}>
-          No matching transactions found. Try adjusting the date range or importing the other side.
-        </div>
-      ) : (
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-          maxHeight: 240,
-          overflowY: 'auto',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)',
-          padding: 8,
-          marginBottom: 16,
-        }}>
-          {candidates.map((tx) => {
-            const acct = accountMap[tx.account_id]
-            const isSelected = selectedId === tx.id
-            return (
-              <div
-                key={tx.id}
-                onClick={() => setSelectedId(tx.id)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  padding: '8px 10px',
-                  borderRadius: 'var(--radius)',
-                  border: `1px solid ${isSelected ? 'var(--cyan)' : 'transparent'}`,
-                  background: isSelected ? 'var(--cyan)12' : 'transparent',
-                  cursor: 'pointer',
-                  transition: 'all 0.12s',
-                }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 2 }}>
-                    {formatDate(tx.date)} · {acct?.name ?? '—'}
-                  </p>
-                  <p style={{ fontSize: 13, color: 'var(--white)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {tx.description ?? <span style={{ color: 'var(--border)' }}>No description</span>}
-                  </p>
-                </div>
-                <span style={{ fontSize: 14, fontWeight: 700, color: tx.amount >= 0 ? 'var(--green)' : 'var(--white)', whiteSpace: 'nowrap' }}>
-                  {formatCurrency(tx.amount)}
-                </span>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {selectedId && (
-        <div style={{
-          padding: '10px 14px',
-          background: 'rgba(139,233,253,0.08)',
-          border: '1px solid rgba(139,233,253,0.3)',
-          borderRadius: 'var(--radius)',
-          marginBottom: 16,
-          fontSize: 13,
-          color: 'var(--cyan)',
-        }}>
-          Link these two transactions as a transfer pair? Both will be excluded from budget calculations.
-        </div>
-      )}
-
-      {error && (
-        <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</p>
-      )}
-
-      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-        <Button
-          onClick={() => onConfirm(selectedId)}
-          disabled={!selectedId || loading}
-        >
-          {loading ? 'Linking…' : 'Link as transfer pair'}
-        </Button>
-      </div>
-    </Modal>
-  )
-}
-
-// ─── Link savings withdrawal modal ───────────────────────────────────────────
-
-function LinkSavingsWithdrawalModal({ tx, savingsGoals, goalId, onGoalChange, error, loading, onConfirm, onCancel }) {
-  const { formatCurrency } = useCurrency()
-  const selectedGoal = savingsGoals.find((g) => g.id === parseInt(goalId))
-
-  return (
-    <Modal title="Link to savings goal withdrawal" onClose={onCancel} width={460}>
-      {/* Transaction summary */}
-      <div style={{
-        background: 'var(--bg)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)',
-        padding: '12px 16px',
-        marginBottom: 20,
-      }}>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>{formatDate(tx.date)}</p>
-        <p style={{ fontSize: 14, color: 'var(--white)', marginBottom: 4 }}>
-          {tx.description ?? <span style={{ color: 'var(--border)' }}>No description</span>}
-        </p>
-        <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--white)' }}>
-          {formatCurrency(tx.amount)}
-        </p>
-      </div>
-
-      <FormField label="Savings goal">
-        <select
-          style={selectStyle}
-          value={goalId}
-          onChange={(e) => onGoalChange(e.target.value)}
-          autoFocus
-        >
-          <option value="">Select goal…</option>
-          {savingsGoals.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.name} ({formatCurrency(g.current_amount)} saved)
-            </option>
-          ))}
-        </select>
-      </FormField>
-
-      {selectedGoal && (
-        <div style={{
-          padding: '10px 14px',
-          background: 'rgba(255,85,85,0.08)',
-          border: '1px solid rgba(255,85,85,0.3)',
-          borderRadius: 'var(--radius)',
-          marginBottom: 16,
-          fontSize: 13,
-          color: 'var(--orange)',
-        }}>
-          This will reduce <strong style={{ color: 'var(--white)' }}>{selectedGoal.name}</strong>'s balance by{' '}
-          <strong style={{ color: 'var(--white)' }}>{formatCurrency(Math.abs(tx.amount))}</strong>.
-        </div>
-      )}
-
-      {error && (
-        <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</p>
-      )}
-
-      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-        <Button onClick={onConfirm} disabled={!goalId || loading}>
-          {loading ? 'Linking…' : 'Link withdrawal'}
-        </Button>
-      </div>
-    </Modal>
-  )
-}
-
-// ─── Edit form (pre-populated, no source/verified fields) ────────────────────
-
-function EditTransactionForm({ tx, accounts, categories, onSave, onCancel, saving }) {
-  const [form, setForm] = useState({
-    account_id: tx.account_id,
-    amount: tx.amount,
-    category_id: tx.category_id ?? '',
-    date: tx.date,
-    description: tx.description ?? '',
-    notes: tx.notes ?? '',
-  })
-
-  function set(field) {
-    return (e) => setForm((f) => ({ ...f, [field]: e.target.value }))
-  }
-
-  function handleSubmit(e) {
-    e.preventDefault()
-    onSave({
-      amount: parseFloat(form.amount),
-      category_id: form.category_id ? parseInt(form.category_id) : null,
-      date: form.date,
-      description: form.description || null,
-      notes: form.notes || null,
-    })
-  }
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <FormField label="Amount">
-        <input style={inputStyle} type="number" step="0.01" value={form.amount} onChange={set('amount')} required inputMode="decimal" />
-      </FormField>
-
-      <FormField label="Category">
-        <select style={selectStyle} value={form.category_id} onChange={set('category_id')}>
-          <option value="">Uncategorised</option>
-          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-      </FormField>
-
-      <FormField label="Date">
-        <input style={inputStyle} type="date" value={form.date} onChange={set('date')} />
-      </FormField>
-
-      <FormField label="Description">
-        <input style={inputStyle} value={form.description} onChange={set('description')} />
-      </FormField>
-
-      <FormField label="Notes">
-        <textarea style={{ ...inputStyle, resize: 'vertical', minHeight: 60 }} value={form.notes} onChange={set('notes')} />
-      </FormField>
-
-      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
-        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-        <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
-      </div>
-    </form>
-  )
-}
-
-// Returns inline styles for a sortable column header button.
-// Active column is highlighted in --white; inactive columns use --muted.
-function sortHeaderBtn(sort, column) {
-  const isActive = sort.by === column
-  return {
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    padding: 0,
-    font: 'inherit',
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: 'uppercase',
-    letterSpacing: '0.06em',
-    color: isActive ? 'var(--white)' : 'var(--muted)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 2,
-    whiteSpace: 'nowrap',
-  }
-}
-
-const styles = {
-  pageHeader: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-  },
-  pageTitle: {
-    fontSize: 24,
-    fontWeight: 700,
-    color: 'var(--white)',
-  },
-  pageSubtitle: {
-    color: 'var(--muted)',
-    fontSize: 14,
-    marginTop: 4,
-  },
-  filterBar: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 20,
-    alignItems: 'center',
-  },
-  table: {
-    background: 'var(--bg-card)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
-    overflow: 'hidden',
-    marginBottom: 16,
-  },
-  tableHeader: {
-    display: 'grid',
-    gridTemplateColumns: '100px 1fr 120px 120px 110px 110px 70px',
-    alignItems: 'center',
-    padding: '10px 20px',
-    background: 'var(--bg)',
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: 'uppercase',
-    letterSpacing: '0.06em',
-    color: 'var(--muted)',
-    borderBottom: '1px solid var(--border)',
-  },
-  tableRow: {
-    display: 'grid',
-    gridTemplateColumns: '100px 1fr 120px 120px 110px 110px 70px',
-    padding: '12px 20px',
-    fontSize: 14,
-    borderBottom: '1px solid var(--border)',
-    alignItems: 'center',
-  },
-  iconBtn: {
-    background: 'none',
-    border: 'none',
-    color: 'var(--muted)',
-    fontSize: 15,
-    padding: '4px 6px',
-    borderRadius: 'var(--radius)',
-    cursor: 'pointer',
-  },
-  pagination: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    marginTop: 16,
-  },
-  empty: {
-    textAlign: 'center',
-    padding: '60px 0',
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: 600,
-    color: 'var(--white)',
-    marginBottom: 8,
-  },
-  modalError: {
-    color: 'var(--red)',
-    fontSize: 13,
-    marginBottom: 12,
-  },
-  moreToggle: {
-    background: 'none',
-    border: 'none',
-    color: 'var(--cyan)',
-    fontSize: 13,
-    cursor: 'pointer',
-    padding: '4px 0',
-    marginBottom: 12,
-  },
 }

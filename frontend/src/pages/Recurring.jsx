@@ -5,6 +5,8 @@ import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
+import PageHeader from '../components/PageHeader'
+import useBreakpoint from '../hooks/useBreakpoint'
 import { formatDate } from '../utils/dateFormat'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -27,15 +29,15 @@ function StatusBadge({ rec }) {
   const dueToday = !rec.is_active ? false : nextDue.getTime() === today.getTime()
 
   if (!rec.is_active) {
-    return <span style={badge('var(--muted)')}>Inactive</span>
+    return <span style={badge('var(--text-muted)')}>Inactive</span>
   }
   if (overdue) {
-    return <span style={badge('var(--orange)')}>Overdue</span>
+    return <span style={badge('var(--warning)')}>Overdue</span>
   }
   if (dueToday) {
-    return <span style={badge('var(--yellow)')}>Due today</span>
+    return <span style={badge('var(--highlight)')}>Due today</span>
   }
-  return <span style={badge('var(--green)')}>Active</span>
+  return <span style={badge('var(--positive)')}>Active</span>
 }
 
 function badge(color) {
@@ -50,7 +52,7 @@ function badge(color) {
 
 function RecurringCard({ rec, isOwner, onEdit, onDelete }) {
   const { formatCurrency } = useCurrency()
-  const amountColor = rec.amount >= 0 ? 'var(--green)' : 'var(--white)'
+  const amountColor = rec.amount >= 0 ? 'var(--positive)' : 'var(--text)'
 
   return (
     <div style={{ ...styles.card, opacity: rec.is_active ? 1 : 0.6 }}>
@@ -60,7 +62,7 @@ function RecurringCard({ rec, isOwner, onEdit, onDelete }) {
           <p style={styles.cardMeta}>
             {rec.account?.name ?? '—'}
             {rec.category && (
-              <span style={{ marginLeft: 8, color: 'var(--cyan)' }}>{rec.category.name}</span>
+              <span style={{ marginLeft: 8, color: 'var(--info)' }}>{rec.category.name}</span>
             )}
           </p>
         </div>
@@ -69,7 +71,7 @@ function RecurringCard({ rec, isOwner, onEdit, onDelete }) {
           {isOwner && (
             <>
               <button style={styles.iconBtn} onClick={onEdit} title="Edit">✎</button>
-              <button style={{ ...styles.iconBtn, color: 'var(--red)' }} onClick={onDelete} title="Delete">✕</button>
+              <button style={{ ...styles.iconBtn, color: 'var(--negative)' }} onClick={onDelete} title="Delete">✕</button>
             </>
           )}
         </div>
@@ -84,20 +86,20 @@ function RecurringCard({ rec, isOwner, onEdit, onDelete }) {
         </div>
         <div style={styles.stat}>
           <span style={styles.statLabel}>Frequency</span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--white)' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
             {FREQUENCIES.find((f) => f.value === rec.frequency)?.label ?? rec.frequency}
           </span>
         </div>
         <div style={styles.stat}>
           <span style={styles.statLabel}>Next due</span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--white)' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
             {formatDate(rec.next_due)}
           </span>
         </div>
         {rec.end_date && (
           <div style={styles.stat}>
             <span style={styles.statLabel}>Ends</span>
-            <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
               {formatDate(rec.end_date)}
             </span>
           </div>
@@ -105,7 +107,7 @@ function RecurringCard({ rec, isOwner, onEdit, onDelete }) {
       </div>
 
       {rec.notes && (
-        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
           {rec.notes}
         </p>
       )}
@@ -206,7 +208,7 @@ function RecurringForm({ initial, accounts, categories, onSave, onCancel, saving
         <input style={inputStyle} value={form.notes} onChange={set('notes')} placeholder="Optional note" />
       </FormField>
 
-      {error && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--negative)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
         <Button variant="secondary" onClick={onCancel}>Cancel</Button>
@@ -223,6 +225,7 @@ function RecurringForm({ initial, accounts, categories, onSave, onCancel, saving
 export default function Recurring() {
   const { isOwner } = useAuth()
   const { formatCurrency } = useCurrency()
+  const { isMobile } = useBreakpoint()
 
   const [entries, setEntries]     = useState([])
   const [accounts, setAccounts]   = useState([])
@@ -291,36 +294,35 @@ export default function Recurring() {
   return (
     <div>
       {/* Header */}
-      <div style={styles.pageHeader}>
-        <div>
-          <h1 style={styles.pageTitle}>Recurring Transactions</h1>
-          <p style={styles.pageSubtitle}>
-            Scheduled entries that auto-generate on each due date.
-            {active.length > 0 && ` ${active.length} active · `}
-            {active.length > 0 && (
-              <span style={{ color: totalMonthly >= 0 ? 'var(--green)' : 'var(--pink)' }}>
-                {formatCurrency(totalMonthly)}/mo estimated
-              </span>
-            )}
-          </p>
-        </div>
-        {isOwner && (
+      <PageHeader
+        title="Recurring Transactions"
+        isMobile={isMobile}
+        subtitle={<>
+          Scheduled entries that auto-generate on each due date.
+          {active.length > 0 && ` ${active.length} active · `}
+          {active.length > 0 && (
+            <span style={{ color: totalMonthly >= 0 ? 'var(--positive)' : 'var(--accent)' }}>
+              {formatCurrency(totalMonthly)}/mo estimated
+            </span>
+          )}
+        </>}
+        actions={isOwner ? (
           <Button onClick={() => { setShowAdd(true); setActionError('') }}>
             + Add recurring
           </Button>
-        )}
-      </div>
+        ) : null}
+      />
 
-      {error && <p style={{ color: 'var(--red)', marginBottom: 16 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--negative)', marginBottom: 16 }}>{error}</p>}
 
       {loading ? (
-        <p style={{ color: 'var(--muted)' }}>Loading…</p>
+        <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
       ) : entries.length === 0 ? (
         <div style={styles.empty}>
           <p style={styles.emptyTitle}>No recurring transactions</p>
           {isOwner && (
             <>
-              <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 20 }}>
+              <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 20 }}>
                 Set up rent, subscriptions, or any regular income or expense.
               </p>
               <Button onClick={() => { setShowAdd(true); setActionError('') }}>+ Add first recurring</Button>
@@ -392,10 +394,10 @@ export default function Recurring() {
 
       {deleting && (
         <Modal title="Delete recurring transaction?" onClose={() => setDeleting(null)} width={400}>
-          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+          <p style={{ color: 'var(--text)', marginBottom: 8 }}>
             <strong>{deleting.description}</strong> will be permanently removed.
           </p>
-          <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
             Already-generated transactions are not affected.
           </p>
           {actionError && <p style={styles.modalError}>{actionError}</p>}
@@ -412,44 +414,37 @@ export default function Recurring() {
 }
 
 const styles = {
-  pageHeader: {
-    display: 'flex', alignItems: 'flex-start',
-    justifyContent: 'space-between', marginBottom: 24,
-    flexWrap: 'wrap', gap: 12,
-  },
-  pageTitle:    { fontSize: 24, fontWeight: 700, color: 'var(--white)' },
-  pageSubtitle: { color: 'var(--muted)', fontSize: 14, marginTop: 4 },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
     gap: 16, marginBottom: 24,
   },
   sectionHeader: {
-    fontSize: 14, fontWeight: 600, color: 'var(--muted)',
+    fontSize: 14, fontWeight: 600, color: 'var(--text-muted)',
     textTransform: 'uppercase', letterSpacing: '0.06em',
     marginBottom: 12,
   },
   card: {
-    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)', padding: '16px 18px',
   },
   cardHeader: {
     display: 'flex', gap: 8, justifyContent: 'space-between',
     alignItems: 'flex-start', marginBottom: 12,
   },
-  cardName: { fontSize: 15, fontWeight: 600, color: 'var(--white)', marginBottom: 2 },
-  cardMeta: { fontSize: 12, color: 'var(--muted)' },
+  cardName: { fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 2 },
+  cardMeta: { fontSize: 12, color: 'var(--text-muted)' },
   statsRow: {
     display: 'flex', flexWrap: 'wrap', gap: 16,
   },
   stat: { display: 'flex', flexDirection: 'column', gap: 3 },
-  statLabel: { fontSize: 11, color: 'var(--muted)', fontWeight: 500 },
+  statLabel: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 },
   iconBtn: {
     background: 'none', border: 'none', cursor: 'pointer',
-    color: 'var(--muted)', fontSize: 15, padding: '2px 4px',
+    color: 'var(--text-muted)', fontSize: 15, padding: '2px 4px',
     borderRadius: 'var(--radius)',
   },
   empty: { textAlign: 'center', padding: '60px 0' },
-  emptyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--white)', marginBottom: 8 },
-  modalError: { color: 'var(--red)', fontSize: 13, marginBottom: 12 },
+  emptyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--text)', marginBottom: 8 },
+  modalError: { color: 'var(--negative)', fontSize: 13, marginBottom: 12 },
 }

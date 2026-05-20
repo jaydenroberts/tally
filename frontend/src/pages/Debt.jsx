@@ -5,6 +5,8 @@ import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
+import PageHeader from '../components/PageHeader'
+import useBreakpoint from '../hooks/useBreakpoint'
 import { formatDate as formatDateDMY } from '../utils/dateFormat'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -149,28 +151,28 @@ function InterestFreeWarning({ debt }) {
 
   if (days < 0) {
     return (
-      <span style={{ ...badgeStyle, color: 'var(--red)', background: '#FF555518' }}>
+      <span style={{ ...badgeStyle, color: 'var(--negative)', background: '#FF555518' }}>
         ⚠ Interest-free expired {formatDate(debt.interest_free_end_date)}
       </span>
     )
   }
   if (days <= INTEREST_EXPIRY_WARN_DAYS) {
     return (
-      <span style={{ ...badgeStyle, color: 'var(--pink)', background: '#FF79C618' }}>
+      <span style={{ ...badgeStyle, color: 'var(--accent)', background: '#FF79C618' }}>
         ⚠ 0% expires in {days}d · {formatDate(debt.interest_free_end_date)}
       </span>
     )
   }
   if (days <= INTEREST_EXPIRY_CAUTION_DAYS) {
     return (
-      <span style={{ ...badgeStyle, color: 'var(--orange)', background: '#FFB86C18' }}>
+      <span style={{ ...badgeStyle, color: 'var(--warning)', background: '#FFB86C18' }}>
         ⏳ 0% until {formatDate(debt.interest_free_end_date)}
       </span>
     )
   }
   // Still comfortably far away — show quietly
   return (
-    <span style={{ ...badgeStyle, color: 'var(--muted)', background: 'var(--border)' }}>
+    <span style={{ ...badgeStyle, color: 'var(--text-muted)', background: 'var(--border)' }}>
       0% until {formatDate(debt.interest_free_end_date)}
     </span>
   )
@@ -187,13 +189,13 @@ function DebtProgressBar({ debt, status }) {
   const paidOff = debt.original_amount > 0
     ? Math.min(100, Math.max(0, ((debt.original_amount - debt.current_balance) / debt.original_amount) * 100))
     : 0
-  const barColor = debt.is_paid_off ? 'var(--cyan)' : statusColor(status)
+  const barColor = debt.is_paid_off ? 'var(--info)' : statusColor(status)
 
   return (
     <div style={bar.track}>
       {/* Remaining balance — fills from right, shown as background */}
       {/* Paid portion — fills from left */}
-      <div style={{ ...bar.paid, width: paidOff + '%', background: debt.is_paid_off ? 'var(--cyan)' : 'var(--green)' }} />
+      <div style={{ ...bar.paid, width: paidOff + '%', background: debt.is_paid_off ? 'var(--info)' : 'var(--positive)' }} />
     </div>
   )
 }
@@ -216,7 +218,7 @@ function DebtCard({ debt, isOwner, onEdit, onDelete, onPayment, onHistory }) {
   const status    = debtStatus(debt)
   const color     = statusColor(status)
   const payoff    = projectedPayoff(debt)
-  const typeInfo  = DEBT_TYPES[debt.debt_type] ?? { label: debt.debt_type ?? 'Debt', color: 'var(--muted)' }
+  const typeInfo  = DEBT_TYPES[debt.debt_type] ?? { label: debt.debt_type ?? 'Debt', color: 'var(--text-muted)' }
   const paidPct   = debt.original_amount > 0
     ? Math.min(100, ((debt.original_amount - debt.current_balance) / debt.original_amount) * 100)
     : 0
@@ -234,10 +236,10 @@ function DebtCard({ debt, isOwner, onEdit, onDelete, onPayment, onHistory }) {
               </span>
             )}
             {debt.creditor && (
-              <span style={{ fontSize: 12, color: 'var(--muted)' }}>{debt.creditor}</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{debt.creditor}</span>
             )}
             {debt.paydown_strategy && (
-              <span style={{ ...badgeStyle, color: '#8BE9FD', background: '#8BE9FD12' }}>
+              <span style={{ ...badgeStyle, color: '#8BE9FD', background: '#8BE9FD12', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {STRATEGIES[debt.paydown_strategy] ?? debt.paydown_strategy}
               </span>
             )}
@@ -249,12 +251,12 @@ function DebtCard({ debt, isOwner, onEdit, onDelete, onPayment, onHistory }) {
           )}
         </div>
         <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-          <button style={{ ...styles.iconBtn, color: 'var(--cyan)' }} onClick={onHistory} title="Payment history">⏱</button>
+          <button style={{ ...styles.iconBtn, color: 'var(--info)' }} onClick={onHistory} title="Payment history">⏱</button>
           {isOwner && !debt.is_paid_off && (
             <button style={styles.iconBtn} onClick={onEdit} title="Edit">✎</button>
           )}
           {isOwner && (
-            <button style={{ ...styles.iconBtn, color: 'var(--red)' }} onClick={onDelete} title="Delete">✕</button>
+            <button style={{ ...styles.iconBtn, color: 'var(--negative)' }} onClick={onDelete} title="Delete">✕</button>
           )}
         </div>
       </div>
@@ -262,8 +264,8 @@ function DebtCard({ debt, isOwner, onEdit, onDelete, onPayment, onHistory }) {
       {/* Progress bar */}
       <DebtProgressBar debt={debt} status={status} />
       <div style={styles.pctRow}>
-        <span style={{ fontSize: 11, color: 'var(--green)' }}>{paidPct.toFixed(1)}% paid off</span>
-        <span style={{ fontSize: 11, color: 'var(--muted)' }}>{formatCurrency(debt.original_amount)} original</span>
+        <span style={{ fontSize: 11, color: 'var(--positive)' }}>{paidPct.toFixed(1)}% paid off</span>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{formatCurrency(debt.original_amount)} original</span>
       </div>
 
       {/* Stats grid */}
@@ -275,7 +277,7 @@ function DebtCard({ debt, isOwner, onEdit, onDelete, onPayment, onHistory }) {
               ? `0% (${debt.interest_rate ?? 0}% after)`
               : `${debt.interest_rate ?? 0}%`
           }
-          color={debt.interest_rate > 0 ? color : 'var(--green)'}
+          color={debt.interest_rate > 0 ? color : 'var(--positive)'}
         />
         <StatCell label="Min. payment"
           value={debt.minimum_payment ? formatCurrency(debt.minimum_payment) + '/mo' : '—'}
@@ -290,27 +292,27 @@ function DebtCard({ debt, isOwner, onEdit, onDelete, onPayment, onHistory }) {
         {debt.linked_account && (
           <div style={styles.projCell}>
             <span style={styles.projLabel}>Linked account</span>
-            <span style={{ ...styles.projValue, color: 'var(--cyan)' }}>
+            <span style={{ ...styles.projValue, color: 'var(--info)' }}>
               ⬡ {debt.linked_account.name}
             </span>
           </div>
         )}
         <div style={styles.projCell}>
           <span style={styles.projLabel}>Projected payoff</span>
-          <span style={{ ...styles.projValue, color: payoff ? 'var(--white)' : 'var(--muted)' }}>
+          <span style={{ ...styles.projValue, color: payoff ? 'var(--text)' : 'var(--text-muted)' }}>
             {debt.is_paid_off
-              ? <span style={{ color: 'var(--cyan)' }}>✓ Paid off</span>
+              ? <span style={{ color: 'var(--info)' }}>✓ Paid off</span>
               : payoff
                 ? formatDate(payoff)
                 : debt.minimum_payment
-                  ? <span style={{ color: 'var(--pink)' }}>Payment covers interest only</span>
+                  ? <span style={{ color: 'var(--accent)' }}>Payment covers interest only</span>
                   : 'Set min. payment to project'}
           </span>
         </div>
         {debt.notes && (
           <div style={{ ...styles.projCell, gridColumn: '1 / -1' }}>
             <span style={styles.projLabel}>Notes</span>
-            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{debt.notes}</span>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{debt.notes}</span>
           </div>
         )}
       </div>
@@ -334,7 +336,7 @@ function StatCell({ label, value, color, large }) {
   return (
     <div style={styles.statCell}>
       <span style={styles.statLabel}>{label}</span>
-      <span style={{ fontSize: large ? 17 : 13, fontWeight: 700, color: color ?? 'var(--white)' }}>{value}</span>
+      <span style={{ fontSize: large ? 17 : 13, fontWeight: 700, color: color ?? 'var(--text)' }}>{value}</span>
     </div>
   )
 }
@@ -435,12 +437,21 @@ function DebtForm({ initial, accounts, onSave, onCancel, saving }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <FormField label="Paydown strategy">
+        <FormField
+          label="Paydown strategy"
+          hint={
+            form.paydown_strategy === 'avalanche'
+              ? 'Highest interest first — saves the most money.'
+              : form.paydown_strategy === 'snowball'
+              ? 'Smallest balance first — quickest psychological wins.'
+              : undefined
+          }
+        >
           <select style={selectStyle} value={form.paydown_strategy} onChange={set('paydown_strategy')}>
             <option value="">None / unset</option>
-            {Object.entries(STRATEGIES).map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
-            ))}
+            <option value="avalanche">Avalanche</option>
+            <option value="snowball">Snowball</option>
+            <option value="fixed">Fixed payment</option>
           </select>
         </FormField>
         <FormField label="Link to account">
@@ -457,7 +468,7 @@ function DebtForm({ initial, accounts, onSave, onCancel, saving }) {
         <textarea style={{ ...inputStyle, resize: 'vertical', minHeight: 60 }} value={form.notes} onChange={set('notes')} />
       </FormField>
 
-      {error && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--negative)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
         <Button variant="secondary" onClick={onCancel}>Cancel</Button>
@@ -490,12 +501,12 @@ function PaymentForm({ debt, accounts, onSave, onCancel, saving }) {
 
   return (
     <form onSubmit={handleSubmit}>
-      <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 16 }}>
-        Payment toward <strong style={{ color: 'var(--white)' }}>{debt.name}</strong>
+      <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 16 }}>
+        Payment toward <strong style={{ color: 'var(--text)' }}>{debt.name}</strong>
         <br />
-        Current balance: <strong style={{ color: 'var(--pink)' }}>{formatCurrency(debt.current_balance)}</strong>
+        Current balance: <strong style={{ color: 'var(--accent)' }}>{formatCurrency(debt.current_balance)}</strong>
         {debt.minimum_payment && (
-          <> · Minimum: <strong style={{ color: 'var(--white)' }}>{formatCurrency(debt.minimum_payment)}</strong></>
+          <> · Minimum: <strong style={{ color: 'var(--text)' }}>{formatCurrency(debt.minimum_payment)}</strong></>
         )}
       </p>
 
@@ -525,7 +536,7 @@ function PaymentForm({ debt, accounts, onSave, onCancel, saving }) {
         />
       </FormField>
 
-      {error && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--negative)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
         <Button variant="secondary" onClick={onCancel}>Cancel</Button>
@@ -555,21 +566,21 @@ function PaymentHistoryModal({ debt, onClose }) {
   return (
     <Modal title={`Payment history — ${debt.name}`} onClose={onClose} width={520}>
       {loading ? (
-        <p style={{ color: 'var(--muted)' }}>Loading…</p>
+        <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
       ) : error ? (
-        <p style={{ color: 'var(--red)' }}>{error}</p>
+        <p style={{ color: 'var(--negative)' }}>{error}</p>
       ) : payments.length === 0 ? (
-        <p style={{ color: 'var(--muted)', textAlign: 'center', padding: '24px 0' }}>
+        <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '24px 0' }}>
           No payments recorded yet.
         </p>
       ) : (
         <>
           {/* Summary chip */}
           <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
               {payments.length} payment{payments.length !== 1 ? 's' : ''}
             </span>
-            <span style={{ fontSize: 13, color: 'var(--green)', fontWeight: 600 }}>
+            <span style={{ fontSize: 13, color: 'var(--positive)', fontWeight: 600 }}>
               {formatCurrency(total)} total paid
             </span>
           </div>
@@ -584,10 +595,10 @@ function PaymentHistoryModal({ debt, onClose }) {
             </div>
             {payments.map((p) => (
               <div key={p.id} style={historyStyles.row}>
-                <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+                <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
                   {formatDateDMY(p.paid_at)}
                 </span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--positive)' }}>
                   {formatCurrency(p.amount)}
                   {p.transaction_id && (
                     <span
@@ -598,7 +609,7 @@ function PaymentHistoryModal({ debt, onClose }) {
                         padding: '1px 5px',
                         borderRadius: 99,
                         background: '#BD93F918',
-                        color: 'var(--purple)',
+                        color: 'var(--brand)',
                         fontWeight: 600,
                         verticalAlign: 'middle',
                       }}
@@ -607,10 +618,10 @@ function PaymentHistoryModal({ debt, onClose }) {
                     </span>
                   )}
                 </span>
-                <span style={{ fontSize: 13, color: 'var(--white)' }}>
+                <span style={{ fontSize: 13, color: 'var(--text)' }}>
                   {formatCurrency(p.balance_after)}
                 </span>
-                <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: p.notes ? 'normal' : 'italic' }}>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: p.notes ? 'normal' : 'italic' }}>
                   {p.notes ?? '—'}
                 </span>
               </div>
@@ -627,6 +638,7 @@ function PaymentHistoryModal({ debt, onClose }) {
 export default function Debt() {
   const { isOwner } = useAuth()
   const { formatCurrency } = useCurrency()
+  const { isMobile } = useBreakpoint()
 
   const [debts, setDebts]       = useState([])
   const [accounts, setAccounts] = useState([])
@@ -713,47 +725,47 @@ export default function Debt() {
   return (
     <div>
       {/* Header */}
-      <div style={styles.pageHeader}>
-        <div>
-          <h1 style={styles.pageTitle}>Debt Tracker</h1>
-          {debts.length > 0 && (
-            <p style={styles.pageSubtitle}>
-              {activeDebts.length} active · {paidOffDebts.length} paid off
-              {expiringCount > 0 && (
-                <span style={{ color: 'var(--pink)', marginLeft: 12 }}>
-                  ⚠ {expiringCount} interest-free period{expiringCount !== 1 ? 's' : ''} expiring soon
-                </span>
-              )}
-            </p>
-          )}
-        </div>
-        {isOwner && (
+      <PageHeader
+        title="Debt Tracker"
+        isMobile={isMobile}
+        subtitle={debts.length > 0 ? (
+          <>
+            {activeDebts.length} active · {paidOffDebts.length} paid off
+            {expiringCount > 0 && (
+              <span style={{ color: 'var(--accent)', marginLeft: 12 }}>
+                ⚠ {expiringCount} interest-free period{expiringCount !== 1 ? 's' : ''} expiring soon
+              </span>
+            )}
+          </>
+        ) : false}
+        actions={isOwner ? (
           <Button onClick={() => { setShowAdd(true); setActionError('') }}>
             + Add debt
           </Button>
-        )}
-      </div>
+        ) : null}
+      />
+      <div style={{ height: 22 }} />
 
       {/* Summary strip */}
       {activeDebts.length > 0 && (
         <div style={styles.totalsBar}>
-          <TotalChip label="Total debt"     value={formatCurrency(totalDebt)}                      color="var(--pink)"   />
-          <TotalChip label="Min. payments"  value={formatCurrency(totalMinimums) + '/mo'}           color="var(--orange)" />
-          <TotalChip label="Avg. rate"      value={`${weightedRate.toFixed(2)}% p.a.`}             color={weightedRate >= 10 ? 'var(--pink)' : weightedRate > 0 ? 'var(--orange)' : 'var(--green)'} />
-          <TotalChip label="Active debts"   value={activeDebts.length}                              color="var(--muted)"  />
+          <TotalChip label="Total debt"     value={formatCurrency(totalDebt)}                      color="var(--accent)"   />
+          <TotalChip label="Min. payments"  value={formatCurrency(totalMinimums) + '/mo'}           color="var(--warning)" />
+          <TotalChip label="Avg. rate"      value={`${weightedRate.toFixed(2)}% p.a.`}             color={weightedRate >= 10 ? 'var(--accent)' : weightedRate > 0 ? 'var(--warning)' : 'var(--positive)'} />
+          <TotalChip label="Active debts"   value={activeDebts.length}                              color="var(--text-muted)"  />
         </div>
       )}
 
-      {error && <p style={{ color: 'var(--red)', marginBottom: 16 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--negative)', marginBottom: 16 }}>{error}</p>}
 
       {loading ? (
-        <p style={{ color: 'var(--muted)' }}>Loading…</p>
+        <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
       ) : debts.length === 0 ? (
         <div style={styles.empty}>
           <p style={styles.emptyTitle}>No debts tracked</p>
           {isOwner && (
             <>
-              <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 20 }}>
+              <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 20 }}>
                 Add credit cards, loans, or BNPL balances to track paydown progress.
               </p>
               <Button onClick={() => { setShowAdd(true); setActionError('') }}>+ Add first debt</Button>
@@ -823,7 +835,7 @@ export default function Debt() {
 
       {deleting && (
         <Modal title="Delete debt?" onClose={() => setDeleting(null)} width={400}>
-          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+          <p style={{ color: 'var(--text)', marginBottom: 8 }}>
             <strong>{deleting.name}</strong> will be permanently removed.
           </p>
           {actionError && <p style={styles.modalError}>{actionError}</p>}
@@ -853,16 +865,9 @@ function TotalChip({ label, value, color }) {
 }
 
 const styles = {
-  pageHeader: {
-    display: 'flex', alignItems: 'flex-start',
-    justifyContent: 'space-between', marginBottom: 20,
-    flexWrap: 'wrap', gap: 12,
-  },
-  pageTitle:    { fontSize: 24, fontWeight: 700, color: 'var(--white)' },
-  pageSubtitle: { color: 'var(--muted)', fontSize: 14, marginTop: 4 },
   totalsBar: {
     display: 'flex', flexWrap: 'wrap', gap: 2, marginBottom: 24,
-    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)', overflow: 'hidden',
   },
   chip: {
@@ -871,7 +876,7 @@ const styles = {
   },
   chipLabel: {
     fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
-    letterSpacing: '0.05em', color: 'var(--muted)',
+    letterSpacing: '0.05em', color: 'var(--text-muted)',
   },
   grid: {
     display: 'grid',
@@ -879,21 +884,21 @@ const styles = {
     gap: 16, marginBottom: 24,
   },
   card: {
-    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)', padding: '18px 20px',
   },
   cardHeader: {
     display: 'flex', justifyContent: 'space-between',
     alignItems: 'flex-start', gap: 8,
   },
-  cardName: { fontSize: 16, fontWeight: 600, color: 'var(--white)', marginBottom: 4 },
+  cardName: { fontSize: 16, fontWeight: 600, color: 'var(--text)', marginBottom: 4 },
   cardMeta: { display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' },
   statsGrid: {
-    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
     gap: 8, marginBottom: 12,
   },
   statCell:  { display: 'flex', flexDirection: 'column', gap: 3 },
-  statLabel: { fontSize: 11, color: 'var(--muted)', fontWeight: 500 },
+  statLabel: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 },
   pctRow: {
     display: 'flex', justifyContent: 'space-between',
     marginBottom: 12, marginTop: -6,
@@ -903,20 +908,20 @@ const styles = {
     gap: 8, paddingTop: 10, borderTop: '1px solid var(--border)',
   },
   projCell:  { display: 'flex', flexDirection: 'column', gap: 3 },
-  projLabel: { fontSize: 11, color: 'var(--muted)', fontWeight: 500 },
-  projValue: { fontSize: 13, fontWeight: 600, color: 'var(--white)' },
+  projLabel: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 },
+  projValue: { fontSize: 13, fontWeight: 600, color: 'var(--text)' },
   iconBtn: {
-    background: 'none', border: 'none', color: 'var(--muted)',
+    background: 'none', border: 'none', color: 'var(--text-muted)',
     fontSize: 15, padding: '3px 5px', borderRadius: 'var(--radius)', cursor: 'pointer',
   },
   sectionHeader: {
-    fontSize: 14, fontWeight: 600, color: 'var(--muted)',
+    fontSize: 14, fontWeight: 600, color: 'var(--text-muted)',
     textTransform: 'uppercase', letterSpacing: '0.06em',
     marginBottom: 12, paddingBottom: 8, borderBottom: '1px solid var(--border)',
   },
   empty: { textAlign: 'center', padding: '60px 0' },
-  emptyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--white)', marginBottom: 8 },
-  modalError: { color: 'var(--red)', fontSize: 13, marginBottom: 12 },
+  emptyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--text)', marginBottom: 8 },
+  modalError: { color: 'var(--negative)', fontSize: 13, marginBottom: 12 },
 }
 
 const historyStyles = {
@@ -924,7 +929,7 @@ const historyStyles = {
     display: 'grid', gridTemplateColumns: '120px 100px 120px 1fr',
     padding: '8px 12px', background: 'var(--bg)',
     fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
-    letterSpacing: '0.06em', color: 'var(--muted)',
+    letterSpacing: '0.06em', color: 'var(--text-muted)',
     borderBottom: '1px solid var(--border)',
   },
   row: {

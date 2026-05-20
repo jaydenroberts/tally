@@ -415,7 +415,7 @@ const styles = {
   title: {
     fontSize: 24,
     fontWeight: 700,
-    color: 'var(--white)',
+    color: 'var(--text)',
     margin: 0,
   },
   badges: {
@@ -438,7 +438,7 @@ const styles = {
   writeAccessBadge: {
     display: 'inline-block',
     background: 'rgba(0, 247, 105, 0.1)',
-    color: 'var(--green)',
+    color: 'var(--positive)',
     border: '1px solid rgba(0, 247, 105, 0.3)',
     borderRadius: 4,
     fontSize: 11,
@@ -450,7 +450,7 @@ const styles = {
   noBadge: {
     display: 'inline-block',
     background: 'rgba(255,255,255,0.05)',
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
     border: '1px solid var(--border)',
     borderRadius: 4,
     fontSize: 11,
@@ -460,7 +460,7 @@ const styles = {
   clearBtn: {
     background: 'none',
     border: '1px solid var(--border)',
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
     fontSize: 13,
     padding: '5px 12px',
     borderRadius: 'var(--radius)',
@@ -474,7 +474,7 @@ const styles = {
     border: '1px solid var(--border)',
     borderRadius: 'var(--radius)',
     padding: '12px 16px',
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
     fontSize: 14,
     marginBottom: 12,
     flexShrink: 0,
@@ -490,7 +490,7 @@ const styles = {
     paddingBottom: 8,
   },
   emptyHint: {
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
     fontSize: 14,
     textAlign: 'center',
     marginTop: 48,
@@ -502,14 +502,14 @@ const styles = {
     width: '100%',
   },
   userBubble: {
-    background: 'var(--bg-card)',
+    background: 'var(--bg-elevated)',
     border: '1px solid var(--border)',
     borderRadius: 12,
     padding: '10px 14px',
     maxWidth: '72%',
     fontSize: 14,
     lineHeight: 1.6,
-    color: 'var(--white)',
+    color: 'var(--text)',
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
   },
@@ -521,7 +521,7 @@ const styles = {
     maxWidth: '85%',
     fontSize: 14,
     lineHeight: 1.6,
-    color: 'var(--white)',
+    color: 'var(--text)',
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
   },
@@ -558,15 +558,16 @@ const styles = {
   inputArea: {
     flexShrink: 0,
     marginTop: 12,
+    paddingBottom: 'max(0px, env(safe-area-inset-bottom))',
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
   },
   textarea: {
-    background: 'var(--bg-card)',
+    background: 'var(--bg-elevated)',
     border: `1px solid ${PURPLE}55`,
     borderRadius: 'var(--radius)',
-    color: 'var(--white)',
+    color: 'var(--text)',
     fontSize: 14,
     lineHeight: 1.6,
     padding: '10px 14px',
@@ -584,7 +585,7 @@ const styles = {
   },
   hint: {
     fontSize: 12,
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
   },
   sendBtn: {
     background: PURPLE,

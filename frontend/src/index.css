@@ -1,31 +1,78 @@
-/* Official Dracula colour palette — https://draculatheme.com/spec */
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Tally — global stylesheet
+ *
+ * Token system:
+ *   - The :root block defines the new semantic tokens (--bg, --bg-elevated,
+ *     --text, --text-muted, --positive, --negative, --warning, --info,
+ *     --brand, etc.) — these are what new components should reach for.
+ *   - The "Legacy aliases" block at the bottom maps the OLD names that the
+ *     existing pages use (--green, --red, --bg-card, --muted, --white, etc.)
+ *     onto the new tokens. This keeps every existing page working unchanged
+ *     while you migrate them screen-by-screen to the new names.
+ *
+ * Default palette is "Tuned Dracula" — Dracula's signature hues with the
+ * neutrals rebuilt for finance-grade contrast and elevation.
+ * ───────────────────────────────────────────────────────────────────────── */
+
 :root {
-  /* Backgrounds */
-  --bg:         #282A36;   /* Background */
-  --bg-card:    #44475A;   /* Current Line — cards, panels, sidebar */
-  --bg-input:   #44475A;   /* Current Line — inputs (Dracula spec: bg-card) */
+  /* ── Surfaces ────────────────────────────────────────────────────────── */
+  --bg:           #1E1F29;   /* page background */
+  --bg-elevated:  #282A36;   /* cards, panels, sidebar */
+  --bg-input:     #16171F;   /* input wells (sit BELOW everything) */
+  --bg-hover:     #343746;   /* hover, pressed, sidebar active */
+  --border:       #3A3D4E;   /* dividers, card borders */
+  --border-strong:#6272A4;   /* focused inputs, emphasis dividers */
 
-  /* Dracula colours */
-  --green:      #50FA7B;
-  --pink:       #FF79C6;
-  --cyan:       #8BE9FD;
-  --purple:     #BD93F9;
-  --yellow:     #F1FA8C;
-  --white:      #F8F8F2;   /* Foreground */
-  --muted:      #6272A4;   /* Comment */
-  --red:        #FF5555;
-  --orange:     #FFB86C;
+  /* ── Text ────────────────────────────────────────────────────────────── */
+  --text:         #F8F8F2;   /* primary text, headings, numbers */
+  --text-muted:   #C5CCDB;   /* secondary text — labels, captions (AAA) */
+  --text-faint:   #8691AE;   /* tertiary text — meta, hints (AA) */
 
-  /* Semantic aliases */
-  --border:     #44475A;   /* Current Line — dividers, borders */
+  /* ── Brand & semantic accents ────────────────────────────────────────── */
+  --brand:        #BD93F9;   /* primary actions, brand */
+  --brand-ink:    #1E1F29;   /* text/icons on brand bg */
+  --positive:     #69FF94;   /* income, gains, success */
+  --negative:     #FF6E6E;   /* expenses, debt, destructive */
+  --warning:      #FFB86C;   /* attention, unverified */
+  --info:         #8BE9FD;   /* links, neutral highlights */
+  --accent:       #FF79C6;   /* secondary accent, used sparingly */
+  --highlight:    #F1FA8C;   /* selection, highlights */
 
-  /* Typography */
-  --font-sans:  'Inter', system-ui, -apple-system, sans-serif;
+  /* ── Chart palette (used in sparklines, budget categories) ───────────── */
+  --chart-1:      #BD93F9;
+  --chart-2:      #8BE9FD;
+  --chart-3:      #69FF94;
+  --chart-4:      #FFB86C;
+  --chart-5:      #FF79C6;
+  --chart-6:      #F1FA8C;
 
-  /* Radii */
-  --radius:     8px;
-  --radius-lg:  12px;
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --font-sans:    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter',
+                  system-ui, sans-serif;
+  --font-mono:    ui-monospace, 'SF Mono', 'Menlo', monospace;
+
+  /* ── Radii ───────────────────────────────────────────────────────────── */
+  --radius:       8px;
+  --radius-lg:    12px;
+
+  /* ── Legacy aliases (DO NOT use in new code) ─────────────────────────── *
+   * Existing pages reach for these names. Aliasing them onto the new
+   * tokens means every page keeps working without touching its source. *
+   * Migrate each page off these gradually (Phase 7 in MIGRATION_PLAN.md).
+   * ────────────────────────────────────────────────────────────────────── */
+  --bg-card:      var(--bg-elevated);
+  --white:        var(--text);
+  --muted:        var(--text-muted);
+  --green:        var(--positive);
+  --red:          var(--negative);
+  --orange:       var(--warning);
+  --cyan:         var(--info);
+  --pink:         var(--accent);
+  --purple:       var(--brand);
+  --yellow:       var(--highlight);
 }
+
+/* ── Reset ─────────────────────────────────────────────────────────────── */
 
 *, *::before, *::after {
   box-sizing: border-box;
@@ -39,15 +86,16 @@ html, body, #root {
 
 body {
   background-color: var(--bg);
-  color: var(--white);
+  color: var(--text);
   font-family: var(--font-sans);
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
 }
 
 a {
-  color: var(--cyan);
+  color: var(--info);
   text-decoration: none;
 }
 
@@ -66,7 +114,6 @@ input, select, textarea {
 
 /* ── Responsive helpers ──────────────────────────────────────────────────── */
 
-/* Transactions table → card stack on small screens */
 @media (max-width: 700px) {
   .tx-table-header { display: none !important; }
   .tx-table-row {
@@ -79,13 +126,7 @@ input, select, textarea {
   .tx-row-actions { margin-top: 6px; }
 }
 
-/* Sidebar collapse on small screens */
-@media (max-width: 600px) {
-  .app-sidebar { display: none !important; }
-  .app-main    { padding: 16px !important; }
-}
-
-/* FAB quick-add button — always visible, pulls to bottom-right on mobile */
+/* FAB quick-add button */
 .fab {
   position: fixed;
   bottom: 24px;
@@ -93,42 +134,34 @@ input, select, textarea {
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: var(--green);
-  color: var(--bg);
+  background: var(--brand);
+  color: var(--brand-ink);
   font-size: 26px;
   font-weight: 700;
   border: none;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(80, 250, 123, 0.35);
+  box-shadow: 0 4px 16px color-mix(in oklab, var(--brand) 35%, transparent);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 50;
   transition: transform 0.15s, box-shadow 0.15s;
 }
-.fab:hover  { transform: scale(1.08); box-shadow: 0 6px 20px rgba(80, 250, 123, 0.45); }
+.fab:hover  { transform: scale(1.08); }
 .fab:active { transform: scale(0.96); }
 
-/* Inline category cell — subtle hover hint that it's clickable */
 .tx-category-cell:hover {
-  background: rgba(98, 114, 164, 0.18);  /* --muted at ~18% alpha */
-  color: var(--white) !important;
+  background: color-mix(in oklab, var(--text-faint) 18%, transparent);
+  color: var(--text) !important;
 }
 
 /* ── Scrollbar ────────────────────────────────────────────────────────────── */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: var(--bg);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-/* ── Text selection ───────────────────────────────────────────────────────── */
+/* ── Selection ────────────────────────────────────────────────────────────── */
 ::selection {
-  background-color: #44475A;
-  color: #F8F8F2;
+  background-color: var(--bg-hover);
+  color: var(--text);
 }

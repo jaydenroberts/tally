@@ -4,6 +4,37 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.4.0] - 2026-05-20
+
+### Added
+
+- **Staged import wizard** — CSV/PDF import is now a guided flow: choose account → upload → match columns → review → confirm, with a 5-minute undo window after committing.
+- **Reconciliation matcher** — manual entries are provisional estimates that give instant budget feedback; when a bank import matches one (±3 days, 15%/$1 tolerance, expense or income), it validates the estimate and marks it Verified, preserving your category and notes. Unmatched imported rows are added as verified transactions; near-duplicate imports are flagged for review. "Needs review" now means a manual entry not yet confirmed by an import.
+- **Split credit/debit CSV auto-detection** — files with separate money-in / money-out columns are recognised by header and mapped automatically; a Balance column is never mistaken for the transaction amount.
+- **Transaction pagination** — the Transactions list is paged (50 per page) with server-side totals, so the monthly stat cards and segment counts stay accurate across pages.
+- **Transaction multi-select** — select-all and shift-click range selection, with single and bulk delete.
+- **Local AI provider support** — chat works with Ollama and any OpenAI-compatible endpoint, fully on-prem, in addition to hosted providers.
+- **PDF statement import** — multi-table picker with a generalised text fallback for statements that don't expose clean tables.
+- **Australian timezone options** — added the full set of Australian timezones in Settings.
+
+### Changed
+
+- **Unified page headers** — all pages share a consistent header treatment and scroll behaviour.
+- **Import timestamps are timezone-aware** — the undo countdown and import history now display correctly in any timezone.
+
+### Fixed
+
+- Import undo could be hidden in non-UTC timezones; the countdown now resolves correctly everywhere.
+- Deleting transactions linked by imports or schedules no longer fails on a foreign-key constraint; import rollback now reliably removes everything it created and reverts any estimates it matched.
+- Desktop Transactions list now scrolls fully and no longer reflows when switching filters.
+- Mobile layout fixes across the dashboard, transactions, and budgets views.
+
+### Security
+
+- PDF-parsing dependencies updated to patched releases.
+
+---
+
 ## [1.3.3] - 2026-04-30
 
 ### Security

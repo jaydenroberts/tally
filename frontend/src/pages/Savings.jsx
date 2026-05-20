@@ -5,6 +5,8 @@ import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
+import PageHeader from '../components/PageHeader'
+import useBreakpoint from '../hooks/useBreakpoint'
 import { formatDate as formatDateDMY } from '../utils/dateFormat'
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
@@ -151,12 +153,12 @@ function GoalCard({ goal, isOwner, onEdit, onDelete, onContribute, onHistory, on
           <span style={{ ...styles.statusBadge, color, background: color + '18' }}>
             {statusLabel(status)}
           </span>
-          <button style={{ ...styles.iconBtn, color: 'var(--cyan)' }} onClick={onHistory} title="Contribution history">⏱</button>
+          <button style={{ ...styles.iconBtn, color: 'var(--info)' }} onClick={onHistory} title="Contribution history">⏱</button>
           {isOwner && !goal.is_completed && (
             <button style={styles.iconBtn} onClick={onEdit} title="Edit">✎</button>
           )}
           {isOwner && (
-            <button style={{ ...styles.iconBtn, color: 'var(--red)' }} onClick={onDelete} title="Delete">✕</button>
+            <button style={{ ...styles.iconBtn, color: 'var(--negative)' }} onClick={onDelete} title="Delete">✕</button>
           )}
         </div>
       </div>
@@ -194,7 +196,7 @@ function GoalCard({ goal, isOwner, onEdit, onDelete, onContribute, onHistory, on
 
         <div style={styles.projCell}>
           <span style={styles.projLabel}>Projected completion</span>
-          <span style={{ ...styles.projValue, color: projected ? (projectedOnTime === false ? 'var(--pink)' : 'var(--green)') : 'var(--muted)' }}>
+          <span style={{ ...styles.projValue, color: projected ? (projectedOnTime === false ? 'var(--accent)' : 'var(--positive)') : 'var(--text-muted)' }}>
             {projected
               ? <>
                   {formatDate(projected)}
@@ -204,7 +206,7 @@ function GoalCard({ goal, isOwner, onEdit, onDelete, onContribute, onHistory, on
                 </>
               : goal.monthly_contribution
                 ? 'Goal reached!'
-                : <span style={{ color: 'var(--muted)', fontSize: 11 }}>set monthly contribution</span>}
+                : <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>set monthly contribution</span>}
           </span>
         </div>
       </div>
@@ -246,7 +248,7 @@ function StatCell({ label, value, color }) {
   return (
     <div style={styles.statCell}>
       <span style={styles.statLabel}>{label}</span>
-      <span style={{ fontSize: 15, fontWeight: 700, color: color ?? 'var(--white)' }}>{value}</span>
+      <span style={{ fontSize: 15, fontWeight: 700, color: color ?? 'var(--text)' }}>{value}</span>
     </div>
   )
 }
@@ -322,7 +324,7 @@ function GoalForm({ initial, accounts, onSave, onCancel, saving }) {
         <textarea style={{ ...inputStyle, resize: 'vertical', minHeight: 60 }} value={form.notes} onChange={set('notes')} />
       </FormField>
 
-      {error && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--negative)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
         <Button variant="secondary" onClick={onCancel}>Cancel</Button>
@@ -357,10 +359,10 @@ function ContributeForm({ goal, onSave, onCancel, saving }) {
 
   return (
     <form onSubmit={handleSubmit}>
-      <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 16 }}>
-        Adding to <strong style={{ color: 'var(--white)' }}>{goal.name}</strong>
+      <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 16 }}>
+        Adding to <strong style={{ color: 'var(--text)' }}>{goal.name}</strong>
         <br />
-        Currently <strong style={{ color: 'var(--green)' }}>{formatCurrency(goal.current_amount)}</strong> of {formatCurrency(goal.target_amount)} · {formatCurrency(remaining)} remaining
+        Currently <strong style={{ color: 'var(--positive)' }}>{formatCurrency(goal.current_amount)}</strong> of {formatCurrency(goal.target_amount)} · {formatCurrency(remaining)} remaining
       </p>
 
       <FormField label="Amount *">
@@ -387,7 +389,7 @@ function ContributeForm({ goal, onSave, onCancel, saving }) {
         />
       </FormField>
 
-      {error && <p style={{ color: 'var(--orange)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--warning)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
 
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
         <Button variant="secondary" onClick={onCancel}>Cancel</Button>
@@ -417,25 +419,25 @@ function ContributionHistoryModal({ goal, onClose }) {
   return (
     <Modal title={`Contribution history — ${goal.name}`} onClose={onClose} width={520}>
       {loading ? (
-        <p style={{ color: 'var(--muted)' }}>Loading…</p>
+        <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
       ) : error ? (
-        <p style={{ color: 'var(--red)' }}>{error}</p>
+        <p style={{ color: 'var(--negative)' }}>{error}</p>
       ) : contributions.length === 0 ? (
-        <p style={{ color: 'var(--muted)', textAlign: 'center', padding: '24px 0' }}>
+        <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '24px 0' }}>
           No contributions recorded yet.
         </p>
       ) : (
         <>
           <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
               {contributions.length} contribution{contributions.length !== 1 ? 's' : ''}
             </span>
-            <span style={{ fontSize: 13, color: 'var(--green)', fontWeight: 600 }}>
+            <span style={{ fontSize: 13, color: 'var(--positive)', fontWeight: 600 }}>
               {formatCurrency(total)} total contributed
             </span>
           </div>
 
-          <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+          <div className="table-scroll" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
             <div style={savingsHistoryStyles.header}>
               <span>Date</span>
               <span>Amount</span>
@@ -444,16 +446,16 @@ function ContributionHistoryModal({ goal, onClose }) {
             </div>
             {contributions.map((c) => (
               <div key={c.id} style={savingsHistoryStyles.row}>
-                <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+                <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
                   {formatDateDMY(c.contributed_at)}
                 </span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--positive)' }}>
                   {formatCurrency(c.amount)}
                 </span>
-                <span style={{ fontSize: 13, color: 'var(--white)' }}>
+                <span style={{ fontSize: 13, color: 'var(--text)' }}>
                   {formatCurrency(c.balance_after)}
                 </span>
-                <span style={{ fontSize: 12, color: 'var(--muted)', fontStyle: c.notes ? 'normal' : 'italic' }}>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: c.notes ? 'normal' : 'italic' }}>
                   {c.notes ?? '—'}
                 </span>
               </div>
@@ -487,9 +489,9 @@ function AllocateModal({ summary, goals, onAllocate, onClose, saving, actionErro
 
   return (
     <Modal title={`Allocate funds — ${summary.account_name}`} onClose={onClose} width={520}>
-      <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 16 }}>
+      <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 16 }}>
         Available to allocate:
-        <strong style={{ color: 'var(--cyan)', marginLeft: 6 }}>{formatCurrency(summary.available)}</strong>
+        <strong style={{ color: 'var(--info)', marginLeft: 6 }}>{formatCurrency(summary.available)}</strong>
       </p>
 
       <form onSubmit={handleSubmit}>
@@ -509,19 +511,19 @@ function AllocateModal({ summary, goals, onAllocate, onClose, saving, actionErro
         ))}
 
         <div style={{ padding: '12px 0', borderTop: '1px solid var(--border)', marginTop: 8, display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 13, color: 'var(--muted)' }}>Total allocating</span>
-          <strong style={{ color: total > summary.available ? 'var(--red)' : 'var(--white)' }}>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Total allocating</span>
+          <strong style={{ color: total > summary.available ? 'var(--negative)' : 'var(--text)' }}>
             {formatCurrency(total)}
           </strong>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-          <span style={{ fontSize: 13, color: 'var(--muted)' }}>Remaining available after</span>
-          <strong style={{ color: remaining < 0 ? 'var(--red)' : 'var(--cyan)' }}>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Remaining available after</span>
+          <strong style={{ color: remaining < 0 ? 'var(--negative)' : 'var(--info)' }}>
             {formatCurrency(remaining)}
           </strong>
         </div>
 
-        {actionError && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{actionError}</p>}
+        {actionError && <p style={{ color: 'var(--negative)', fontSize: 13, marginBottom: 12 }}>{actionError}</p>}
 
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
@@ -540,16 +542,16 @@ function WithdrawModal({ goal, onConfirm, onClose, saving, actionError }) {
   const { formatCurrency } = useCurrency()
   return (
     <Modal title="Mark as spent?" onClose={onClose} width={440}>
-      <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+      <p style={{ color: 'var(--text)', marginBottom: 8 }}>
         <strong>{goal.name}</strong>
       </p>
-      <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 16 }}>
+      <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 16 }}>
         This will create a debit transaction of{' '}
-        <strong style={{ color: 'var(--pink)' }}>{formatCurrency(goal.current_amount)}</strong>{' '}
+        <strong style={{ color: 'var(--accent)' }}>{formatCurrency(goal.current_amount)}</strong>{' '}
         on <strong>{goal.linked_account?.name ?? 'the linked account'}</strong> and mark the goal as completed.
         The transaction will be verified when your next bank statement is imported.
       </p>
-      {actionError && <p style={{ color: 'var(--red)', fontSize: 13, marginBottom: 12 }}>{actionError}</p>}
+      {actionError && <p style={{ color: 'var(--negative)', fontSize: 13, marginBottom: 12 }}>{actionError}</p>}
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button variant="danger" onClick={onConfirm} disabled={saving}>
@@ -565,6 +567,7 @@ function WithdrawModal({ goal, onConfirm, onClose, saving, actionError }) {
 export default function Savings() {
   const { isOwner } = useAuth()
   const { formatCurrency } = useCurrency()
+  const { isMobile } = useBreakpoint()
 
   const [goals, setGoals]       = useState([])
   const [accounts, setAccounts] = useState([])
@@ -683,42 +686,40 @@ export default function Savings() {
   return (
     <div>
       {/* Header */}
-      <div style={styles.pageHeader}>
-        <div>
-          <h1 style={styles.pageTitle}>Savings Goals</h1>
-          {goals.length > 0 && (
-            <p style={styles.pageSubtitle}>
-              {activeGoals.length} active · {completedGoals.length} completed
-            </p>
-          )}
-        </div>
-        {isOwner && (
+      <PageHeader
+        title="Savings Goals"
+        isMobile={isMobile}
+        subtitle={goals.length > 0
+          ? `${activeGoals.length} active · ${completedGoals.length} completed`
+          : false}
+        actions={isOwner ? (
           <Button onClick={() => { setShowAdd(true); setActionError('') }}>
             + New goal
           </Button>
-        )}
-      </div>
+        ) : null}
+      />
+      <div style={{ height: 22 }} />
 
       {/* Totals strip */}
       {activeGoals.length > 0 && (
         <div style={styles.totalsBar}>
-          <TotalChip label="Total saved"    value={formatCurrency(totalSaved)}   color="var(--green)" />
-          <TotalChip label="Total target"   value={formatCurrency(totalTarget)}  color="var(--muted)" />
-          <TotalChip label="Total monthly"  value={formatCurrency(totalMonthly)} color="var(--cyan)"  />
-          <TotalChip label="Still needed"   value={formatCurrency(Math.max(0, totalTarget - totalSaved))} color="var(--white)" />
+          <TotalChip label="Total saved"    value={formatCurrency(totalSaved)}   color="var(--positive)" />
+          <TotalChip label="Total target"   value={formatCurrency(totalTarget)}  color="var(--text-muted)" />
+          <TotalChip label="Total monthly"  value={formatCurrency(totalMonthly)} color="var(--info)"  />
+          <TotalChip label="Still needed"   value={formatCurrency(Math.max(0, totalTarget - totalSaved))} color="var(--text)" />
         </div>
       )}
 
-      {error && <p style={{ color: 'var(--red)', marginBottom: 16 }}>{error}</p>}
+      {error && <p style={{ color: 'var(--negative)', marginBottom: 16 }}>{error}</p>}
 
       {loading ? (
-        <p style={{ color: 'var(--muted)' }}>Loading…</p>
+        <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
       ) : goals.length === 0 ? (
         <div style={styles.empty}>
           <p style={styles.emptyTitle}>No savings goals yet</p>
           {isOwner && (
             <>
-              <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 20 }}>
+              <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 20 }}>
                 Set a target, link a savings account, and track your progress here.
               </p>
               <Button onClick={() => { setShowAdd(true); setActionError('') }}>+ Create first goal</Button>
@@ -743,14 +744,13 @@ export default function Savings() {
                     <div style={styles.accountHeader}>
                       <div>
                         <span style={styles.accountHeaderName}>{summary.account_name}</span>
-                        <span style={styles.accountHeaderMeta}>
-                          Balance: {formatCurrency(summary.balance)}
-                          {' · '}Allocated: {formatCurrency(summary.total_allocated)}
-                          {' · '}
+                        <div style={styles.accountHeaderMeta}>
+                          <span>Bal <b style={{ color: 'var(--white)' }}>{formatCurrency(summary.balance)}</b></span>
+                          <span>Alloc <b style={{ color: 'var(--white)' }}>{formatCurrency(summary.total_allocated)}</b></span>
                           <span style={{ color: summary.available > 0 ? 'var(--cyan)' : 'var(--pink)' }}>
-                            Available: {formatCurrency(summary.available)}
+                            Avail <b>{formatCurrency(summary.available)}</b>
                           </span>
-                        </span>
+                        </div>
                       </div>
                       {isOwner && summary.available > 0 && (
                         <Button size="sm" onClick={() => { setAllocating(summary); setActionError('') }}>
@@ -827,7 +827,7 @@ export default function Savings() {
       {/* Delete confirmation */}
       {deleting && (
         <Modal title="Delete goal?" onClose={() => setDeleting(null)} width={400}>
-          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+          <p style={{ color: 'var(--text)', marginBottom: 8 }}>
             <strong>{deleting.name}</strong> and all its progress will be permanently deleted.
           </p>
           {actionError && <p style={styles.modalError}>{actionError}</p>}
@@ -880,25 +880,23 @@ function TotalChip({ label, value, color }) {
 }
 
 const styles = {
-  pageHeader: {
-    display: 'flex', alignItems: 'flex-start',
-    justifyContent: 'space-between', marginBottom: 20,
-    flexWrap: 'wrap', gap: 12,
-  },
-  pageTitle:    { fontSize: 24, fontWeight: 700, color: 'var(--white)' },
-  pageSubtitle: { color: 'var(--muted)', fontSize: 14, marginTop: 4 },
   totalsBar: {
-    display: 'flex', flexWrap: 'wrap', gap: 2, marginBottom: 24,
-    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+    gap: 1,
+    marginBottom: 24,
+    background: 'var(--border)',   // the gap renders as hairline dividers
+    border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)', overflow: 'hidden',
   },
   chip: {
-    flex: '1 1 120px', display: 'flex', flexDirection: 'column',
-    gap: 3, padding: '12px 16px', borderRight: '1px solid var(--border)',
+    background: 'var(--bg-card)',
+    display: 'flex', flexDirection: 'column',
+    gap: 3, padding: '12px 16px',
   },
   chipLabel: {
     fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
-    letterSpacing: '0.05em', color: 'var(--muted)',
+    letterSpacing: '0.05em', color: 'var(--text-muted)',
   },
   grid: {
     display: 'grid',
@@ -906,56 +904,60 @@ const styles = {
     gap: 16, marginBottom: 24,
   },
   card: {
-    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)', padding: '18px 20px',
   },
   cardHeader: {
     display: 'flex', justifyContent: 'space-between',
     alignItems: 'flex-start', gap: 8,
   },
-  cardName: { fontSize: 16, fontWeight: 600, color: 'var(--white)', marginBottom: 3 },
-  accountBadge: { fontSize: 12, color: 'var(--cyan)' },
+  cardName: { fontSize: 16, fontWeight: 600, color: 'var(--text)', marginBottom: 3 },
+  accountBadge: { fontSize: 12, color: 'var(--info)' },
   statusBadge: {
     fontSize: 11, fontWeight: 600, padding: '2px 8px',
     borderRadius: 99, whiteSpace: 'nowrap',
   },
   iconBtn: {
-    background: 'none', border: 'none', color: 'var(--muted)',
+    background: 'none', border: 'none', color: 'var(--text-muted)',
     fontSize: 15, padding: '3px 5px', borderRadius: 'var(--radius)', cursor: 'pointer',
   },
   statsGrid: {
-    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
     gap: 8, marginBottom: 12,
   },
   statCell: { display: 'flex', flexDirection: 'column', gap: 3 },
-  statLabel: { fontSize: 11, color: 'var(--muted)', fontWeight: 500 },
+  statLabel: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 },
   projectionRow: {
-    display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
     gap: 8, paddingTop: 10, borderTop: '1px solid var(--border)',
   },
   projCell:  { display: 'flex', flexDirection: 'column', gap: 3 },
-  projLabel: { fontSize: 11, color: 'var(--muted)', fontWeight: 500 },
-  projValue: { fontSize: 13, fontWeight: 600, color: 'var(--white)' },
+  projLabel: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 },
+  projValue: { fontSize: 13, fontWeight: 600, color: 'var(--text)' },
   sectionHeader: {
-    fontSize: 14, fontWeight: 600, color: 'var(--muted)',
+    fontSize: 14, fontWeight: 600, color: 'var(--text-muted)',
     textTransform: 'uppercase', letterSpacing: '0.06em',
     marginBottom: 12, paddingBottom: 8, borderBottom: '1px solid var(--border)',
   },
   notes: {
-    fontSize: 12, color: 'var(--muted)', marginTop: 10,
+    fontSize: 12, color: 'var(--text-muted)', marginTop: 10,
     paddingTop: 10, borderTop: '1px solid var(--border)',
   },
   empty: { textAlign: 'center', padding: '60px 0' },
-  emptyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--white)', marginBottom: 8 },
-  modalError: { color: 'var(--red)', fontSize: 13, marginBottom: 12 },
+  emptyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--text)', marginBottom: 8 },
+  modalError: { color: 'var(--negative)', fontSize: 13, marginBottom: 12 },
   accountHeader: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     padding: '12px 16px', marginBottom: 12,
-    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)', flexWrap: 'wrap', gap: 8,
   },
-  accountHeaderName: { fontSize: 15, fontWeight: 600, color: 'var(--white)', marginRight: 12 },
-  accountHeaderMeta: { fontSize: 13, color: 'var(--muted)' },
+  accountHeaderName: { fontSize: 15, fontWeight: 600, color: 'var(--text)', marginRight: 12 },
+  accountHeaderMeta: {
+    fontSize: 13, color: 'var(--text-muted)',
+    display: 'flex', flexWrap: 'wrap', gap: '4px 14px',
+    marginTop: 4,
+  },
 }
 
 const savingsHistoryStyles = {
@@ -963,7 +965,7 @@ const savingsHistoryStyles = {
     display: 'grid', gridTemplateColumns: '120px 100px 120px 1fr',
     padding: '8px 12px', background: 'var(--bg)',
     fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
-    letterSpacing: '0.06em', color: 'var(--muted)',
+    letterSpacing: '0.06em', color: 'var(--text-muted)',
     borderBottom: '1px solid var(--border)',
   },
   row: {

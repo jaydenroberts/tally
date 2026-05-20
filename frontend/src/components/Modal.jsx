@@ -13,8 +13,15 @@ export default function Modal({ title, onClose, children, width = 480 }) {
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div
-        style={{ ...styles.dialog, width }}
+        style={{
+          ...styles.dialog,
+          width: `min(${width}px, calc(100vw - 32px))`,
+          maxWidth: '100%',
+        }}
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
       >
         <div style={styles.header}>
           <h2 style={styles.title}>{title}</h2>
@@ -41,7 +48,7 @@ const styles = {
     background: 'var(--bg-card)',
     border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)',
-    maxHeight: '90vh',
+    maxHeight: 'min(90vh, calc(100dvh - 32px))',
     overflowY: 'auto',
   },
   header: {

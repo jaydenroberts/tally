@@ -4,6 +4,8 @@ import { useAuth } from '../context/AuthContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
+import PageHeader from '../components/PageHeader'
+import useBreakpoint from '../hooks/useBreakpoint'
 
 // ─── Local settings (localStorage) ───────────────────────────────────────────
 
@@ -26,7 +28,7 @@ const ACCESS_COLORS = {
 }
 
 function AccessBadge({ level }) {
-  const color = ACCESS_COLORS[level] || 'var(--muted)'
+  const color = ACCESS_COLORS[level] || 'var(--text-muted)'
   return (
     <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99, color, background: color + '20', textTransform: 'capitalize' }}>
       {level}
@@ -63,6 +65,9 @@ function TabNav({ tabs, active, onChange }) {
       display: 'flex', gap: 2, marginBottom: 28,
       borderBottom: '1px solid var(--border)',
       overflowX: 'auto',
+      WebkitOverflowScrolling: 'touch',
+      maskImage: 'linear-gradient(to right, #000 calc(100% - 32px), transparent)',
+      WebkitMaskImage: 'linear-gradient(to right, #000 calc(100% - 32px), transparent)',
     }}>
       {tabs.map((t) => (
         <button
@@ -72,8 +77,8 @@ function TabNav({ tabs, active, onChange }) {
             background: 'none', border: 'none', cursor: 'pointer',
             padding: '10px 18px',
             fontWeight: active === t.id ? 700 : 400,
-            color:  active === t.id ? 'var(--green)' : 'var(--muted)',
-            borderBottom: active === t.id ? '2px solid var(--green)' : '2px solid transparent',
+            color:  active === t.id ? 'var(--brand)' : 'var(--text-muted)',
+            borderBottom: active === t.id ? '2px solid var(--brand)' : '2px solid transparent',
             whiteSpace: 'nowrap', fontSize: 14,
             marginBottom: -1,
           }}
@@ -115,7 +120,7 @@ function ProfileTab({ user }) {
     { label: 'Username',       value: user.username },
     user.email ? { label: 'Email', value: user.email } : null,
     { label: 'Role',           value: <RoleBadge role={user.role} /> },
-    user.persona ? { label: 'AI Persona', value: <span style={{ color: 'var(--cyan)', fontSize: 14, fontWeight: 500 }}>{user.persona.name}</span> } : null,
+    user.persona ? { label: 'AI Persona', value: <span style={{ color: 'var(--info)', fontSize: 14, fontWeight: 500 }}>{user.persona.name}</span> } : null,
     { label: 'Account status', value: <ActiveBadge active={user.is_active} /> },
   ].filter(Boolean)
 
@@ -262,8 +267,8 @@ function UserForm({ initial, roles, personas, onSave, onCancel, saving }) {
 
       {isEdit && (
         <FormField label="Status">
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--white)', fontSize: 14 }}>
-            <input type="checkbox" checked={form.is_active} onChange={set('is_active')} style={{ accentColor: 'var(--green)', width: 15, height: 15 }} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--text)', fontSize: 14 }}>
+            <input type="checkbox" checked={form.is_active} onChange={set('is_active')} style={{ accentColor: 'var(--brand)', width: 15, height: 15 }} />
             Active account
           </label>
         </FormField>
@@ -335,8 +340,8 @@ function UsersTab({ currentUser, roles, personas, onReload, onRefreshCurrentUser
     } finally { setSaving(false) }
   }
 
-  if (loading)   return <p style={{ color: 'var(--muted)' }}>Loading…</p>
-  if (loadError) return <p style={{ color: 'var(--red)' }}>{loadError}</p>
+  if (loading)   return <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
+  if (loadError) return <p style={{ color: 'var(--negative)' }}>{loadError}</p>
 
   return (
     <div>
@@ -346,7 +351,7 @@ function UsersTab({ currentUser, roles, personas, onReload, onRefreshCurrentUser
 
       <div style={styles.card}>
         {users.length === 0 && (
-          <p style={{ color: 'var(--muted)', padding: '8px 0' }}>No users found.</p>
+          <p style={{ color: 'var(--text-muted)', padding: '8px 0' }}>No users found.</p>
         )}
         {users.map((u, i) => (
           <div
@@ -365,14 +370,14 @@ function UsersTab({ currentUser, roles, personas, onReload, onRefreshCurrentUser
 
             {/* Name & email */}
             <div style={{ flex: 1, minWidth: 100 }}>
-              <p style={{ fontWeight: 600, color: u.is_active ? 'var(--white)' : 'var(--muted)', fontSize: 14 }}>
+              <p style={{ fontWeight: 600, color: u.is_active ? 'var(--text)' : 'var(--text-muted)', fontSize: 14 }}>
                 {u.username}
                 {u.id === currentUser.id && (
-                  <span style={{ fontSize: 11, color: 'var(--cyan)', marginLeft: 6 }}>(you)</span>
+                  <span style={{ fontSize: 11, color: 'var(--info)', marginLeft: 6 }}>(you)</span>
                 )}
               </p>
               {u.email && (
-                <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{u.email}</p>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{u.email}</p>
               )}
             </div>
 
@@ -396,7 +401,7 @@ function UsersTab({ currentUser, roles, personas, onReload, onRefreshCurrentUser
               >✎</button>
               {u.id !== currentUser.id && (
                 <button
-                  style={{ ...styles.iconBtn, color: 'var(--red)' }}
+                  style={{ ...styles.iconBtn, color: 'var(--negative)' }}
                   onClick={() => { setDeleting(u); setActionError('') }}
                   title="Delete user"
                 >✕</button>
@@ -435,10 +440,10 @@ function UsersTab({ currentUser, roles, personas, onReload, onRefreshCurrentUser
 
       {deleting && (
         <Modal title="Delete user?" onClose={() => setDeleting(null)} width={400}>
-          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+          <p style={{ color: 'var(--text)', marginBottom: 8 }}>
             Permanently delete <strong>{deleting.username}</strong>?
           </p>
-          <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
             Consider deactivating the account instead to preserve history.
           </p>
           {actionError && <p style={styles.errorMsg}>{actionError}</p>}
@@ -513,12 +518,12 @@ function PersonaForm({ initial, onSave, onCancel, saving }) {
         </FormField>
 
         <FormField label="Permissions">
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--white)', fontSize: 14, paddingTop: 10 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--text)', fontSize: 14, paddingTop: 10 }}>
             <input
               type="checkbox"
               checked={form.can_modify_data}
               onChange={set('can_modify_data')}
-              style={{ accentColor: 'var(--green)', width: 15, height: 15 }}
+              style={{ accentColor: 'var(--brand)', width: 15, height: 15 }}
             />
             Can modify data
           </label>
@@ -557,7 +562,7 @@ function PersonaForm({ initial, onSave, onCancel, saving }) {
 // ─── Persona card ─────────────────────────────────────────────────────────────
 
 function PersonaCard({ persona, onEdit, onDelete, isOwner }) {
-  const accessColor = ACCESS_COLORS[persona.data_access_level] || 'var(--muted)'
+  const accessColor = ACCESS_COLORS[persona.data_access_level] || 'var(--text-muted)'
   const [showMemory, setShowMemory] = useState(false)
 
   return (
@@ -566,21 +571,21 @@ function PersonaCard({ persona, onEdit, onDelete, isOwner }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
-            <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--white)' }}>{persona.name}</p>
+            <p style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{persona.name}</p>
             {persona.is_system && (
-              <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 99, color: 'var(--muted)', background: 'var(--border)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 99, color: 'var(--text-muted)', background: 'var(--border)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
                 system
               </span>
             )}
           </div>
           {persona.description && (
-            <p style={{ fontSize: 13, color: 'var(--muted)' }}>{persona.description}</p>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>{persona.description}</p>
           )}
         </div>
         <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
           <button style={styles.iconBtn} onClick={onEdit} title="Edit persona">✎</button>
           {!persona.is_system && (
-            <button style={{ ...styles.iconBtn, color: 'var(--red)' }} onClick={onDelete} title="Delete persona">✕</button>
+            <button style={{ ...styles.iconBtn, color: 'var(--negative)' }} onClick={onDelete} title="Delete persona">✕</button>
           )}
         </div>
       </div>
@@ -600,7 +605,7 @@ function PersonaCard({ persona, onEdit, onDelete, isOwner }) {
       {/* System prompt preview */}
       {persona.system_prompt && (
         <p style={{
-          fontSize: 12, color: 'var(--muted)', lineHeight: 1.5,
+          fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5,
           padding: '8px 10px', background: 'var(--bg)',
           borderRadius: 'var(--radius)', fontFamily: 'monospace',
           maxHeight: 72, overflow: 'hidden',
@@ -612,7 +617,7 @@ function PersonaCard({ persona, onEdit, onDelete, isOwner }) {
 
       {/* Tone notes */}
       {persona.tone_notes && (
-        <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8, fontStyle: 'italic' }}>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8, fontStyle: 'italic' }}>
           "{persona.tone_notes}"
         </p>
       )}
@@ -624,7 +629,7 @@ function PersonaCard({ persona, onEdit, onDelete, isOwner }) {
             onClick={() => setShowMemory((v) => !v)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer',
-              color: 'var(--purple)', fontSize: 13, fontWeight: 600,
+              color: 'var(--brand)', fontSize: 13, fontWeight: 600,
               padding: 0,
             }}
           >
@@ -644,9 +649,9 @@ function estimateTokens(charCount) {
 }
 
 function tokenColor(tokens) {
-  if (tokens > 25000) return 'var(--red)'
-  if (tokens > 10000) return 'var(--orange)'
-  return 'var(--muted)'
+  if (tokens > 25000) return 'var(--negative)'
+  if (tokens > 10000) return 'var(--warning)'
+  return 'var(--text-muted)'
 }
 
 // ─── Memory Files section ────────────────────────────────────────────────────
@@ -752,15 +757,15 @@ function MemoryFilesSection({ personaId }) {
     } finally { setSaving(false) }
   }
 
-  if (loading) return <p style={{ color: 'var(--muted)', fontSize: 13 }}>Loading memory files…</p>
-  if (loadError) return <p style={{ color: 'var(--red)', fontSize: 13 }}>{loadError}</p>
+  if (loading) return <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading memory files…</p>
+  if (loadError) return <p style={{ color: 'var(--negative)', fontSize: 13 }}>{loadError}</p>
 
   const isFormOpen = showAdd || editing
 
   return (
     <div style={{ marginTop: 20 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--purple)' }}>Memory Files</p>
+        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--brand)' }}>Memory Files</p>
         {!isFormOpen && (
           <Button size="sm" onClick={openAdd}>+ Add file</Button>
         )}
@@ -786,7 +791,7 @@ function MemoryFilesSection({ personaId }) {
 
       {/* File list */}
       {files.length === 0 && !isFormOpen && (
-        <p style={{ color: 'var(--muted)', fontSize: 13 }}>
+        <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
           No memory files yet. Add persistent context that will be included in every AI conversation.
         </p>
       )}
@@ -803,7 +808,7 @@ function MemoryFilesSection({ personaId }) {
         >
           {/* Order badge */}
           <span style={{
-            fontSize: 11, fontWeight: 700, color: 'var(--muted)',
+            fontSize: 11, fontWeight: 700, color: 'var(--text-muted)',
             background: 'var(--bg)', padding: '2px 6px', borderRadius: 4,
             minWidth: 24, textAlign: 'center', flexShrink: 0,
           }}>
@@ -812,11 +817,11 @@ function MemoryFilesSection({ personaId }) {
 
           {/* File info */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--white)' }}>{mf.filename}</p>
+            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{mf.filename}</p>
             {mf.description && (
-              <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{mf.description}</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{mf.description}</p>
             )}
-            <p style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
               {(mf.content || '').length.toLocaleString()} chars{' · ~'}{estimateTokens((mf.content || '').length).toLocaleString()} tokens
             </p>
           </div>
@@ -828,12 +833,12 @@ function MemoryFilesSection({ personaId }) {
                 type="checkbox"
                 checked={mf.is_active}
                 onChange={() => handleToggleActive(mf)}
-                style={{ accentColor: 'var(--green)', width: 14, height: 14 }}
+                style={{ accentColor: 'var(--brand)', width: 14, height: 14 }}
               />
             </label>
             <button style={styles.iconBtn} onClick={() => openEdit(mf)} title="Edit">✎</button>
             <button
-              style={{ ...styles.iconBtn, color: 'var(--red)' }}
+              style={{ ...styles.iconBtn, color: 'var(--negative)' }}
               onClick={() => { setDeleting(mf); setActionError('') }}
               title="Delete"
             >✕</button>
@@ -843,8 +848,8 @@ function MemoryFilesSection({ personaId }) {
 
       {/* Add/Edit form */}
       {isFormOpen && (
-        <div style={{ ...styles.card, marginTop: 12, borderLeft: '3px solid var(--purple)' }}>
-          <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--white)', marginBottom: 12 }}>
+        <div style={{ ...styles.card, marginTop: 12, borderLeft: '3px solid var(--brand)' }}>
+          <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
             {editing ? `Edit — ${editing.filename}` : 'New Memory File'}
           </p>
           {actionError && <p style={styles.errorMsg}>{actionError}</p>}
@@ -890,16 +895,16 @@ function MemoryFilesSection({ personaId }) {
             </FormField>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--white)', fontSize: 14 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--text)', fontSize: 14 }}>
                 <input
                   type="checkbox"
                   checked={form.is_active}
                   onChange={(e) => setForm((f) => ({ ...f, is_active: e.target.checked }))}
-                  style={{ accentColor: 'var(--green)', width: 15, height: 15 }}
+                  style={{ accentColor: 'var(--brand)', width: 15, height: 15 }}
                 />
                 Active
               </label>
-              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                 {(form.content || '').length.toLocaleString()} / 50,000 chars
               </span>
             </div>
@@ -919,10 +924,10 @@ function MemoryFilesSection({ personaId }) {
       {/* Delete confirmation */}
       {deleting && (
         <Modal title="Delete memory file?" onClose={() => setDeleting(null)} width={400}>
-          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+          <p style={{ color: 'var(--text)', marginBottom: 8 }}>
             Delete <strong>{deleting.filename}</strong>?
           </p>
-          <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
             This context will no longer be included in AI conversations.
           </p>
           {actionError && <p style={styles.errorMsg}>{actionError}</p>}
@@ -1016,10 +1021,10 @@ function PersonasTab({ personas, onReload, isOwner }) {
 
       {deleting && (
         <Modal title="Delete persona?" onClose={() => setDeleting(null)} width={400}>
-          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+          <p style={{ color: 'var(--text)', marginBottom: 8 }}>
             Delete <strong>{deleting.name}</strong>?
           </p>
-          <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
             Any users assigned this persona will have it removed.
           </p>
           {actionError && <p style={styles.errorMsg}>{actionError}</p>}
@@ -1121,8 +1126,8 @@ function CategoriesTab() {
     } finally { setDeleteSaving(false) }
   }
 
-  if (loading)   return <p style={{ color: 'var(--muted)' }}>Loading…</p>
-  if (loadError) return <p style={{ color: 'var(--red)' }}>{loadError}</p>
+  if (loading)   return <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
+  if (loadError) return <p style={{ color: 'var(--negative)' }}>{loadError}</p>
 
   const userCategories   = categories.filter((c) => !c.is_system)
   const systemCategories = categories.filter((c) =>  c.is_system)
@@ -1157,7 +1162,7 @@ function CategoriesTab() {
       <div style={{ ...styles.card, marginTop: 16 }}>
         <p style={styles.sectionTitle}>Custom Categories</p>
         {userCategories.length === 0 && (
-          <p style={{ color: 'var(--muted)', fontSize: 13 }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
             No custom categories yet. Add one above.
           </p>
         )}
@@ -1192,13 +1197,13 @@ function CategoriesTab() {
                     Cancel
                   </Button>
                   {renameError[cat.id] && (
-                    <span style={{ color: 'var(--red)', fontSize: 12 }}>{renameError[cat.id]}</span>
+                    <span style={{ color: 'var(--negative)', fontSize: 12 }}>{renameError[cat.id]}</span>
                   )}
                 </div>
               ) : (
                 /* Display row */
                 <>
-                  <span style={{ flex: 1, fontSize: 14, color: 'var(--white)' }}>{cat.name}</span>
+                  <span style={{ flex: 1, fontSize: 14, color: 'var(--text)' }}>{cat.name}</span>
                   <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
                     <button
                       style={styles.iconBtn}
@@ -1206,7 +1211,7 @@ function CategoriesTab() {
                       title="Rename"
                     >✎</button>
                     <button
-                      style={{ ...styles.iconBtn, color: 'var(--red)' }}
+                      style={{ ...styles.iconBtn, color: 'var(--negative)' }}
                       onClick={() => { setDeleting(cat); setDeleteError('') }}
                       title="Delete"
                     >✕</button>
@@ -1221,7 +1226,7 @@ function CategoriesTab() {
       {/* System categories — read-only reference */}
       <div style={{ ...styles.card, marginTop: 16 }}>
         <p style={styles.sectionTitle}>System Categories</p>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
           Built-in categories shared across all users. These cannot be renamed or deleted.
         </p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -1230,7 +1235,7 @@ function CategoriesTab() {
               key={cat.id}
               style={{
                 fontSize: 12, padding: '4px 10px', borderRadius: 99,
-                background: 'var(--border)', color: 'var(--muted)',
+                background: 'var(--border)', color: 'var(--text-muted)',
               }}
             >
               {cat.name}
@@ -1242,10 +1247,10 @@ function CategoriesTab() {
       {/* Delete confirmation modal */}
       {deleting && (
         <Modal title="Delete category?" onClose={() => setDeleting(null)} width={400}>
-          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+          <p style={{ color: 'var(--text)', marginBottom: 8 }}>
             Delete <strong>{deleting.name}</strong>?
           </p>
-          <p style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 16 }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
             Any transactions, budgets, or recurring entries using this category will be uncategorised.
             Your transaction history is preserved — nothing is deleted.
           </p>
@@ -1274,7 +1279,8 @@ const TIMEZONES = [
   'Europe/Amsterdam','Europe/Zurich','Europe/Stockholm','Europe/Warsaw',
   'Asia/Dubai','Asia/Karachi','Asia/Kolkata','Asia/Singapore','Asia/Tokyo',
   'Asia/Hong_Kong','Asia/Seoul',
-  'Australia/Sydney','Australia/Melbourne',
+  'Australia/Sydney','Australia/Melbourne','Australia/Brisbane','Australia/Adelaide',
+  'Australia/Darwin','Australia/Perth','Australia/Hobart',
   'Pacific/Auckland',
 ]
 
@@ -1328,7 +1334,7 @@ function GeneralTab({ roles }) {
       {/* App preferences */}
       <div style={styles.card}>
         <p style={styles.sectionTitle}>App Preferences</p>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
           Stored locally in your browser. Each device maintains its own preferences.
         </p>
         <form onSubmit={handleSavePrefs}>
@@ -1349,7 +1355,7 @@ function GeneralTab({ roles }) {
           </FormField>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
             <Button type="submit">Save preferences</Button>
-            {prefSaved && <span style={{ color: 'var(--green)', fontSize: 13 }}>Saved ✓</span>}
+            {prefSaved && <span style={{ color: 'var(--positive)', fontSize: 13 }}>Saved ✓</span>}
           </div>
         </form>
       </div>
@@ -1357,7 +1363,7 @@ function GeneralTab({ roles }) {
       {/* Role display names */}
       <div style={{ ...styles.card, marginTop: 16 }}>
         <p style={styles.sectionTitle}>Role Display Names</p>
-        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 16 }}>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
           Rename how roles appear in the UI. The internal slugs ("owner", "viewer") are used
           for access control and never change.
         </p>
@@ -1383,7 +1389,7 @@ function GeneralTab({ roles }) {
               <p style={{ ...styles.errorMsg, marginTop: 4 }}>{roleError[r.id]}</p>
             )}
             {roleSaved[r.id] && (
-              <p style={{ color: 'var(--green)', fontSize: 13, marginTop: 4 }}>Saved ✓</p>
+              <p style={{ color: 'var(--positive)', fontSize: 13, marginTop: 4 }}>Saved ✓</p>
             )}
           </div>
         ))}
@@ -1396,6 +1402,7 @@ function GeneralTab({ roles }) {
 
 export default function Settings() {
   const { user, isOwner, refreshUser } = useAuth()
+  const { isMobile } = useBreakpoint()
 
   const [tab, setTab]           = useState('profile')
   const [roles, setRoles]       = useState([])
@@ -1424,13 +1431,11 @@ export default function Settings() {
     ] : []),
   ]
 
-  if (loading) return <p style={{ color: 'var(--muted)' }}>Loading…</p>
+  if (loading) return <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
 
   return (
     <div>
-      <div style={styles.pageHeader}>
-        <h1 style={styles.pageTitle}>Settings</h1>
-      </div>
+      <PageHeader title="Settings" isMobile={isMobile} />
 
       <TabNav tabs={tabs} active={tab} onChange={setTab} />
 
@@ -1466,30 +1471,24 @@ export default function Settings() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = {
-  pageHeader: {
-    display: 'flex', alignItems: 'center',
-    justifyContent: 'space-between', marginBottom: 20,
-  },
-  pageTitle: { fontSize: 24, fontWeight: 700, color: 'var(--white)' },
-
   card: {
-    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)', padding: '18px 20px',
   },
-  sectionTitle: { fontSize: 15, fontWeight: 600, color: 'var(--white)', marginBottom: 14 },
+  sectionTitle: { fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 14 },
 
-  infoLabel: { fontSize: 13, color: 'var(--muted)', width: 130, flexShrink: 0 },
-  infoValue: { fontSize: 14, color: 'var(--white)' },
+  infoLabel: { fontSize: 13, color: 'var(--text-muted)', width: 130, flexShrink: 0 },
+  infoValue: { fontSize: 14, color: 'var(--text)' },
 
   avatar: {
     width: 36, height: 36, borderRadius: '50%',
-    background: 'var(--border)', color: 'var(--white)',
+    background: 'var(--border)', color: 'var(--text)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontWeight: 700, fontSize: 14, flexShrink: 0,
   },
 
   iconBtn: {
-    background: 'none', border: 'none', color: 'var(--muted)',
+    background: 'none', border: 'none', color: 'var(--text-muted)',
     fontSize: 15, padding: '3px 5px', borderRadius: 'var(--radius)', cursor: 'pointer',
   },
 
@@ -1499,6 +1498,6 @@ const styles = {
     gap: 16,
   },
 
-  errorMsg:   { color: 'var(--red)',   fontSize: 13, marginBottom: 12 },
-  successMsg: { color: 'var(--green)', fontSize: 13, marginBottom: 12 },
+  errorMsg:   { color: 'var(--negative)',   fontSize: 13, marginBottom: 12 },
+  successMsg: { color: 'var(--positive)', fontSize: 13, marginBottom: 12 },
 }

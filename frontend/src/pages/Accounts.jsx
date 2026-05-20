@@ -5,18 +5,20 @@ import { useCurrency } from '../context/CurrencyContext'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
+import PageHeader from '../components/PageHeader'
+import useBreakpoint from '../hooks/useBreakpoint'
 
 const ACCOUNT_TYPES = ['checking', 'savings', 'credit', 'investment', 'loan', 'other']
 
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CHF', 'NZD']
 
 const TYPE_COLORS = {
-  checking:   'var(--cyan)',
-  savings:    'var(--green)',
-  credit:     'var(--pink)',
-  investment: 'var(--orange)',
-  loan:       'var(--red)',
-  other:      'var(--muted)',
+  checking:   'var(--info)',
+  savings:    'var(--positive)',
+  credit:     'var(--accent)',
+  investment: 'var(--warning)',
+  loan:       'var(--negative)',
+  other:      'var(--text-muted)',
 }
 
 function AccountForm({ initial, onSave, onCancel, saving }) {
@@ -89,6 +91,7 @@ function AccountForm({ initial, onSave, onCancel, saving }) {
 export default function Accounts() {
   const { isOwner } = useAuth()
   const { formatCurrency } = useCurrency()
+  const { isMobile } = useBreakpoint()
   const [accounts, setAccounts] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -189,24 +192,29 @@ export default function Accounts() {
   return (
     <div>
       {/* Page header */}
-      <div style={styles.pageHeader}>
-        <div>
-          <h1 style={styles.pageTitle}>Accounts</h1>
-          <p style={styles.pageSubtitle}>
-            {accounts.length} account{accounts.length !== 1 ? 's' : ''}
+      <PageHeader
+        title="Accounts"
+        isMobile={isMobile}
+        subtitle={<>
+          {accounts.length} account{accounts.length !== 1 ? 's' : ''}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
             {Object.entries(totalByCurrency).map(([cur, total]) => (
-              <span key={cur} style={{ marginLeft: 16, color: total >= 0 ? 'var(--green)' : 'var(--red)' }}>
+              <span key={cur} style={{
+                fontSize: 12, padding: '3px 9px', borderRadius: 99,
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                color: total >= 0 ? 'var(--positive)' : 'var(--negative)',
+              }}>
                 {formatCurrency(total, cur)}
               </span>
             ))}
-          </p>
-        </div>
-        {isOwner && (
+          </div>
+        </>}
+        actions={isOwner ? (
           <Button onClick={() => { setShowAdd(true); setActionError('') }}>
             + Add account
           </Button>
-        )}
-      </div>
+        ) : null}
+      />
 
       {error && <p style={styles.errorMsg}>{error}</p>}
 
@@ -262,7 +270,7 @@ export default function Accounts() {
       {/* Close confirmation */}
       {closing && (
         <Modal title="Close account?" onClose={() => setClosing(null)} width={400}>
-          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+          <p style={{ color: 'var(--text)', marginBottom: 8 }}>
             <strong>{closing.name}</strong> will be moved to "Closed accounts".
             Transactions are preserved and the account remains visible for historical reports.
           </p>
@@ -300,7 +308,7 @@ export default function Accounts() {
       {/* Delete confirmation */}
       {deleting && (
         <Modal title="Delete account?" onClose={() => setDeleting(null)} width={400}>
-          <p style={{ color: 'var(--white)', marginBottom: 8 }}>
+          <p style={{ color: 'var(--text)', marginBottom: 8 }}>
             <strong>{deleting.name}</strong> will be hidden from all views.
             Transactions will be preserved.
           </p>
@@ -319,7 +327,7 @@ export default function Accounts() {
 
 function AccountCard({ account, isOwner, onEdit, onDelete, onClose, closed, onReopen }) {
   const { formatCurrency } = useCurrency()
-  const typeColor = TYPE_COLORS[account.account_type] ?? 'var(--muted)'
+  const typeColor = TYPE_COLORS[account.account_type] ?? 'var(--text-muted)'
   return (
     <div style={{ ...styles.card, borderTop: `3px solid ${typeColor}` }}>
       <div style={styles.cardTop}>
@@ -333,7 +341,7 @@ function AccountCard({ account, isOwner, onEdit, onDelete, onClose, closed, onRe
               {account.account_type ?? 'Account'}
             </span>
             {account.institution && (
-              <span style={{ color: 'var(--muted)' }}> · {account.institution}</span>
+              <span style={{ color: 'var(--text-muted)' }}> · {account.institution}</span>
             )}
           </p>
         </div>
@@ -341,18 +349,18 @@ function AccountCard({ account, isOwner, onEdit, onDelete, onClose, closed, onRe
           <div style={styles.cardActions}>
             <button style={styles.iconBtn} onClick={onEdit} title="Edit">✎</button>
             <button style={styles.iconBtn} onClick={onClose} title="Close account">⏻</button>
-            <button style={{ ...styles.iconBtn, color: 'var(--red)' }} onClick={onDelete} title="Delete">✕</button>
+            <button style={{ ...styles.iconBtn, color: 'var(--negative)' }} onClick={onDelete} title="Delete">✕</button>
           </div>
         )}
         {isOwner && closed && (
           <div style={styles.cardActions}>
-            <button style={{ ...styles.iconBtn, color: 'var(--green)' }} onClick={onReopen} title="Reopen account">↺</button>
+            <button style={{ ...styles.iconBtn, color: 'var(--positive)' }} onClick={onReopen} title="Reopen account">↺</button>
           </div>
         )}
       </div>
       <p style={{
         ...styles.cardBalance,
-        color: account.balance >= 0 ? 'var(--green)' : 'var(--red)',
+        color: account.balance >= 0 ? 'var(--positive)' : 'var(--negative)',
       }}>
         {formatCurrency(account.balance, account.currency)}
       </p>
@@ -364,30 +372,13 @@ function AccountCard({ account, isOwner, onEdit, onDelete, onClose, closed, onRe
 }
 
 const styles = {
-  pageHeader: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginBottom: 28,
-    gap: 16,
-  },
-  pageTitle: {
-    fontSize: 24,
-    fontWeight: 700,
-    color: 'var(--white)',
-  },
-  pageSubtitle: {
-    color: 'var(--muted)',
-    fontSize: 14,
-    marginTop: 4,
-  },
   errorMsg: {
-    color: 'var(--red)',
+    color: 'var(--negative)',
     marginBottom: 16,
     fontSize: 14,
   },
   muted: {
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
     fontSize: 14,
   },
   empty: {
@@ -397,7 +388,7 @@ const styles = {
   emptyTitle: {
     fontSize: 18,
     fontWeight: 600,
-    color: 'var(--white)',
+    color: 'var(--text)',
     marginBottom: 8,
   },
   grid: {
@@ -406,7 +397,7 @@ const styles = {
     gap: 16,
   },
   card: {
-    background: 'var(--bg-card)',
+    background: 'var(--bg-elevated)',
     border: '1px solid var(--border)',
     borderRadius: 'var(--radius-lg)',
     padding: '20px 22px',
@@ -420,8 +411,9 @@ const styles = {
   cardName: {
     fontSize: 16,
     fontWeight: 600,
-    color: 'var(--white)',
+    color: 'var(--text)',
     marginBottom: 4,
+    paddingRight: 88,
   },
   cardMeta: {
     fontSize: 13,
@@ -433,7 +425,7 @@ const styles = {
   iconBtn: {
     background: 'none',
     border: 'none',
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
     fontSize: 15,
     padding: '4px 6px',
     borderRadius: 'var(--radius)',
@@ -446,20 +438,20 @@ const styles = {
   },
   cardNotes: {
     fontSize: 12,
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
     marginTop: 8,
     paddingTop: 8,
     borderTop: '1px solid var(--border)',
   },
   modalError: {
-    color: 'var(--red)',
+    color: 'var(--negative)',
     fontSize: 13,
     marginBottom: 12,
   },
   closedToggle: {
     background: 'none',
     border: 'none',
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
     fontSize: 14,
     cursor: 'pointer',
     padding: '4px 0',
@@ -472,7 +464,7 @@ const styles = {
     padding: '2px 8px',
     borderRadius: 99,
     background: 'var(--border)',
-    color: 'var(--muted)',
+    color: 'var(--text-muted)',
     marginLeft: 8,
     verticalAlign: 'middle',
   },

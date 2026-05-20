@@ -1,0 +1,288 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Tally — Mobile Fixes
+ * Supplementary stylesheet for dev branch. Append to the END of `frontend/src/index.css`
+ * (or import after it). Every rule here is namespaced so it cannot regress desktop.
+ *
+ * Covers:
+ *   1. iOS Safari viewport / URL-bar shimmer
+ *   2. Input zoom on focus
+ *   3. Tap-highlight flash
+ *   4. Safe-area insets (notch + home indicator)
+ *   5. Horizontal-overflow guards (the "won't fit / not centred" symptom)
+ *   6. Card / grid responsiveness below 700px
+ *   7. SVG chart fluidity
+ *   8. Drawer GPU compositing
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+
+/* ── 1. Viewport + iOS quirks ─────────────────────────────────────────────── */
+
+html {
+  /* Prevent iOS auto-resizing text on orientation change */
+  -webkit-text-size-adjust: 100%;
+          text-size-adjust: 100%;
+}
+
+body {
+  /* Stop horizontal rubber-band when a child accidentally overflows */
+  overflow-x: hidden;
+  /* Long bank descriptions / filenames break cleanly instead of forcing scroll */
+  overflow-wrap: anywhere;
+  /* Kill the grey/blue tap flash on every clickable element */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The shell currently uses height: 100vh which is broken on iOS (URL bar).
+   Override via class selector so we don't have to edit the inline style.  */
+.app-shell,
+[data-app-shell] {
+  height: 100dvh !important;
+  min-height: 100vh; /* fallback for browsers without dvh */
+}
+
+
+/* ── 2. Inputs ≥ 16px so iOS Safari doesn't force-zoom on focus ──────────── */
+
+@media (max-width: 768px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+
+/* ── 3. Safe-area insets for notched devices ─────────────────────────────── */
+
+@supports (padding: max(0px)) {
+  .fab {
+    bottom: max(24px, env(safe-area-inset-bottom));
+    right:  max(24px, env(safe-area-inset-right));
+  }
+
+  .app-topbar {
+    padding-top: env(safe-area-inset-top);
+    /* Default mobile topbar is 56px; grow by the inset so content isn't behind the notch */
+    height: calc(56px + env(safe-area-inset-top)) !important;
+  }
+
+  /* When topbar grows, content padding-top must grow too */
+  @media (max-width: 768px) {
+    .app-main {
+      padding-top: calc(72px + env(safe-area-inset-top)) !important;
+      padding-bottom: max(16px, env(safe-area-inset-bottom)) !important;
+      padding-left:   max(16px, env(safe-area-inset-left))  !important;
+      padding-right:  max(16px, env(safe-area-inset-right)) !important;
+    }
+  }
+}
+
+
+/* ── 4. Horizontal-overflow guards ───────────────────────────────────────── */
+
+/* Any scroll container with this class becomes momentum-scrollable */
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.scroll-x::-webkit-scrollbar { display: none; }
+
+/* Universal: keep page-level cards from poking past the viewport */
+@media (max-width: 768px) {
+  .card,
+  [data-card] {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+
+/* ── 5. Grid collapse: every page-level stats grid stacks to 2 cols, then 1 ─ */
+
+@media (max-width: 700px) {
+  /* Stats rows — Dashboard, Debt, Savings, Budgets all use these patterns.
+     We target the inline-style values directly via attribute selectors as a
+     defensive net. Page patches (see responsive-patches.md) do this cleanly,
+     but these rules cover anything we miss.                                  */
+  [style*="repeat(4, 1fr)"]:not(.no-mobile-collapse),
+  [style*="repeat(4,1fr)"]:not(.no-mobile-collapse) {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  [style*="repeat(3, 1fr)"]:not(.no-mobile-collapse),
+  [style*="repeat(3,1fr)"]:not(.no-mobile-collapse) {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+@media (max-width: 480px) {
+  /* repeat(N, 1fr) syntax */
+  [style*="repeat(4, 1fr)"]:not(.no-mobile-collapse),
+  [style*="repeat(4,1fr)"]:not(.no-mobile-collapse),
+  [style*="repeat(3, 1fr)"]:not(.no-mobile-collapse),
+  [style*="repeat(3,1fr)"]:not(.no-mobile-collapse),
+  [style*="repeat(2, 1fr)"]:not(.no-mobile-collapse),
+  [style*="repeat(2,1fr)"]:not(.no-mobile-collapse),
+  /* Literal '1fr 1fr ...' string syntax used by inline forms */
+  [style*="'1fr 1fr 1fr 1fr'"]:not(.no-mobile-collapse),
+  [style*='"1fr 1fr 1fr 1fr"']:not(.no-mobile-collapse),
+  [style*="'1fr 1fr 1fr'"]:not(.no-mobile-collapse),
+  [style*='"1fr 1fr 1fr"']:not(.no-mobile-collapse),
+  [style*="'1fr 1fr'"]:not(.no-mobile-collapse),
+  [style*='"1fr 1fr"']:not(.no-mobile-collapse) {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ── Dialog / Modal safety net ───────────────────────────────────────────── */
+
+/* Belt-and-braces for any Modal still rendering with a hardcoded width.
+   Patches/§15 fixes the root cause in Modal.jsx; this catches edge cases. */
+[role="dialog"],
+.modal {
+  max-width: calc(100vw - 32px) !important;
+}
+@media (max-width: 600px) {
+  [role="dialog"],
+  .modal {
+    width: calc(100vw - 24px) !important;
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+  }
+}
+
+/* Page header rows: title + action buttons in flex-row → wrap on mobile */
+@media (max-width: 600px) {
+  .page-header,
+  [data-page-header] {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 12px !important;
+  }
+  .page-header > *,
+  [data-page-header] > * {
+    width: 100%;
+  }
+  .page-header .actions,
+  [data-page-header] [data-actions] {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+  }
+}
+
+
+/* ── 6. SVG chart fluidity ───────────────────────────────────────────────── */
+
+/* Any SVG inside a chart wrapper becomes 100% wide and scales by viewBox.
+   Pair this with: add class="chart-svg" to charts, or wrap them in .chart.    */
+.chart-svg,
+.chart svg,
+[data-chart] svg {
+  width: 100%   !important;
+  height: auto  !important;
+  max-width: 100%;
+  display: block;
+}
+
+/* Donut / radial charts that should stay square — let them shrink but cap size */
+.chart-donut svg,
+[data-chart="donut"] svg {
+  width: 100%   !important;
+  height: auto  !important;
+  max-width: 220px;
+  margin-inline: auto;
+}
+
+
+/* ── 7. Chart-card layout: donut beside stats → stack on mobile ──────────── */
+
+@media (max-width: 700px) {
+  .chart-row,
+  [data-chart-row] {
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
+    text-align: center;
+  }
+  .chart-row > *,
+  [data-chart-row] > * {
+    justify-self: center;
+  }
+}
+
+
+/* ── 8. Drawer compositing (smoother slide-in on mobile) ─────────────────── */
+
+.app-drawer {
+  will-change: transform;
+  /* Force a GPU layer; many Androids skip layer-promotion on plain translateX */
+  transform: translate3d(-100%, 0, 0);
+}
+.app-drawer[aria-hidden="false"] {
+  transform: translate3d(0, 0, 0);
+}
+
+
+/* ── 9. Tables → readable on mobile ──────────────────────────────────────── */
+
+/* Wrap any wide grid table in .table-scroll to get a horizontal scroller
+   instead of overlapping cells. Cleanest fix until we redesign as cards.     */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  /* Soft fade hint that there's more content right */
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+
+/* Transactions table → card layout on mobile */
+@media (max-width: 700px) {
+  .tx-table-header {
+    display: none !important;
+  }
+  .tx-table-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+    padding: 12px 16px !important;
+    align-items: stretch !important;
+  }
+  .tx-table-row > * {
+    grid-column: unset !important;
+  }
+  .tx-row-amount {
+    align-self: flex-end;
+  }
+  /* Cards don't need the horizontal-scroll fade hint */
+  .table-scroll {
+    mask-image: none !important;
+    overflow-x: visible !important;
+  }
+}
+
+/* (Modal safety-net moved into § 5 alongside the grid-collapse rules) */
+
+
+/* ── 10. ImportHistory → card layout on mobile (§12b) ───────────────────── */
+
+@media (max-width: 700px) {
+  .ih-table-header { display: none !important; }
+  .ih-table-row {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 6px !important;
+    padding: 14px 16px !important;
+  }
+  .ih-table-row > div {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+  .ih-table-row .filename {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }
+}

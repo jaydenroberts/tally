@@ -12,6 +12,7 @@ import Savings from './pages/Savings'
 import Debt from './pages/Debt'
 import Recurring from './pages/Recurring'
 import ImportHistory from './pages/ImportHistory'
+import ImportWizard from './pages/ImportWizard'
 import Settings from './pages/Settings'
 import Chat from './pages/Chat'
 
@@ -101,6 +102,15 @@ export default function App() {
             element={
               <ProtectedRoute ownerOnly>
                 <Layout><ImportHistory /></Layout>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/import"
+            element={
+              <ProtectedRoute ownerOnly>
+                <Layout><ImportWizard /></Layout>
               </ProtectedRoute>
             }
           />

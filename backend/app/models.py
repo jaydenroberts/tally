@@ -1,7 +1,7 @@
 from datetime import datetime, date as date_type
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Float, ForeignKey,
-    Integer, String, Text, UniqueConstraint,
+    Integer, JSON, Numeric, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -196,12 +196,15 @@ class Transaction(Base):
     # Groups a transfer pair: both debit and credit transactions share the same value
     # (set to the debit transaction's id). Plain integer — not a FK.
     transfer_pair_id = Column(Integer, nullable=True, index=True)
+    # Set when this transaction was created by the staged-import wizard (import_drafts).
+    import_id = Column(Integer, ForeignKey("import_drafts.id"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     account = relationship("Account", back_populates="transactions")
     category = relationship("Category", back_populates="transactions")
     import_log = relationship("ImportLog", back_populates="transactions")
+    import_draft = relationship("ImportDraft", back_populates="transactions", foreign_keys=[import_id])
     savings_goal = relationship("SavingsGoal", backref="withdrawal_transactions")
     debt = relationship("Debt", backref="payment_transactions")
 
@@ -387,3 +390,58 @@ class ImportLog(Base):
 
     user = relationship("User", back_populates="import_logs")
     transactions = relationship("Transaction", back_populates="import_log")
+
+
+# ---------------------------------------------------------------------------
+# Import Drafts  (staged-import wizard — v1.4.0)
+# ---------------------------------------------------------------------------
+
+class ImportDraft(Base):
+    """
+    Staging area for a CSV upload before the user commits.
+    Status flow: preview_ready → committing → committed → rolled_back | cancelled
+    Expires after DRAFT_TTL_HOURS (default 24h); M-009b cancels expired drafts on boot.
+    """
+    __tablename__ = "import_drafts"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    user_id        = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id     = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    filename       = Column(String(255), nullable=False)     # sanitised at ingest (BASTION-11)
+    format         = Column(String(10), nullable=False)      # 'csv' | 'ofx' | 'qif'
+    parsed_meta    = Column(JSON, nullable=True)             # row_count, header, detected_account_last4
+    column_mapping = Column(JSON, nullable=True)             # {"date": 0, "description": 1, "amount": 2}
+    status         = Column(String(20), nullable=False, index=True)
+    # 'preview_ready' | 'committing' | 'committed' | 'cancelled' | 'rolled_back'
+    committed_at   = Column(DateTime, nullable=True)
+    created_at     = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at     = Column(DateTime, nullable=False)
+
+    rows         = relationship("ImportDraftRow", back_populates="draft", cascade="all, delete-orphan")
+    transactions = relationship("Transaction", back_populates="import_draft", foreign_keys="Transaction.import_id")
+    account      = relationship("Account")
+    user         = relationship("User")
+
+
+class ImportDraftRow(Base):
+    """One CSV data row within an ImportDraft."""
+    __tablename__ = "import_draft_rows"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    draft_id        = Column(Integer, ForeignKey("import_drafts.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    row_index       = Column(Integer, nullable=False)
+    raw             = Column(JSON, nullable=False)           # original CSV row as list[str]
+    # Resolved fields after column mapping:
+    date            = Column(Date, nullable=True)
+    description     = Column(String(500), nullable=True)
+    amount          = Column(Numeric(14, 2), nullable=True)  # kept as Numeric; cast to float on commit
+    category_id     = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    # Dedup result:
+    duplicate_of    = Column(Integer, ForeignKey("transactions.id"), nullable=True)
+    duplicate_score = Column(Float, nullable=True)
+    # User decisions:
+    excluded        = Column(Boolean, nullable=False, default=False)
+    user_edited     = Column(Boolean, nullable=False, default=False)
+
+    draft = relationship("ImportDraft", back_populates="rows")

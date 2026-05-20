@@ -2,7 +2,7 @@
 providers.py — Multi-provider AI abstraction for Tally.
 
 Reads configuration from environment variables:
-    AI_PROVIDER   — "anthropic" (default) or "openai"
+    AI_PROVIDER   — "anthropic" (default), "openai", or "ollama"
     AI_API_KEY    — API key for the selected provider
     AI_MODEL      — model identifier (e.g. "claude-sonnet-4-6" or "gpt-4o")
     AI_BASE_URL   — optional base URL override (required for Ollama and other
@@ -204,6 +204,21 @@ async def _stream_openai(
                 })
             tool_call_accum.clear()
 
+    # Defensive flush: some Ollama-compatible backends accumulate tool call
+    # fragments but never emit finish_reason="tool_calls". Flush anything left.
+    if tool_call_accum:
+        for idx in sorted(tool_call_accum):
+            tc_data = tool_call_accum[idx]
+            try:
+                parsed_input = json.loads(tc_data["arguments"])
+            except json.JSONDecodeError:
+                parsed_input = {"raw": tc_data["arguments"]}
+            yield "\x00TOOL:" + json.dumps({
+                "id": tc_data["id"],
+                "name": tc_data["name"],
+                "input": parsed_input,
+            })
+
 
 # ---------------------------------------------------------------------------
 # Public interface
@@ -234,9 +249,13 @@ async def stream_chat(
         system:    System prompt string.
     """
     tools = tools or []
-    if AI_PROVIDER == "openai":
+    if AI_PROVIDER in ("openai", "ollama"):
         # Handles OpenAI, Ollama, LM Studio, and other OpenAI-compatible endpoints.
         # Multi-turn tool use is supported (tool_calls + tool_call_id format).
+        # NOTE: This branch is the seam where the planned AIClient abstraction will sit
+        # (see agents/projects/tally-local-sage.md § Locked Decisions row 2 and
+        # BACKLOG-001). Any third provider added here is a signal that the refactor
+        # is overdue.
         async for chunk in _stream_openai(messages, tools, system):
             yield chunk
     else:

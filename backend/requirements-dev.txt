@@ -1,0 +1,8 @@
+# Development-only dependencies — NEVER copied into the runtime Docker image.
+# Install separately for local test runs:
+#   pip install -r backend/requirements-dev.txt
+#
+# reportlab is used solely by the test fixture generator
+# (backend/tests/test_imports.py) to produce procedural PDF samples.
+# Dev-only by design — kept out of the runtime image.
+reportlab==4.5.0

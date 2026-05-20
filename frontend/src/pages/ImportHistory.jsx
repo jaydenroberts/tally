@@ -1,187 +1,241 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import client from '../api/client'
-import { formatDate } from '../utils/dateFormat'
+import { useCurrency } from '../context/CurrencyContext'
+import Button from '../components/Button'
+import PageHeader from '../components/PageHeader'
+import useBreakpoint from '../hooks/useBreakpoint'
+import { formatDate, parseServerDate } from '../utils/dateFormat'
 
-// ─── Status badge ─────────────────────────────────────────────────────────────
+// ─── Status pill ─────────────────────────────────────────────────────────────
+const STATUS_TONES = {
+  committed:    { label: 'Imported',      bg: 'color-mix(in oklab, var(--positive) 15%, transparent)', fg: 'var(--positive)', ring: 'color-mix(in oklab, var(--positive) 35%, transparent)' },
+  rolled_back:  { label: 'Rolled back',   bg: 'color-mix(in oklab, var(--text-faint) 18%, transparent)', fg: 'var(--text-faint)', ring: 'var(--border)' },
+  cancelled:    { label: 'Cancelled',     bg: 'color-mix(in oklab, var(--text-faint) 18%, transparent)', fg: 'var(--text-faint)', ring: 'var(--border)' },
+  preview_ready:{ label: 'Draft',         bg: 'color-mix(in oklab, var(--info) 15%, transparent)',     fg: 'var(--info)',     ring: 'color-mix(in oklab, var(--info) 35%, transparent)' },
+  committing:   { label: 'Committing…',   bg: 'color-mix(in oklab, var(--info) 15%, transparent)',     fg: 'var(--info)',     ring: 'color-mix(in oklab, var(--info) 35%, transparent)' },
+}
 
-function StatusBadge({ status }) {
-  const map = {
-    success: { color: '#50FA7B', label: 'Success' },
-    partial: { color: '#FFB86C', label: 'Partial' },
-    failed:  { color: '#FF5555', label: 'Failed'  },
-  }
-  const { color, label } = map[status] ?? { color: '#6272A4', label: status ?? '—' }
+function StatusPill({ status }) {
+  const t = STATUS_TONES[status] || STATUS_TONES.cancelled
   return (
     <span style={{
-      fontSize: 11, fontWeight: 600, padding: '2px 8px',
-      borderRadius: 99, color, background: color + '20',
-      whiteSpace: 'nowrap',
-    }}>
-      {label}
-    </span>
+      display: 'inline-flex', alignItems: 'center', gap: 5,
+      padding: '2px 9px', borderRadius: 999,
+      background: t.bg, color: t.fg, fontSize: 11, fontWeight: 600,
+      border: `1px solid ${t.ring}`, whiteSpace: 'nowrap',
+    }}>{t.label}</span>
   )
 }
 
-// ─── File type badge ──────────────────────────────────────────────────────────
-
-function TypeBadge({ type }) {
-  const color = type === 'pdf' ? '#BD93F9' : '#8BE9FD'   // purple : cyan
-  return (
-    <span style={{
-      fontSize: 10, fontWeight: 700, padding: '1px 6px',
-      borderRadius: 4, color, background: color + '20',
-      textTransform: 'uppercase', letterSpacing: '0.05em',
-    }}>
-      {type ?? '—'}
-    </span>
-  )
-}
-
-// ─── Main page ────────────────────────────────────────────────────────────────
-
-export default function ImportHistory() {
-  const [logs, setLogs]       = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError]     = useState('')
-
+// ─── Live countdown for the rollback window ──────────────────────────────────
+function useSecondsUntil(iso) {
+  // FE-003: parse as UTC so the countdown isn't clamped to 0 for UTC+ clients.
+  const target = useMemo(() => parseServerDate(iso)?.getTime() ?? 0, [iso])
+  const [s, setS] = useState(() => Math.max(0, Math.round((target - Date.now()) / 1000)))
   useEffect(() => {
-    client.get('/import/logs')
-      .then((r) => setLogs(r.data))
-      .catch(() => setError('Failed to load import history'))
-      .finally(() => setLoading(false))
-  }, [])
+    if (!target || s <= 0) return
+    const id = setInterval(() => setS(Math.max(0, Math.round((target - Date.now()) / 1000))), 500)
+    return () => clearInterval(id)
+  }, [target, s])
+  return s
+}
 
-  const successCount = logs.filter((l) => l.status === 'success').length
-  const totalTx      = logs.reduce((s, l) => s + (l.transaction_count ?? 0), 0)
+// ─── A single row ────────────────────────────────────────────────────────────
+function ImportRow({ row, onRollback, onView }) {
+  const remaining = useSecondsUntil(row.rollback_until)
+  const canRollback = row.status === 'committed' && remaining > 0
+  const displayDate = row.committed_at || row.created_at
 
   return (
-    <div>
-      {/* Header */}
-      <div style={styles.pageHeader}>
-        <div>
-          <h1 style={styles.pageTitle}>Import History</h1>
-          {logs.length > 0 && (
-            <p style={styles.pageSubtitle}>
-              {logs.length} import{logs.length !== 1 ? 's' : ''} ·{' '}
-              {successCount} successful ·{' '}
-              {totalTx} transactions processed
-            </p>
-          )}
+    <div className="ih-table-row" style={{
+      display: 'grid', gridTemplateColumns: '160px 1fr 130px 110px 1fr',
+      padding: '14px 18px', borderBottom: '1px solid var(--border)',
+      alignItems: 'center', fontSize: 13, gap: 12,
+    }}>
+      {/* When */}
+      <div>
+        <div style={{ color: 'var(--text)', fontWeight: 600 }}>
+          {displayDate ? formatDate(displayDate, 'short') : '—'}
+        </div>
+        <div style={{ color: 'var(--text-faint)', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
+          {displayDate ? new Date(displayDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
         </div>
       </div>
 
-      {error && <p style={{ color: 'var(--red)', marginBottom: 16 }}>{error}</p>}
-
-      {loading ? (
-        <p style={{ color: 'var(--muted)' }}>Loading…</p>
-      ) : logs.length === 0 ? (
-        <div style={styles.empty}>
-          <p style={styles.emptyTitle}>No imports yet</p>
-          <p style={{ color: 'var(--muted)', fontSize: 14 }}>
-            Import a CSV or PDF bank statement from the Transactions page to get started.
-          </p>
+      {/* Account + filename */}
+      <div style={{ minWidth: 0 }}>
+        <div style={{ color: 'var(--text)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {row.account?.name ?? '—'}
         </div>
-      ) : (
-        <div style={styles.tableWrap}>
-          {/* Table header */}
-          <div style={styles.tableHeader}>
-            <span>File</span>
-            <span>Type</span>
-            <span>Imported</span>
-            <span>Transactions</span>
-            <span>Status</span>
-          </div>
+        <div style={{
+          color: 'var(--text-faint)', fontSize: 11,
+          fontFamily: 'JetBrains Mono, monospace',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{row.filename}</div>
+      </div>
 
-          {logs.map((log, i) => (
-            <div key={log.id} style={{
-              ...styles.tableRow,
-              borderBottom: i < logs.length - 1 ? '1px solid var(--border)' : 'none',
+      {/* Transaction count */}
+      <div style={{ fontVariantNumeric: 'tabular-nums' }}>
+        <div style={{ color: row.status === 'committed' ? 'var(--positive)' : 'var(--text-faint)', fontWeight: 600 }}>
+          {row.transactions_count ?? 0} added
+        </div>
+      </div>
+
+      {/* Status */}
+      <div><StatusPill status={row.status}/></div>
+
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        {canRollback && (
+          <button
+            onClick={() => onRollback(row)}
+            style={{
+              padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+              background: 'color-mix(in oklab, var(--warning) 15%, transparent)',
+              border: '1px solid color-mix(in oklab, var(--warning) 35%, transparent)',
+              color: 'var(--warning)', cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: 6,
             }}>
-              {/* Filename */}
-              <div style={{ minWidth: 0 }}>
-                <p style={styles.filename} title={log.filename}>
-                  {log.filename}
-                </p>
-                {log.error_detail && (
-                  <p style={styles.errorDetail}>{log.error_detail}</p>
-                )}
-              </div>
-
-              {/* Type */}
-              <div>
-                <TypeBadge type={log.file_type} />
-              </div>
-
-              {/* Date */}
-              <div>
-                <p style={styles.date}>
-                  {formatDate(new Date(log.imported_at))}
-                </p>
-                <p style={styles.time}>
-                  {new Date(log.imported_at).toLocaleTimeString('en-US', {
-                    hour: '2-digit', minute: '2-digit',
-                  })}
-                </p>
-              </div>
-
-              {/* Transaction count */}
-              <div>
-                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--white)' }}>
-                  {log.transaction_count ?? 0}
-                </span>
-              </div>
-
-              {/* Status */}
-              <div>
-                <StatusBadge status={log.status} />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ↶ Undo · {remaining}s
+          </button>
+        )}
+        {row.status === 'committed' && (
+          <button
+            onClick={() => onView(row)}
+            style={{
+              padding: '6px 10px', borderRadius: 6, fontSize: 12,
+              background: 'transparent', border: '1px solid var(--border)',
+              color: 'var(--text-muted)', cursor: 'pointer',
+            }}>
+            View
+          </button>
+        )}
+      </div>
     </div>
   )
 }
 
-const styles = {
-  pageHeader: {
-    marginBottom: 24,
-  },
-  pageTitle:    { fontSize: 24, fontWeight: 700, color: 'var(--white)' },
-  pageSubtitle: { color: 'var(--muted)', fontSize: 14, marginTop: 4 },
-  tableWrap: {
-    background: 'var(--bg-card)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
-    overflow: 'hidden',
-  },
-  tableHeader: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 60px 140px 120px 90px',
-    padding: '10px 20px',
-    background: 'var(--bg)',
-    fontSize: 11, fontWeight: 600,
-    textTransform: 'uppercase',
-    letterSpacing: '0.06em',
-    color: 'var(--muted)',
-    borderBottom: '1px solid var(--border)',
-  },
-  tableRow: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 60px 140px 120px 90px',
-    padding: '14px 20px',
-    alignItems: 'center',
-  },
-  filename: {
-    fontSize: 13, fontWeight: 500, color: 'var(--white)',
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  },
-  errorDetail: {
-    fontSize: 11, color: 'var(--orange)', marginTop: 4,
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  },
-  date: { fontSize: 13, color: 'var(--white)' },
-  time: { fontSize: 11, color: 'var(--muted)', marginTop: 2 },
-  empty: { textAlign: 'center', padding: '60px 0' },
-  emptyTitle: { fontSize: 18, fontWeight: 600, color: 'var(--white)', marginBottom: 8 },
+// ─── Page shell ──────────────────────────────────────────────────────────────
+export default function ImportHistory() {
+  const navigate = useNavigate()
+  const { isMobile } = useBreakpoint()
+
+  const [imports, setImports] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error,   setError]   = useState(null)
+  const [filter,  setFilter]  = useState('all')
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const { data } = await client.get('/imports')
+      setImports(data.items ?? data)
+    } catch (e) {
+      setError(e.message)
+    } finally { setLoading(false) }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const filtered = useMemo(() => {
+    if (filter === 'all') return imports
+    return imports.filter(r => r.status === filter)
+  }, [imports, filter])
+
+  const handleRollback = async (row) => {
+    const count = row.transactions_count ?? 0
+    const acct  = row.account?.name ?? 'this account'
+    if (!confirm(`Roll back ${count} transaction${count !== 1 ? 's' : ''} imported into ${acct}?`)) return
+    try {
+      await client.post(`/imports/${row.id}/rollback`)
+      await load()
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Could not roll back')
+    }
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Import history"
+        subtitle={`${imports.length} import${imports.length !== 1 ? 's' : ''} · roll back any committed import within 5 min`}
+        isMobile={isMobile}
+        actions={<Button variant="primary" onClick={() => navigate('/import')}>+ New import</Button>}
+      />
+
+      <div style={isMobile
+        ? { padding: '0 0 24px', display: 'grid', gap: 16, minWidth: 0 }
+        : { display: 'grid', alignContent: 'start', gap: 18 }
+      }>
+        {/* Filter chips */}
+        <div style={{
+          display: 'flex', flexWrap: 'wrap', gap: 8, padding: 10, alignItems: 'center',
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 10,
+        }}>
+          {[
+            { k: 'all',         label: 'All' },
+            { k: 'committed',   label: 'Committed' },
+            { k: 'rolled_back', label: 'Rolled back' },
+            { k: 'cancelled',   label: 'Cancelled' },
+          ].map(f => {
+            const active = f.k === filter
+            return (
+              <button
+                key={f.k}
+                onClick={() => setFilter(f.k)}
+                style={{
+                  flex: '1 1 auto', minWidth: 'fit-content',
+                  padding: '5px 12px', borderRadius: 7, fontSize: 12, fontWeight: 600,
+                  cursor: 'pointer',
+                  background: active ? 'var(--bg-hover)' : 'transparent',
+                  color:      active ? 'var(--text)'    : 'var(--text-muted)',
+                  border: '1px solid transparent',
+                }}>
+                {f.label}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Table */}
+        {loading ? (
+          <div style={{ padding: 32, color: 'var(--text-faint)' }}>Loading…</div>
+        ) : error ? (
+          <div style={{ padding: 32, color: 'var(--negative)' }}>Error: {error}</div>
+        ) : (
+          <div className="ih-table" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+            {/* Header row */}
+            <div className="ih-table-header" style={{
+              display: 'grid', gridTemplateColumns: '160px 1fr 130px 110px 1fr',
+              padding: '10px 18px', background: 'var(--bg)',
+              borderBottom: '1px solid var(--border)', gap: 12,
+              fontSize: 10, fontWeight: 700, color: 'var(--text-faint)',
+              textTransform: 'uppercase', letterSpacing: '0.08em',
+            }}>
+              <span>When</span>
+              <span>Account · file</span>
+              <span>Added</span>
+              <span>Status</span>
+              <span style={{ textAlign: 'right' }}>Actions</span>
+            </div>
+            {filtered.length === 0 ? (
+              <div style={{ padding: 60, textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>
+                {filter === 'all' ? 'No imports yet.' : `No ${filter.replace('_', ' ')} imports.`}
+              </div>
+            ) : (
+              filtered.map(row => (
+                <ImportRow
+                  key={row.id}
+                  row={row}
+                  onRollback={handleRollback}
+                  onView={(r) => navigate(`/transactions?import_id=${r.id}`)}
+                />
+              ))
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  )
 }

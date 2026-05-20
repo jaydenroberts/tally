@@ -1,6 +1,7 @@
 from typing import List, Optional
 from datetime import date as date_type
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
@@ -10,12 +11,108 @@ from ..auth import get_current_user, require_owner
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
 
+def _apply_tx_filters(
+    q,
+    *,
+    account_id=None,
+    category_id=None,
+    is_verified=None,
+    source=None,
+    transaction_type=None,
+    amount_sign=None,
+    exclude_transfers=False,
+    date_from=None,
+    date_to=None,
+):
+    """Apply the shared transaction filter set (FE-011).
+
+    ``amount_sign`` is 'positive' | 'negative' — drives the Income/Expenses
+    segments, which are sign-based rather than a stored column. ``exclude_transfers``
+    keeps transfer pairs out of Income/Expenses/Unverified segments so server-side
+    counts and stats match the page's prior client-side semantics.
+    """
+    if account_id is not None:
+        q = q.filter(models.Transaction.account_id == account_id)
+    if category_id is not None:
+        q = q.filter(models.Transaction.category_id == category_id)
+    if is_verified is not None:
+        q = q.filter(models.Transaction.is_verified == is_verified)
+    if source is not None:
+        q = q.filter(models.Transaction.source == source)
+    if transaction_type is not None:
+        q = q.filter(models.Transaction.transaction_type == transaction_type)
+    if amount_sign == "positive":
+        q = q.filter(models.Transaction.amount > 0)
+    elif amount_sign == "negative":
+        q = q.filter(models.Transaction.amount < 0)
+    if exclude_transfers:
+        q = q.filter(models.Transaction.transaction_type != "transfer")
+    if date_from is not None:
+        q = q.filter(models.Transaction.date >= date_from)
+    if date_to is not None:
+        q = q.filter(models.Transaction.date <= date_to)
+    return q
+
+
+def build_allocations(tx: models.Transaction, db: Session) -> list[schemas.AllocationView]:
+    """Compute the full link state of a transaction.
+
+    Returns one AllocationView per linked savings contribution (positive or
+    negative — withdrawals are surfaced as negative amounts) and one for the
+    debt link if any. Names come from the related goal/debt rows so the
+    frontend can render without extra lookups.
+    """
+    items: list[schemas.AllocationView] = []
+
+    contribs = (
+        db.query(models.SavingsContribution, models.SavingsGoal)
+        .join(models.SavingsGoal, models.SavingsContribution.goal_id == models.SavingsGoal.id)
+        .filter(models.SavingsContribution.transaction_id == tx.id)
+        .all()
+    )
+    for contrib, goal in contribs:
+        items.append(schemas.AllocationView(
+            kind="goal",
+            ref_id=goal.id,
+            name=goal.name,
+            amount=contrib.amount,  # signed: positive = contribution, negative = withdrawal
+        ))
+
+    if tx.debt_id is not None:
+        row = (
+            db.query(models.DebtPayment, models.Debt)
+            .join(models.Debt, models.DebtPayment.debt_id == models.Debt.id)
+            .filter(models.DebtPayment.transaction_id == tx.id)
+            .first()
+        )
+        if row:
+            payment, debt = row
+            items.append(schemas.AllocationView(
+                kind="debt",
+                ref_id=debt.id,
+                name=debt.name,
+                amount=payment.amount,  # debt payments are stored as positive magnitudes
+            ))
+
+    return items
+
+
+def attach_allocations(tx: models.Transaction, db: Session) -> models.Transaction:
+    """Attach computed allocations to the ORM instance so Pydantic
+    from_attributes=True picks them up on the response. Mutates and returns tx."""
+    tx.allocations = build_allocations(tx, db)
+    return tx
+
+
 @router.get("", response_model=List[schemas.TransactionResponse])
 def list_transactions(
     account_id: Optional[int] = Query(None),
     category_id: Optional[int] = Query(None),
     is_verified: Optional[bool] = Query(None),
     source: Optional[str] = Query(None, description="'manual' or 'import'"),
+    transaction_type: Optional[str] = Query(None, description="expense | income | transfer | debt_payment"),
+    amount_sign: Optional[str] = Query(None, description="'positive' or 'negative' — drives Income/Expenses segments"),
+    exclude_transfers: bool = Query(False, description="Exclude transfer-type rows (Income/Expenses/Unverified segments)"),
     date_from: Optional[date_type] = Query(None),
     date_to: Optional[date_type] = Query(None),
     sort_by: Optional[str] = Query("date", description="Column to sort by: date, amount, account_id, is_verified"),
@@ -28,18 +125,12 @@ def list_transactions(
     q = db.query(models.Transaction).options(
         joinedload(models.Transaction.category)
     )
-    if account_id is not None:
-        q = q.filter(models.Transaction.account_id == account_id)
-    if category_id is not None:
-        q = q.filter(models.Transaction.category_id == category_id)
-    if is_verified is not None:
-        q = q.filter(models.Transaction.is_verified == is_verified)
-    if source is not None:
-        q = q.filter(models.Transaction.source == source)
-    if date_from is not None:
-        q = q.filter(models.Transaction.date >= date_from)
-    if date_to is not None:
-        q = q.filter(models.Transaction.date <= date_to)
+    q = _apply_tx_filters(
+        q,
+        account_id=account_id, category_id=category_id, is_verified=is_verified,
+        source=source, transaction_type=transaction_type, amount_sign=amount_sign,
+        exclude_transfers=exclude_transfers, date_from=date_from, date_to=date_to,
+    )
 
     # Map accepted sort_by values to ORM columns; reject anything unexpected
     sortable_columns = {
@@ -51,7 +142,8 @@ def list_transactions(
     sort_col = sortable_columns.get(sort_by, models.Transaction.date)
     order_expr = sort_col.asc() if sort_dir == "asc" else sort_col.desc()
 
-    return q.order_by(order_expr).offset(skip).limit(limit).all()
+    # Stable tiebreak on id so paging never drops/repeats rows that share a sort key.
+    return q.order_by(order_expr, models.Transaction.id.desc()).offset(skip).limit(limit).all()
 
 
 @router.get("/count")
@@ -60,25 +152,63 @@ def count_transactions(
     category_id: Optional[int] = Query(None),
     is_verified: Optional[bool] = Query(None),
     source: Optional[str] = Query(None),
+    transaction_type: Optional[str] = Query(None),
+    amount_sign: Optional[str] = Query(None),
+    exclude_transfers: bool = Query(False),
     date_from: Optional[date_type] = Query(None),
     date_to: Optional[date_type] = Query(None),
     db: Session = Depends(get_db),
     _: models.User = Depends(get_current_user),
 ):
-    q = db.query(models.Transaction)
-    if account_id is not None:
-        q = q.filter(models.Transaction.account_id == account_id)
-    if category_id is not None:
-        q = q.filter(models.Transaction.category_id == category_id)
-    if is_verified is not None:
-        q = q.filter(models.Transaction.is_verified == is_verified)
-    if source is not None:
-        q = q.filter(models.Transaction.source == source)
-    if date_from is not None:
-        q = q.filter(models.Transaction.date >= date_from)
-    if date_to is not None:
-        q = q.filter(models.Transaction.date <= date_to)
+    q = _apply_tx_filters(
+        db.query(models.Transaction),
+        account_id=account_id, category_id=category_id, is_verified=is_verified,
+        source=source, transaction_type=transaction_type, amount_sign=amount_sign,
+        exclude_transfers=exclude_transfers, date_from=date_from, date_to=date_to,
+    )
     return {"count": q.count()}
+
+
+@router.get("/summary")
+def transaction_summary(
+    date_from: Optional[date_type] = Query(None, description="Start of the stat window (e.g. month start)"),
+    date_to: Optional[date_type] = Query(None),
+    account_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Aggregate income / expense / net over a date window, transfers excluded (FE-011).
+
+    Computed in SQL so the Transactions page stat cards stay correct across pagination
+    without loading every row. ``unverified_count`` counts non-transfer unverified rows
+    over ALL time (matches the page's prior whole-dataset semantic), independent of the
+    date window used for the MTD money figures.
+    """
+    money_q = _apply_tx_filters(
+        db.query(models.Transaction),
+        account_id=account_id, exclude_transfers=True,
+        date_from=date_from, date_to=date_to,
+    )
+    income = money_q.with_entities(
+        func.coalesce(func.sum(models.Transaction.amount), 0.0)
+    ).filter(models.Transaction.amount > 0).scalar() or 0.0
+    expenses = money_q.with_entities(
+        func.coalesce(func.sum(models.Transaction.amount), 0.0)
+    ).filter(models.Transaction.amount < 0).scalar() or 0.0
+
+    unverified_count = _apply_tx_filters(
+        db.query(models.Transaction),
+        account_id=account_id, is_verified=False, exclude_transfers=True,
+    ).count()
+
+    income = float(income)
+    expenses = abs(float(expenses))   # report expenses as a positive magnitude
+    return {
+        "income": income,
+        "expenses": expenses,
+        "net": income - expenses,
+        "unverified_count": unverified_count,
+    }
 
 
 @router.post("", response_model=schemas.TransactionResponse, status_code=status.HTTP_201_CREATED)
@@ -117,6 +247,9 @@ def bulk_delete_transactions(
     )
     db.query(models.SavingsContribution).filter(models.SavingsContribution.transaction_id.in_(ids)).update(
         {"transaction_id": None}, synchronize_session=False
+    )
+    db.query(models.ImportDraftRow).filter(models.ImportDraftRow.duplicate_of.in_(ids)).update(
+        {"duplicate_of": None}, synchronize_session=False
     )
     db.query(models.Transaction).filter(models.Transaction.id.in_(ids)).delete(synchronize_session=False)
     db.commit()
@@ -392,7 +525,7 @@ def get_transaction(
     ).filter(models.Transaction.id == tx_id).first()
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    return tx
+    return attach_allocations(tx, db)
 
 
 @router.patch("/{tx_id}", response_model=schemas.TransactionResponse)
@@ -427,6 +560,180 @@ def update_transaction(
     return tx
 
 
+@router.patch("/{tx_id}/allocations", response_model=schemas.TransactionResponse)
+def batch_update_allocations(
+    tx_id: int,
+    payload: schemas.BatchAllocationsRequest,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_owner),
+):
+    """
+    Replace all goal and debt allocations on a transaction in one call.
+
+    Full-replace semantics: existing savings contributions (both contribution
+    and withdrawal direction) and any debt payment link are removed first,
+    then the new set is applied. The amount on each AllocationItem is always
+    a positive magnitude — direction is inferred from the transaction's sign:
+      - Credit (amount > 0) + goal → contribution (increases goal balance)
+      - Debit  (amount < 0) + goal → withdrawal  (decreases goal balance)
+      - Debit  (amount < 0) + debt → debt payment (decreases debt balance)
+    Transfer-type transactions are rejected — they cannot hold allocations.
+
+    Validation runs to completion BEFORE any state mutation, so a validation
+    failure on the last item does not leave the database half-applied.
+    """
+    tx = db.query(models.Transaction).options(
+        joinedload(models.Transaction.category)
+    ).filter(models.Transaction.id == tx_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    if tx.transaction_type == "transfer":
+        raise HTTPException(status_code=400, detail="Transfer transactions cannot have allocations")
+
+    # ── PHASE 1: validate everything before touching state ─────────────────────
+    for item in payload.allocations:
+        if item.amount <= 0:
+            raise HTTPException(status_code=400, detail="All allocation amounts must be positive")
+
+    goal_items = [a for a in payload.allocations if a.kind == "goal"]
+    debt_items = [a for a in payload.allocations if a.kind == "debt"]
+
+    if len(debt_items) > 1:
+        raise HTTPException(status_code=400, detail="A transaction can only be linked to one debt")
+
+    if debt_items and tx.amount >= 0:
+        raise HTTPException(status_code=400, detail="Only debit transactions can be linked to a debt payment")
+
+    tx_abs = round(abs(tx.amount), 2)
+    if payload.allocations:
+        total = round(sum(a.amount for a in payload.allocations), 2)
+        if total > tx_abs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Total allocations ({total}) exceed transaction amount ({tx_abs})",
+            )
+
+    # Resolve goal/debt rows up front so 404s surface before any writes
+    goals_by_ref = {}
+    for item in goal_items:
+        goal = db.query(models.SavingsGoal).filter(models.SavingsGoal.id == item.ref_id).first()
+        if not goal:
+            raise HTTPException(status_code=404, detail=f"Savings goal {item.ref_id} not found")
+        goals_by_ref[item.ref_id] = goal
+
+    debt_obj = None
+    if debt_items:
+        debt_obj = db.query(models.Debt).filter(models.Debt.id == debt_items[0].ref_id).first()
+        if not debt_obj:
+            raise HTTPException(status_code=404, detail=f"Debt {debt_items[0].ref_id} not found")
+        if debt_obj.is_paid_off:
+            raise HTTPException(status_code=400, detail="Debt is already paid off")
+
+    # ── PHASE 2: unlink everything currently attached ──────────────────────────
+    # Existing contributions can be either contribution-direction (positive amount)
+    # or withdrawal-direction (negative). Reverse each according to its sign.
+    existing_contribs = db.query(models.SavingsContribution).filter(
+        models.SavingsContribution.transaction_id == tx_id,
+    ).all()
+    for contrib in existing_contribs:
+        goal = db.query(models.SavingsGoal).filter(models.SavingsGoal.id == contrib.goal_id).first()
+        if goal:
+            if contrib.amount > 0:
+                # Reverse a contribution → reduce goal back
+                goal.current_amount = round(max(0.0, goal.current_amount - contrib.amount), 2)
+                if goal.current_amount < goal.target_amount:
+                    goal.is_completed = False
+            else:
+                # Reverse a withdrawal → restore goal
+                goal.current_amount = round(goal.current_amount + abs(contrib.amount), 2)
+        db.delete(contrib)
+
+    if tx.debt_id is not None:
+        payment = db.query(models.DebtPayment).filter(
+            models.DebtPayment.transaction_id == tx_id
+        ).first()
+        if payment:
+            debt = db.query(models.Debt).filter(models.Debt.id == tx.debt_id).first()
+            if debt:
+                debt.current_balance = round(debt.current_balance + payment.amount, 2)
+                debt.is_paid_off = False
+            db.delete(payment)
+        tx.debt_id = None
+
+    # Reset transaction type to a neutral baseline; phase 3 may upgrade it
+    tx.transaction_type = "income" if tx.amount > 0 else "expense"
+
+    # ── PHASE 3: apply the new allocations ─────────────────────────────────────
+    is_withdrawal = tx.amount < 0  # debit transactions allocate to goals as withdrawals
+
+    if goal_items:
+        # Re-check goal completion status using the freshly-decremented current_amount
+        # in case a goal had been set is_completed=True by the now-removed contribution
+        for item in goal_items:
+            goal = goals_by_ref[item.ref_id]
+            # We may have just decremented this goal in phase 2; re-check completion
+            # to give the user a clean error rather than silently skipping.
+            if goal.is_completed and not is_withdrawal:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Savings goal '{goal.name}' is already completed",
+                )
+
+            if is_withdrawal:
+                new_amount = round(max(0.0, goal.current_amount - item.amount), 2)
+                goal.current_amount = new_amount
+                if new_amount < goal.target_amount:
+                    goal.is_completed = False
+                signed_amount = -item.amount
+            else:
+                new_amount = round(goal.current_amount + item.amount, 2)
+                goal.current_amount = new_amount
+                if new_amount >= goal.target_amount:
+                    goal.is_completed = True
+                signed_amount = item.amount
+
+            db.add(models.SavingsContribution(
+                goal_id=item.ref_id,
+                amount=signed_amount,
+                balance_after=new_amount,
+                transaction_id=tx_id,
+            ))
+        tx.transaction_type = "savings_transfer"
+
+    if debt_items:
+        item = debt_items[0]
+        payment_amount = round(item.amount, 2)
+        new_balance = round(max(0.0, debt_obj.current_balance - payment_amount), 2)
+        debt_obj.current_balance = new_balance
+        if new_balance == 0:
+            debt_obj.is_paid_off = True
+        db.add(models.DebtPayment(
+            debt_id=item.ref_id,
+            amount=payment_amount,
+            balance_after=new_balance,
+            notes=None,
+            paid_at=tx.date,
+            transaction_id=tx_id,
+        ))
+        tx.debt_id = item.ref_id
+        tx.transaction_type = "debt_payment"
+
+        # Auto-assign system "Debt Payment" category if the tx isn't already categorised
+        # — parity with the legacy POST /{tx_id}/link-debt endpoint
+        if tx.category_id is None:
+            debt_cat = db.query(models.Category).filter(
+                models.Category.name == "Debt Payment",
+                models.Category.is_system == True,
+            ).first()
+            if debt_cat:
+                tx.category_id = debt_cat.id
+
+    db.commit()
+    db.refresh(tx)
+    return attach_allocations(tx, db)
+
+
 @router.delete("/{tx_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_transaction(
     tx_id: int,
@@ -439,6 +746,7 @@ def delete_transaction(
     # Null FK refs before deleting to avoid constraint violations (foreign_keys=ON)
     db.query(models.DebtPayment).filter(models.DebtPayment.transaction_id == tx_id).update({"transaction_id": None})
     db.query(models.SavingsContribution).filter(models.SavingsContribution.transaction_id == tx_id).update({"transaction_id": None})
+    db.query(models.ImportDraftRow).filter(models.ImportDraftRow.duplicate_of == tx_id).update({"duplicate_of": None})
     db.delete(tx)
     db.commit()
 
