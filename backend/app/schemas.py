@@ -760,6 +760,44 @@ class CandidateTableSchema(BaseModel):
     first_row_preview: list[str]
 
 
+# ---------------------------------------------------------------------------
+# BACKLOG-036 — merchant-confidence tiers (spec §12.3)
+# ---------------------------------------------------------------------------
+
+class ConfidentPair(BaseModel):
+    """A Confident (auto-reconcile) pair — id-pair only (H3 payload trim)."""
+    row_id: int                          # ImportDraftRow.id (PK), NOT row_index
+    candidate_transaction_id: int
+
+
+class MatchSuggestion(BaseModel):
+    """One Review-tier pair, full detail for the in-wizard quick-check card."""
+    row_id: int                          # ImportDraftRow.id (PK), NOT row_index
+    score: float
+    candidate_transaction_id: int
+    candidate_description: Optional[str] = None
+    candidate_amount: float
+    candidate_date: date
+    bank_description: Optional[str] = None
+    bank_amount: float
+    bank_date: date
+
+
+class AcceptedMatch(BaseModel):
+    """A pair the client confirmed — Confident pairs auto-echoed, Review pairs toggled on."""
+    row_id: int                          # ImportDraftRow.id (PK), NOT row_index
+    candidate_transaction_id: int
+
+
+class ImportCommitRequest(BaseModel):
+    """Commit body — the client echoes every pair it wants applied (spec §12.3).
+
+    confirmed_matches = auto-echoed Confident pairs + user-toggled-ON Review pairs.
+    Empty default keeps back-compat for callers that POST with no body.
+    """
+    confirmed_matches: list[AcceptedMatch] = []
+
+
 class ImportDraftPreviewResponse(BaseModel):
     id: int
     status: str
@@ -773,6 +811,10 @@ class ImportDraftPreviewResponse(BaseModel):
     extraction_strategy: Optional[str] = None
     candidate_tables: Optional[list[CandidateTableSchema]] = None
     selected_table_index: Optional[int] = None
+    # BACKLOG-036 — merchant-confidence plan (spec §12.3).
+    confident_matches: list[ConfidentPair] = []        # id-pairs (auto-echoed by UI)
+    confident_match_count: int = 0                      # UI convenience (== len above)
+    review_suggestions: list[MatchSuggestion] = []      # full detail, default-OFF toggles
 
     model_config = {"from_attributes": True}
 
@@ -802,6 +844,12 @@ class ImportCommitResponse(BaseModel):
     transactions_created: int            # NEW import rows inserted (source='import')
     # FE-012 (A8): reconciliation results.
     matched_count: int = 0              # unverified manual estimates matched + verified
+    # BACKLOG-036 — confidence-tier breakdown (spec §12.3). matched_count stays
+    # == auto + confirmed for StepDone/Undo back-compat.
+    auto_matched_count: int = 0         # Confident pairs auto-reconciled (merchant matched)
+    confirmed_matched_count: int = 0    # Review pairs the user confirmed and we merged
+    review_suggested_count: int = 0     # Review suggestions surfaced this run
+    could_not_apply_count: int = 0      # confirmed pairs that failed the apply-time gate
     amount_diff_warnings: list[MatchWarning] = []  # matches where the amount changed
 
 

@@ -4,6 +4,18 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.4.1] - 2026-05-22
+
+### Fixed
+
+- **Import reconciliation now matches on the merchant, not just the amount.** Previously an imported bank row could validate an unrelated manual estimate that happened to fall within the date/amount window, overwriting it with the wrong figure. The matcher now compares a normalised merchant identity and assigns matches one-to-one, so it only auto-confirms a manual entry when the merchant, amount, and date all agree.
+
+### Added
+
+- **"Quick check" step in the import wizard.** When the importer finds a likely match it isn't fully sure of (for example a generic "Direct Debit" line), it now surfaces the bank row alongside the entry you already added and asks you to confirm before merging. Suggestions default to off, so nothing is ever merged without your say-so — anything you skip is simply added as a new transaction.
+
+---
+
 ## [1.4.0] - 2026-05-20
 
 ### Added

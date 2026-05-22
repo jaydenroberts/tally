@@ -630,7 +630,13 @@ def test_history_rollback_until_is_utc_aware(client, auth_headers, test_account)
 # clean rows insert as source='import', is_verified=True. Honours Advisory
 # amendments A1–A8.
 
-from app.routers.imports import _find_match
+from app.routers.imports import (
+    _compute_match_plan,
+    _merchant_residual,
+    MATCH_MERCHANT_HIGH,
+    MATCH_MERCHANT_FLOOR,
+    GENERIC_TOKENS,
+)
 
 
 def _manual_tx(db, account, *, amount, on_date, description="Estimate",
@@ -654,8 +660,25 @@ def _manual_tx(db, account, *, amount, on_date, description="Estimate",
     return tx
 
 
-def _commit_one_row_csv(client, headers, account, *, on_date, description, amount):
-    """Upload a single-row CSV and commit it; return the parsed commit response."""
+def _confirmed_from_preview(preview, *, accept_reviews=False):
+    """Build the commit body's confirmed_matches from a preview response.
+
+    Confident pairs are always echoed (the UI auto-checks them). Review pairs are
+    echoed only when accept_reviews=True (simulating the user toggling them ON).
+    """
+    confirmed = list(preview.get("confident_matches", []))
+    if accept_reviews:
+        for s in preview.get("review_suggestions", []):
+            confirmed.append({
+                "row_id": s["row_id"],
+                "candidate_transaction_id": s["candidate_transaction_id"],
+            })
+    return {"confirmed_matches": confirmed}
+
+
+def _commit_one_row_csv(client, headers, account, *, on_date, description, amount,
+                        accept_reviews=False):
+    """Upload a single-row CSV, echo the planned matches, commit; return commit response."""
     csv = (
         b"Date,Description,Amount\n"
         + f"{on_date},{description},{amount}\n".encode()
@@ -667,7 +690,9 @@ def _commit_one_row_csv(client, headers, account, *, on_date, description, amoun
     )
     assert resp.status_code == 201, resp.text
     draft_id = resp.json()["id"]
-    resp = client.post(f"/api/imports/{draft_id}/commit", headers=headers)
+    preview = client.get(f"/api/imports/{draft_id}/preview", headers=headers).json()
+    body = _confirmed_from_preview(preview, accept_reviews=accept_reviews)
+    resp = client.post(f"/api/imports/{draft_id}/commit", headers=headers, json=body)
     assert resp.status_code == 200, resp.text
     return draft_id, resp.json()
 
@@ -844,7 +869,9 @@ def test_rollback_reverts_manual_and_deletes_import(client, auth_headers, test_a
         files={"file": ("mix.csv", io.BytesIO(csv), "text/csv")},
     )
     draft_id = resp.json()["id"]
-    commit = client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers).json()
+    preview = client.get(f"/api/imports/{draft_id}/preview", headers=auth_headers).json()
+    body = _confirmed_from_preview(preview)
+    commit = client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers, json=body).json()
     assert commit["matched_count"] == 1
     assert commit["transactions_created"] == 1
 
@@ -1016,8 +1043,8 @@ def test_mid_loop_failure_rolls_back_all(client, auth_headers, test_account, db,
 
     csv = (
         b"Date,Description,Amount\n"
-        b"2026-05-03,Groceries,-47.23\n"      # row 1 — matches the estimate
-        b"2026-05-09,Boom,-9.00\n"            # row 2 — we blow up here
+        b"2026-05-03,Groceries,-47.23\n"      # row 1 — matches the estimate (Confident)
+        b"2026-05-09,Boom,-9.00\n"            # row 2 — new-row insert blows up here
     )
     resp = client.post(
         f"/api/imports?account_id={test_account.id}",
@@ -1025,33 +1052,417 @@ def test_mid_loop_failure_rolls_back_all(client, auth_headers, test_account, db,
         files={"file": ("boom.csv", io.BytesIO(csv), "text/csv")},
     )
     draft_id = resp.json()["id"]
+    preview = client.get(f"/api/imports/{draft_id}/preview", headers=auth_headers).json()
+    body = _confirmed_from_preview(preview)   # echo the Confident "Groceries" match
 
-    # Make _find_match raise on the second row (description "Boom").
-    import app.routers.imports as imports_mod
-    real_find = imports_mod._find_match
-    calls = {"n": 0}
+    # Make the second row's new-import-row insert raise. The plan is computed once
+    # up front; the failure lands during the apply loop AFTER row 1's match mutation,
+    # so atomicity (single db.commit at the end) must discard row 1's mutation too.
+    import app.models as models_mod
+    real_init = models_mod.Transaction.__init__
 
-    def boom(db_, account_id, bank_date, bank_amount):
-        calls["n"] += 1
-        if calls["n"] >= 2:
+    def boom_init(self, *args, **kwargs):
+        if kwargs.get("description") == "Boom":
             raise RuntimeError("injected mid-loop failure")
-        return real_find(db_, account_id, bank_date, bank_amount)
+        return real_init(self, *args, **kwargs)
 
-    monkeypatch.setattr(imports_mod, "_find_match", boom)
+    monkeypatch.setattr(models_mod.Transaction, "__init__", boom_init)
 
     # The commit loop blows up before db.commit() is ever reached, so the whole unit
     # of work (TOCTOU UPDATE + row-1 match mutation) is never committed. TestClient
     # re-raises server exceptions; the real get_db would close/rollback the session.
-    # Verify the failure surfaced AND that _find_match was called twice (we did enter
-    # the loop and reach the mutation point) — the rollback safety is the absence of a
-    # db.commit() before the raise, which the next assertion confirms via the draft
-    # status never having flipped.
     with pytest.raises(RuntimeError, match="injected mid-loop failure"):
-        client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers)
-    assert calls["n"] == 2  # entered the loop, reached row 2's match attempt
+        client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers, json=body)
 
-    # The estimate's matching mutation from row 1 is still pending-uncommitted on the
-    # session. Because the single db.commit() was never reached, nothing durable landed:
+    # Because the single db.commit() was never reached, nothing durable landed:
     # the draft's committing→committed flip never committed.
     draft = db.query(models.ImportDraft).filter(models.ImportDraft.id == draft_id).first()
     assert draft.status != "committed"
+
+
+# ===========================================================================
+# BACKLOG-036 — merchant-confidence tiers + global one-to-one assignment
+# ===========================================================================
+# Synthetic merchant names ONLY in fixtures — no real names, no institution
+# names (personal-data guardrail / spec §12.5).
+
+def _make_draft(db, account, rows):
+    """Create an ImportDraft + ImportDraftRow set directly for planner unit tests.
+
+    `rows` = list of (row_index, date, description, amount) tuples. Returns the draft.
+    """
+    draft = models.ImportDraft(
+        user_id=account.user_id, account_id=account.id,
+        filename="plan.csv", format="csv", status="preview_ready",
+        column_mapping={"date": 0, "description": 1, "amount": 2},
+        expires_at=datetime.utcnow() + timedelta(hours=1),
+    )
+    db.add(draft)
+    db.flush()
+    for idx, on_date, desc, amount in rows:
+        db.add(models.ImportDraftRow(
+            draft_id=draft.id, row_index=idx, raw=[str(on_date), desc, str(amount)],
+            date=on_date, description=desc, amount=Decimal(str(amount)),
+        ))
+    db.commit()
+    db.refresh(draft)
+    return draft
+
+
+# --- _merchant_residual units ----------------------------------------------
+
+def test_merchant_residual_strips_boilerplate_and_receipt():
+    # Synthetic merchant with bank boilerplate + receipt tail.
+    assert _merchant_residual("ZORPCO MART - Card Purchase - Receipt 133767") == "zorpco mart"
+
+
+def test_merchant_residual_pure_generic_is_empty():
+    assert _merchant_residual("Direct Debit") == ""
+    assert _merchant_residual("Reversal - Direct Debit") == ""
+
+
+def test_merchant_residual_named_with_boilerplate():
+    assert _merchant_residual("WIBBLE - Direct Debit - Receipt 102895") == "wibble"
+
+
+def test_merchant_residual_none_and_empty():
+    assert _merchant_residual(None) == ""
+    assert _merchant_residual("") == ""
+    assert _merchant_residual("12345") == ""   # pure digits drop out
+
+
+# --- tiering units ---------------------------------------------------------
+
+def test_tier_comparable_same_merchant_confident(db, test_account):
+    est = _manual_tx(db, test_account, amount=-50.00, on_date=date(2026, 5, 5),
+                     description="ZORPCO MART - Card Purchase")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 5), "ZORPCO MART - Card Purchase - Receipt 99", -50.00),
+    ])
+    plan = _compute_match_plan(db, draft)
+    rid = draft.rows[0].id
+    assert rid in plan
+    assert plan[rid].tier == "confident"
+    assert plan[rid].candidate_id == est.id
+    assert plan[rid].score >= MATCH_MERCHANT_HIGH
+
+
+def test_tier_comparable_cross_merchant_is_none(db, test_account):
+    # Distinct merchants, near-equal amount/date — the cross-merchant false-match shape
+    # from the incident. Comparable, score < FLOOR → None (NOT Review). Core rule (H1).
+    _manual_tx(db, test_account, amount=-50.00, on_date=date(2026, 5, 5),
+               description="ZORPCO MART - Card Purchase")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 5), "QUUXNET BROADBAND - Direct Debit", -50.00),
+    ])
+    plan = _compute_match_plan(db, draft)
+    assert draft.rows[0].id not in plan       # tier None → imported as new
+
+
+def test_tier_not_comparable_is_review(db, test_account):
+    # Generic boilerplate bank row vs named estimate → not comparable → Review.
+    est = _manual_tx(db, test_account, amount=-161.66, on_date=date(2026, 5, 5),
+                     description="WIBBLE - Direct Debit - Receipt 5")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 5), "Direct Debit", -161.66),
+    ])
+    plan = _compute_match_plan(db, draft)
+    rid = draft.rows[0].id
+    assert rid in plan
+    assert plan[rid].tier == "review"
+    assert plan[rid].comparable is False
+    assert plan[rid].candidate_id == est.id
+
+
+def test_tier_comparable_mid_score_is_review(db, test_account):
+    # Shared leading token but distinct trailing tokens (NOT a clean subset) →
+    # FLOOR <= score < HIGH → Review. token_set_ratio returns 1.0 for pure subsets,
+    # so a mid score requires genuine partial overlap. Fully-invented merchant names.
+    _manual_tx(db, test_account, amount=-75.00, on_date=date(2026, 5, 5),
+               description="ZORPNIK OUTDOOR GEAR SHOP")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 5), "ZORPNIK CORNER CAFE BAR", -75.00),
+    ])
+    plan = _compute_match_plan(db, draft)
+    rid = draft.rows[0].id
+    assert rid in plan
+    assert plan[rid].comparable is True
+    assert MATCH_MERCHANT_FLOOR <= plan[rid].score < MATCH_MERCHANT_HIGH
+    assert plan[rid].tier == "review"
+
+
+# --- global assignment: one-to-one, no stealing, deterministic -------------
+
+def test_assignment_is_one_to_one(db, test_account):
+    # Two bank rows both within tolerance of ONE estimate — only one may claim it.
+    est = _manual_tx(db, test_account, amount=-50.00, on_date=date(2026, 5, 5),
+                     description="ZORPCO MART")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 5), "ZORPCO MART", -50.00),
+        (1, date(2026, 5, 5), "ZORPCO MART", -50.00),
+    ])
+    plan = _compute_match_plan(db, draft)
+    assigned = [e.candidate_id for e in plan.values()]
+    assert assigned.count(est.id) == 1        # candidate consumed exactly once
+    assert len(plan) == 1
+
+
+def test_confident_claims_before_not_comparable(db, test_account):
+    # A comparable Confident pair must claim the candidate before a not-comparable
+    # score-0 pair can grab it (no stealing — spec §4.3 step 2).
+    est = _manual_tx(db, test_account, amount=-50.00, on_date=date(2026, 5, 5),
+                     description="ZORPCO MART")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 5), "Direct Debit", -50.00),      # not comparable (boilerplate)
+        (1, date(2026, 5, 5), "ZORPCO MART", -50.00),       # comparable, same merchant
+    ])
+    plan = _compute_match_plan(db, draft)
+    named_rid = draft.rows[1].id
+    boiler_rid = draft.rows[0].id
+    assert named_rid in plan and plan[named_rid].tier == "confident"
+    assert plan[named_rid].candidate_id == est.id
+    assert boiler_rid not in plan             # lost the candidate → imported as new
+
+
+# --- the 18-row cross-merchant swap (screenshot fixture) -------------------
+
+def test_eighteen_row_cross_merchant_swap_all_none(db, test_account):
+    """The live 2026-05-22 incident, encoded as a unit test: 18 bank rows clustered in
+    one tight amount/date band, where every structurally-valid (bank, estimate) pairing
+    is a DIFFERENT merchant (a fuel charge landing on an unrelated utility estimate, etc).
+    Assert the planner produces 0 Confident AND 0 Review — every comparable pair scores below
+    FLOOR → None → imported as new, nothing overwritten. Synthetic names only.
+
+    Construction: the estimate-merchant set and the bank-merchant set are DISJOINT, so no
+    bank row shares a merchant with any estimate. Amounts are clustered within the $15
+    structural tolerance so all 18×18 pairings survive the structural gate — the merchant
+    gate is the only thing standing between us and the incident.
+    """
+    base = date(2026, 5, 15)
+    # Two DISJOINT sets of 18 maximally-dissimilar synthetic merchant names; vetted so
+    # every cross pairing scores below FLOOR (0.50) on token_set_ratio — no coincidental
+    # near-collisions. Synthetic names only (personal-data guardrail).
+    est_merchants = [
+        "MAPLEWOOD", "SUNDIAL", "BRICKHOUSE", "THUNDERPEAK", "GOLDENVALE",
+        "BLUERIDGE", "WHITESTONE", "IRONGATE", "AMBERFALL", "ZEPHYRGUST",
+        "VORTEXBAY", "JUNGLEKING", "PUMPKINPATCH", "WIZARDRY", "BUMBLEBEE",
+        "ECLIPSEMOON", "FROSTBYTE", "GIZMOWORKS",
+    ]
+    bank_merchants = [
+        "NORTHWIND", "MOONHOLLOW", "RIVERBEND", "CACTUSFLATS", "DUSTYTRAIL",
+        "FOXGLOVE", "LANTERNWAY", "VELVETGROVE", "COBALTMINE", "OBSIDIANROCK",
+        "KOALABEAR", "XYLOPHONE", "QUOKKADEN", "TRUMPETVINE", "MAVERICKJET",
+        "HONEYCOMB", "DOLPHINBAY", "WALRUSPOD",
+    ]
+    amounts = [150.00 + i * 0.5 for i in range(18)]   # 150.00 .. 158.50, all within $15
+    # Use bank boilerplate (stripped to empty by _merchant_residual) around the merchant
+    # token so each residual is a single distinct word — no shared filler token to inflate
+    # the cross-merchant score above FLOOR.
+    for m, amt in zip(est_merchants, amounts):
+        _manual_tx(db, test_account, amount=-amt, on_date=base,
+                   description=f"{m} - Card Purchase", transaction_type="expense")
+    rows = [(i, base, f"{bank_merchants[i]} - Card Purchase", -amt)
+            for i, amt in enumerate(amounts)]
+    draft = _make_draft(db, test_account, rows)
+
+    plan = _compute_match_plan(db, draft)
+    confident = [e for e in plan.values() if e.tier == "confident"]
+    review = [e for e in plan.values() if e.tier == "review"]
+    assert len(confident) == 0, f"expected 0 Confident, got {len(confident)}"
+    assert len(review) == 0, f"expected 0 Review, got {len(review)}"
+
+
+# --- adversarial near-collision (shared leading residual token) ------------
+
+def test_adversarial_shared_leading_token_no_false_confident(db, test_account):
+    """Two distinct synthetic merchants sharing a leading residual token at the same
+    amount/date must NOT clear HIGH onto each other (spec §12.5). Synthetic names only.
+    """
+    # Estimate and bank row share the leading token "zorpnik" but are distinct merchants.
+    _manual_tx(db, test_account, amount=-75.00, on_date=date(2026, 5, 10),
+               description="ZORPNIK OUTDOOR GEAR SHOP")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 10), "ZORPNIK CORNER CAFE BAR", -75.00),
+    ])
+    plan = _compute_match_plan(db, draft)
+    rid = draft.rows[0].id
+    # Either None (score < FLOOR) or at most Review — never a silent Confident merge.
+    if rid in plan:
+        assert plan[rid].tier != "confident", (
+            f"shared-token distinct merchants wrongly Confident (score={plan[rid].score})"
+        )
+
+
+# --- planner read-only contract --------------------------------------------
+
+def test_compute_match_plan_is_read_only(db, test_account):
+    _manual_tx(db, test_account, amount=-50.00, on_date=date(2026, 5, 5),
+               description="ZORPCO MART")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 5), "ZORPCO MART", -50.00),
+    ])
+    db.expire_all()
+    _ = _compute_match_plan(db, draft)
+    # The planner must not stage any INSERT or attribute mutation (spec §12.5).
+    assert not db.new, f"planner added rows: {db.new}"
+    assert not db.dirty, f"planner mutated rows: {db.dirty}"
+
+
+# --- commit: Review applies only when accepted ------------------------------
+
+def test_review_applies_only_when_accepted(client, auth_headers, test_account, db):
+    # Not-comparable pair (boilerplate bank vs named estimate) → Review.
+    est = _manual_tx(db, test_account, amount=-161.66, on_date=date(2026, 5, 5),
+                     description="WIBBLE - Direct Debit - Receipt 5")
+
+    # 1) Ignore the suggestion → estimate untouched, row imports as new.
+    _, commit = _commit_one_row_csv(
+        client, auth_headers, test_account,
+        on_date="2026-05-05", description="Direct Debit", amount="-161.66",
+        accept_reviews=False,
+    )
+    assert commit["review_suggested_count"] == 1
+    assert commit["confirmed_matched_count"] == 0
+    assert commit["auto_matched_count"] == 0
+    assert commit["transactions_created"] == 1
+    db.refresh(est)
+    assert est.is_verified is False
+    assert est.import_id is None
+
+
+def test_review_accepted_merges(client, auth_headers, test_account, db):
+    est = _manual_tx(db, test_account, amount=-161.66, on_date=date(2026, 5, 5),
+                     description="WIBBLE - Direct Debit - Receipt 5")
+    draft_id, commit = _commit_one_row_csv(
+        client, auth_headers, test_account,
+        on_date="2026-05-05", description="Direct Debit", amount="-161.66",
+        accept_reviews=True,
+    )
+    assert commit["confirmed_matched_count"] == 1
+    assert commit["auto_matched_count"] == 0
+    assert commit["transactions_created"] == 0
+    db.refresh(est)
+    assert est.is_verified is True
+    assert est.import_id == draft_id
+    assert est.source == "manual"
+
+
+def test_confident_auto_applies_without_review_step(client, auth_headers, test_account, db):
+    est = _manual_tx(db, test_account, amount=-50.00, on_date=date(2026, 5, 5),
+                     description="ZORPCO MART")
+    _, commit = _commit_one_row_csv(
+        client, auth_headers, test_account,
+        on_date="2026-05-05", description="ZORPCO MART", amount="-50.00",
+    )
+    assert commit["auto_matched_count"] == 1
+    assert commit["confirmed_matched_count"] == 0
+    assert commit["matched_count"] == 1
+    db.refresh(est)
+    assert est.is_verified is True
+
+
+# --- named rollback regression: accepted-Review reverts like Confident ------
+
+def test_accepted_review_rolls_back_identically_to_confident(client, auth_headers, test_account, db):
+    """Spec §12.1.4: an accepted-Review match must roll back IDENTICALLY to a Confident
+    one (same apply path → same revert path)."""
+    # Accepted-Review case.
+    est_r = _manual_tx(db, test_account, amount=-161.66, on_date=date(2026, 5, 5),
+                       description="WIBBLE - Direct Debit - Receipt 5")
+    d_r, c_r = _commit_one_row_csv(
+        client, auth_headers, test_account,
+        on_date="2026-05-05", description="Direct Debit", amount="-160.00",
+        accept_reviews=True,
+    )
+    assert c_r["confirmed_matched_count"] == 1
+    db.refresh(est_r)
+    assert est_r.is_verified is True
+    assert est_r.amount == -160.00
+    assert est_r.original_amount == -161.66       # provenance written via shared apply path
+    assert est_r.import_id == d_r
+
+    # Roll it back.
+    rb = client.post(f"/api/imports/{d_r}/rollback", headers=auth_headers).json()
+    assert rb["matches_reverted"] == 1
+    db.expire_all()
+    est_r_after = db.query(models.Transaction).filter(models.Transaction.id == est_r.id).first()
+    assert est_r_after.is_verified is False
+    assert est_r_after.amount == -161.66          # original restored
+    assert est_r_after.original_amount is None
+    assert est_r_after.match_note is None
+    assert est_r_after.import_id is None
+
+
+# --- guard: post-preview row edit remap → import-new ------------------------
+
+def test_post_preview_edit_remap_imports_new(client, auth_headers, test_account, db):
+    """User previews a Confident match, then edits the row's amount in the Review step so
+    the recomputed commit plan no longer maps it to that candidate (gate fail) → the
+    echoed pair must NOT silent-apply; it imports as new + counts as could-not-apply
+    (spec §12.1.2 + §12.4)."""
+    est = _manual_tx(db, test_account, amount=-50.00, on_date=date(2026, 5, 5),
+                     description="ZORPCO MART")
+    csv = b"Date,Description,Amount\n2026-05-05,ZORPCO MART,-50.00\n"
+    resp = client.post(
+        f"/api/imports?account_id={test_account.id}",
+        headers=auth_headers,
+        files={"file": ("z.csv", io.BytesIO(csv), "text/csv")},
+    )
+    draft_id = resp.json()["id"]
+    preview = client.get(f"/api/imports/{draft_id}/preview", headers=auth_headers).json()
+    # Client echoes the Confident pair it saw.
+    body = _confirmed_from_preview(preview)
+    assert len(body["confirmed_matches"]) == 1
+
+    # Now edit the row's amount far outside tolerance (post-preview), so the recomputed
+    # plan drops the pair (structural gate fails) — but the client still echoes the old pair.
+    row_id = preview["rows"][0]["id"]
+    client.patch(
+        f"/api/imports/{draft_id}",
+        headers=auth_headers,
+        json={"row_updates": [{"id": row_id, "amount": -999.00}]},
+    )
+
+    commit = client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers, json=body).json()
+    assert commit["auto_matched_count"] == 0
+    assert commit["confirmed_matched_count"] == 0
+    assert commit["could_not_apply_count"] == 1
+    assert commit["transactions_created"] == 1
+    db.refresh(est)
+    assert est.is_verified is False              # never silently overwritten
+    assert est.import_id is None
+
+
+# --- guard: concurrent candidate amount-edit → full-gate rejects -----------
+
+def test_concurrent_candidate_amount_edit_full_gate_rejects(client, auth_headers, test_account, db):
+    """A candidate stays pristine but its amount is mutated concurrently between preview
+    and commit. The apply-time FULL structural gate (signed amount within tolerance) must
+    reject the now-stale pair → import as new + could-not-apply (spec §12.1.3)."""
+    est = _manual_tx(db, test_account, amount=-50.00, on_date=date(2026, 5, 5),
+                     description="ZORPCO MART")
+    csv = b"Date,Description,Amount\n2026-05-05,ZORPCO MART,-50.00\n"
+    resp = client.post(
+        f"/api/imports?account_id={test_account.id}",
+        headers=auth_headers,
+        files={"file": ("z.csv", io.BytesIO(csv), "text/csv")},
+    )
+    draft_id = resp.json()["id"]
+    preview = client.get(f"/api/imports/{draft_id}/preview", headers=auth_headers).json()
+    body = _confirmed_from_preview(preview)
+    assert len(body["confirmed_matches"]) == 1
+
+    # Concurrent external mutation: candidate still pristine (manual/unverified/import_id
+    # NULL) but its amount jumps far outside tolerance of the bank row.
+    est.amount = -500.00
+    db.commit()
+
+    commit = client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers, json=body).json()
+    assert commit["auto_matched_count"] == 0
+    assert commit["could_not_apply_count"] == 1
+    assert commit["transactions_created"] == 1
+    db.expire_all()
+    est_after = db.query(models.Transaction).filter(models.Transaction.id == est.id).first()
+    assert est_after.is_verified is False
+    assert est_after.import_id is None
+    assert est_after.amount == -500.00           # untouched by the import

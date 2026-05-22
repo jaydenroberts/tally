@@ -10,7 +10,7 @@ import { parseServerDate } from '../utils/dateFormat'
 // candidate tables, an extra "Pick table" step is injected between Upload
 // and Match columns. Step keys stay stable strings; the displayed step
 // number is the index + 1 (no "Step 2.5" hack). LOCKED (IRIS-1).
-function buildSteps(hasMultipleCandidates) {
+function buildSteps(hasMultipleCandidates, hasReviewSuggestions) {
   const steps = [
     { key: 'account', title: 'Choose account',   hint: 'Where these transactions land.' },
     { key: 'upload',  title: 'Upload file',      hint: 'CSV or PDF.' },
@@ -21,6 +21,14 @@ function buildSteps(hasMultipleCandidates) {
   steps.push(
     { key: 'map',    title: 'Match columns',    hint: 'Tell us what each column is.' },
     { key: 'review', title: 'Review & confirm', hint: 'Last chance before writing.' },
+  )
+  // BACKLOG-036 — conditional confirm-matches step, injected only when the matcher
+  // surfaced Review suggestions (mirrors the pick_table conditional precedent). Clean
+  // imports never see it — no friction tax.
+  if (hasReviewSuggestions) {
+    steps.push({ key: 'confirm_matches', title: 'Quick check', hint: 'Anything we should merge?' })
+  }
+  steps.push(
     { key: 'done',   title: 'Imported',         hint: 'Undo for 5 min.' },
   )
   return steps.map((s, i) => ({ ...s, n: i + 1 }))
@@ -539,7 +547,7 @@ function SummaryStat({ label, value, tone = 'var(--text)' }) {
   )
 }
 
-function StepReview({ draft, account, onBack, onCommitted }) {
+function StepReview({ draft, account, onBack, onCommitted, onNeedsConfirm }) {
   const { formatCurrency } = useCurrency()
   const [preview, setPreview] = useState(draft)
   const [busy, setBusy] = useState(false)
@@ -558,10 +566,27 @@ function StepReview({ draft, account, onBack, onCommitted }) {
     client.patch(`/imports/${draft.id}`, { row_updates: [{ id: rowId, excluded: !currentlyExcluded }] }).catch(() => {})
   }
 
+  // BACKLOG-036 — Confident pairs are echoed automatically (auto-checked); they alone do
+  // NOT warrant a confirm step. Only Review suggestions inject the quick-check step.
   const commit = async () => {
     setBusy(true); setError(null)
     try {
-      const { data } = await client.post(`/imports/${draft.id}/commit`)
+      // If the matcher surfaced Review suggestions, hand off to the confirm step (which
+      // performs the commit after the user decides). Otherwise commit now, auto-echoing
+      // the Confident pairs the matcher found.
+      const reviewSuggestions = preview.review_suggestions || []
+      const confidentMatches = preview.confident_matches || []
+      if (reviewSuggestions.length > 0) {
+        onNeedsConfirm({
+          confidentMatches,
+          confidentCount: preview.confident_match_count ?? confidentMatches.length,
+          reviewSuggestions,
+        })
+        return
+      }
+      const { data } = await client.post(`/imports/${draft.id}/commit`, {
+        confirmed_matches: confidentMatches,
+      })
       onCommitted(data)
     } catch (e) {
       setError(e.response?.data?.detail || 'Import failed')
@@ -635,7 +660,171 @@ function StepReview({ draft, account, onBack, onCommitted }) {
         onBack={onBack}
         onNext={commit}
         nextDisabled={busy || willImport === 0}
-        nextLabel={busy ? 'Importing…' : `Import ${willImport} transactions →`}
+        nextLabel={
+          busy ? 'Importing…'
+          : (preview.review_suggestions?.length ?? 0) > 0 ? 'Continue →'
+          : `Import ${willImport} transactions →`
+        }
+      />
+    </>
+  )
+}
+
+// ─── Step (conditional): Quick check — confirm possible matches (BACKLOG-036) ─
+// Surfaced only when the matcher returned Review suggestions. Confident pairs are
+// echoed automatically alongside whatever Review pairs the user toggles ON. Dracula
+// rules (spec §12.4): merge ON = green (success), the "you already added" side pink,
+// card neutral (--bg-card + border), NO orange, NO purple/AI affordance.
+function StepConfirmMatches({ draft, matchData, account, onBack, onCommitted }) {
+  const { formatCurrency } = useCurrency()
+  const [accepted, setAccepted] = useState(() => new Set())   // keys: `${row_id}:${cand_id}`
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  const suggestions = matchData.reviewSuggestions || []
+  const confidentMatches = matchData.confidentMatches || []
+  const confidentCount = matchData.confidentCount ?? confidentMatches.length
+  const [showConfident, setShowConfident] = useState(false)
+
+  const keyFor = (s) => `${s.row_id}:${s.candidate_transaction_id}`
+  const isOn = (s) => accepted.has(keyFor(s))
+  const toggle = (s) => {
+    setAccepted(prev => {
+      const next = new Set(prev)
+      const k = keyFor(s)
+      if (next.has(k)) next.delete(k); else next.add(k)
+      return next
+    })
+  }
+
+  const fmtDate = (d) => {
+    const parsed = parseServerDate(d)
+    return parsed ? parsed.toLocaleDateString() : (d || '—')
+  }
+
+  const commit = async () => {
+    setBusy(true); setError(null)
+    try {
+      // confirmed = auto-echoed Confident pairs + the Review pairs the user toggled ON.
+      const acceptedPairs = suggestions
+        .filter(isOn)
+        .map(s => ({ row_id: s.row_id, candidate_transaction_id: s.candidate_transaction_id }))
+      const confirmed_matches = [...confidentMatches, ...acceptedPairs]
+      const { data } = await client.post(`/imports/${draft.id}/commit`, { confirmed_matches })
+      onCommitted(data)
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Import failed')
+    } finally { setBusy(false) }
+  }
+
+  const onCount = suggestions.filter(isOn).length
+
+  return (
+    <>
+      <div style={{ flex: 1, overflow: 'auto', padding: '28px 32px' }}>
+        <h2 style={{ margin: '0 0 6px', fontSize: 20, fontWeight: 700, color: 'var(--text)' }}>
+          Are any of these the same payment?
+        </h2>
+        <p style={{ margin: '0 0 20px', fontSize: 13, color: 'var(--muted)' }}>
+          We weren't sure if these bank entries match something you already added. Turn one
+          on only if it's the same real-world payment — we'll merge them instead of adding
+          it twice.
+        </p>
+
+        {/* Confident summary — read-only, no toggles. */}
+        {confidentCount > 0 && (
+          <div style={{
+            marginBottom: 18, padding: '12px 16px', borderRadius: 10,
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+          }}>
+            <div style={{ fontSize: 13, color: 'var(--text)' }}>
+              {confidentCount} {confidentCount === 1 ? 'entry' : 'entries'} matched
+              automatically — same merchant, same amount.
+            </div>
+            <button
+              onClick={() => setShowConfident(v => !v)}
+              style={{
+                marginTop: 6, background: 'none', border: 'none', padding: 0,
+                color: 'var(--info)', fontSize: 12, cursor: 'pointer',
+              }}>
+              {showConfident ? 'Hide these' : 'Show these'}
+            </button>
+            {showConfident && (
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-faint)' }}>
+                {confidentMatches.map(c => (
+                  <div key={`${c.row_id}:${c.candidate_transaction_id}`} style={{ padding: '2px 0' }}>
+                    Bank row #{c.row_id} → your entry #{c.candidate_transaction_id}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {error && (
+          <div style={{
+            marginBottom: 14, padding: '10px 14px', borderRadius: 8,
+            background: 'color-mix(in oklab, var(--negative) 12%, transparent)',
+            border: '1px solid color-mix(in oklab, var(--negative) 35%, transparent)',
+            color: 'var(--negative)', fontSize: 13,
+          }}>{typeof error === 'string' ? error : JSON.stringify(error)}</div>
+        )}
+
+        {/* Review suggestions — each a neutral card with a green/merge toggle. */}
+        <div style={{ display: 'grid', gap: 12 }}>
+          {suggestions.map(s => {
+            const on = isOn(s)
+            return (
+              <div key={keyFor(s)} style={{
+                padding: 16, borderRadius: 10,
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                display: 'grid', gridTemplateColumns: '1fr auto', gap: 16, alignItems: 'center',
+              }}>
+                <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
+                  {/* From your file — neutral white. */}
+                  <div style={{ fontSize: 13, color: 'var(--white)' }}>
+                    <span style={{ color: 'var(--text-faint)', marginRight: 6 }}>From your file:</span>
+                    {fmtDate(s.bank_date)} · {s.bank_description || '—'} · {formatCurrency(s.bank_amount)}
+                  </div>
+                  {/* You already added — pink (estimate side). */}
+                  <div style={{ fontSize: 13, color: 'var(--pink)' }}>
+                    <span style={{ color: 'var(--text-faint)', marginRight: 6 }}>You already added:</span>
+                    {fmtDate(s.candidate_date)} · {s.candidate_description || '—'} · {formatCurrency(s.candidate_amount)}
+                  </div>
+                </div>
+                {/* Toggle — ON = green/merge, OFF = add separately. Label states BOTH. */}
+                <label style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6,
+                  cursor: 'pointer', minWidth: 150,
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => toggle(s)}
+                    style={{ width: 18, height: 18, accentColor: 'var(--green)', cursor: 'pointer' }}
+                  />
+                  <span style={{
+                    fontSize: 12, fontWeight: 600, textAlign: 'right',
+                    color: on ? 'var(--green)' : 'var(--text-faint)',
+                  }}>
+                    {on ? 'On — same payment, merge them' : 'Off — add as a new transaction'}
+                  </span>
+                </label>
+              </div>
+            )
+          })}
+        </div>
+
+        <p style={{ margin: '18px 0 0', fontSize: 12, color: 'var(--muted)' }}>
+          Left off, these come in as separate transactions. You can still merge them later
+          from the Transactions page.
+        </p>
+      </div>
+      <StepFooter
+        onBack={onBack}
+        onNext={commit}
+        nextDisabled={busy}
+        nextLabel={busy ? 'Importing…' : onCount > 0 ? `Merge ${onCount} & import →` : 'Import →'}
       />
     </>
   )
@@ -686,11 +875,32 @@ function StepDone({ commit, onClose }) {
       <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>
         {rolledBack
           ? 'Import rolled back'
-          : (commit.matched_count > 0
-              ? `${commit.transactions_created} imported · ${commit.matched_count} matched existing`
-              : `${commit.transactions_created} transactions imported`)}
+          : `${commit.transactions_created} added`}
       </h2>
-      <p style={{ margin: '6px 0 24px', fontSize: 13, color: 'var(--text-faint)' }}>
+
+      {/* BACKLOG-036 — split, trustworthy result lines (spec §12.4). */}
+      {!rolledBack && (
+        <div style={{ margin: '8px 0 0', display: 'grid', gap: 2 }}>
+          {(commit.auto_matched_count ?? 0) > 0 && (
+            <div style={{ fontSize: 13, color: 'var(--text-faint)' }}>
+              {commit.auto_matched_count} matched automatically — same merchant
+            </div>
+          )}
+          {(commit.confirmed_matched_count ?? 0) > 0 && (
+            <div style={{ fontSize: 13, color: 'var(--text-faint)' }}>
+              {commit.confirmed_matched_count} merged because you confirmed
+            </div>
+          )}
+          {(commit.could_not_apply_count ?? 0) > 0 && (
+            <div style={{ fontSize: 13, color: 'var(--text-faint)' }}>
+              {commit.could_not_apply_count} you confirmed couldn't be applied (the entry
+              changed) and were added as new — review on the Transactions page.
+            </div>
+          )}
+        </div>
+      )}
+
+      <p style={{ margin: '12px 0 24px', fontSize: 13, color: 'var(--text-faint)' }}>
         {rolledBack ? 'Nothing was kept. You can start over.' : 'They\'re live in your transactions list.'}
       </p>
 
@@ -766,12 +976,19 @@ export default function ImportWizard() {
   const [uploadFile, setUploadFile] = useState(null)
   const [uploadFormat, setUploadFormat] = useState('csv')
   const [pickBusy,   setPickBusy]   = useState(false)
+  // BACKLOG-036 — the matcher's Review/Confident plan, lifted to the shell so it
+  // spans the review → confirm_matches steps. Set when Review surfaces suggestions.
+  const [matchData,  setMatchData]  = useState(null)
 
   // Steps list responds to whether the current draft has multiple PDF
   // candidates. Mid-wizard transition (no candidates → 2+ candidates) is
   // fine because the step state is an index, not a hard-coded number.
   const hasMultiple = (draft?.candidate_tables?.length ?? 0) > 1
-  const steps = useMemo(() => buildSteps(hasMultiple), [hasMultiple])
+  const hasReviewSuggestions = (matchData?.reviewSuggestions?.length ?? 0) > 0
+  const steps = useMemo(
+    () => buildSteps(hasMultiple, hasReviewSuggestions),
+    [hasMultiple, hasReviewSuggestions],
+  )
   const currentKey = steps[step - 1]?.key
 
   useEffect(() => {
@@ -879,6 +1096,27 @@ export default function ImportWizard() {
             draft={draft}
             account={account}
             onBack={() => goBack('map')}
+            onNeedsConfirm={(data) => {
+              // Matcher surfaced Review suggestions → inject + advance to confirm_matches.
+              setMatchData(data)
+              const nextSteps = buildSteps(hasMultiple, true)
+              const idx = nextSteps.findIndex(s => s.key === 'confirm_matches')
+              setStep(idx + 1)
+            }}
+            onCommitted={c => {
+              // No Review suggestions → committed straight from review.
+              setCommitData(c)
+              const idx = steps.findIndex(s => s.key === 'done')
+              setStep(idx + 1)
+            }}
+          />
+        )}
+        {currentKey === 'confirm_matches' && draft && matchData && (
+          <StepConfirmMatches
+            draft={draft}
+            matchData={matchData}
+            account={account}
+            onBack={() => goBack('review')}
             onCommitted={c => {
               setCommitData(c)
               const idx = steps.findIndex(s => s.key === 'done')

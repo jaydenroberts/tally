@@ -54,6 +54,30 @@ MATCH_AMOUNT_TOLERANCE_MAX = 15.00   # A7: cap so big-ticket estimates can't mat
 # debt-linked typed rows carry linked records and are deliberately excluded.
 MATCH_TYPES = ("expense", "income")
 
+# BACKLOG-036 — merchant-confidence tiers. token_set_ratio returns 0-100; we
+# divide by 100.0 so these thresholds live on a 0-1 scale (spec §12.2).
+MATCH_MERCHANT_HIGH  = 0.80   # comparable & score >= HIGH → Confident (auto-reconcile)
+MATCH_MERCHANT_FLOOR = 0.50   # comparable & FLOOR <= score < HIGH → Review;
+                              # comparable & score < FLOOR → None (cross-merchant, reject);
+                              # not-comparable (boilerplate either side) → Review regardless
+
+# AU-bank boilerplate carrying no merchant identity — TUNABLE (spec §4.1).
+GENERIC_TOKENS = {
+    "direct", "debit", "credit", "purchase", "eftpos", "withdrawal",
+    "deposit", "transfer", "reversal", "receipt", "payment", "card", "pos",
+}
+_RECEIPT_RE = re.compile(r"\breceipt\b.*$", re.I)   # drop "- Receipt 12345 ..." tail
+# Drop the "<payment-method> Purchase" segment structurally (e.g. card-network or
+# eftpos purchase labels) so the network word never survives into the residual and is
+# never named literally in source. The leading method word + "purchase" go together.
+_METHOD_RE  = re.compile(r"\b\w+\s+purchase\b", re.I)
+_NONWORD_RE = re.compile(r"[^a-z0-9 ]+")
+
+# Perf sanity (spec §12.6): log if a single row survives the structural gate
+# against more than this many candidates. Fuzzy scoring is cheap; this just
+# documents the expected bound.
+MATCH_FANOUT_WARN = 50
+
 router = APIRouter(prefix="/imports", tags=["imports"])
 
 
@@ -335,58 +359,182 @@ def _dedup_row(
     return None, None
 
 
-def _find_match(
-    db: Session, account_id: int, bank_date, bank_amount: float
-) -> Optional[models.Transaction]:
-    """Find a pristine unverified manual estimate this committing bank row reconciles.
+def _merchant_residual(desc: Optional[str]) -> str:
+    """Strip AU-bank boilerplate + receipt IDs, leaving the merchant identity (spec §4.1).
 
-    Candidate gate (A2 + A4 + A6):
-      * same account_id (account is owner-scoped at draft create — A4)
-      * source == 'manual'
-      * is_verified == False
-      * import_id IS NULL          (A2 — only pristine rows; a matched/reverted row
-                                    never re-matches, protecting original_amount provenance)
-      * transaction_type in ('expense', 'income')   (A6 — sign-aware; transfers and
-                                    debt-linked rows excluded)
-      * date within ±MATCH_DATE_WINDOW_DAYS of the bank row
+    Examples:
+      "ZORPCO MART - Card Purchase - Receipt 133767"     → "zorpco mart"
+      "Direct Debit"                                     → ""   (pure boilerplate)
+      "RAA - Direct Debit - Receipt 102895"             → "raa"
 
-    Tolerance (A7): min(max(|amount|*15%, $1), $15). Matching uses signed amounts so
-    a +salary estimate never reconciles against a -expense bank row.
+    An empty residual means there is no merchant identity to compare → the pair can
+    never be Confident (the comparable guard in _compute_match_plan enforces this).
+    """
+    if not desc:
+        return ""
+    s = _RECEIPT_RE.sub("", desc.lower())
+    s = _METHOD_RE.sub(" ", s)          # drop "<method> purchase" (incl. the network word)
+    s = _NONWORD_RE.sub(" ", s)
+    toks = [t for t in s.split() if t not in GENERIC_TOKENS and not t.isdigit()]
+    return " ".join(toks)
 
-    Returns the best candidate (closest amount, then closest date) or None.
+
+def _amount_tolerance(bank_amount: float) -> float:
+    """A7 tolerance: min(max(|amount|*15%, $1), $15)."""
+    return min(
+        max(abs(bank_amount) * MATCH_AMOUNT_TOLERANCE_PCT, MATCH_AMOUNT_TOLERANCE_MIN),
+        MATCH_AMOUNT_TOLERANCE_MAX,
+    )
+
+
+def _passes_structural_gate(
+    candidate: models.Transaction, account_id: int, bank_date, bank_amount: float
+) -> bool:
+    """The full structural gate for a (bank_row, candidate) pair (spec §4.2 + §12.1.3).
+
+    Same account; candidate pristine (manual / unverified / import_id NULL / typed
+    expense|income); date within ±window; SIGNED amount within tolerance. Used both
+    when building the plan and re-checked at apply time against the live candidate.
     """
     if bank_date is None or bank_amount is None:
-        return None
+        return False
+    if candidate.account_id != account_id:
+        return False
+    if candidate.source != "manual":
+        return False
+    if candidate.is_verified:
+        return False
+    if candidate.import_id is not None:
+        return False
+    if candidate.transaction_type not in MATCH_TYPES:
+        return False
+    if abs((candidate.date - bank_date).days) > MATCH_DATE_WINDOW_DAYS:
+        return False
+    if abs(float(candidate.amount) - bank_amount) > _amount_tolerance(bank_amount):
+        return False
+    return True
 
-    lo = bank_date - timedelta(days=MATCH_DATE_WINDOW_DAYS)
-    hi = bank_date + timedelta(days=MATCH_DATE_WINDOW_DAYS)
 
+class MatchPlanEntry:
+    """One row's planned reconciliation (Confident or Review). Plain object — never
+    persisted; rebuilt deterministically at preview and at commit (spec §4.5)."""
+    __slots__ = (
+        "row_id", "candidate_id", "score", "tier", "comparable",
+        "candidate_desc", "candidate_amount", "candidate_date",
+        "bank_desc", "bank_amount", "bank_date",
+    )
+
+    def __init__(self, *, row_id, candidate_id, score, tier, comparable,
+                 candidate_desc, candidate_amount, candidate_date,
+                 bank_desc, bank_amount, bank_date):
+        self.row_id = row_id
+        self.candidate_id = candidate_id
+        self.score = score
+        self.tier = tier               # "confident" | "review"
+        self.comparable = comparable
+        self.candidate_desc = candidate_desc
+        self.candidate_amount = candidate_amount
+        self.candidate_date = candidate_date
+        self.bank_desc = bank_desc
+        self.bank_amount = bank_amount
+        self.bank_date = bank_date
+
+
+def _compute_match_plan(
+    db: Session, draft: models.ImportDraft
+) -> dict[int, MatchPlanEntry]:
+    """Pure, read-only global best-first one-to-one assignment (spec §3, §4.3, §12.1.1).
+
+    Returns {row_id → MatchPlanEntry} for every ready (non-excluded) bank row that the
+    planner assigns a candidate to. Rows tier None (cross-merchant or no candidate) are
+    absent from the dict — the caller imports them as new.
+
+    Read-only contract (spec §12.5): performs NO db.add / attribute mutation. The
+    candidate query is materialised with .all() up front so a later apply loop's writes
+    can never feed back into the plan via autoflush (spec §12.1.1).
+    """
+    # Pull every pristine candidate on this account ONCE. Per-pair date/amount/merchant
+    # gating happens in Python so the plan is a single read against a stable snapshot.
     candidates = (
         db.query(models.Transaction)
         .filter(
-            models.Transaction.account_id == account_id,
+            models.Transaction.account_id == draft.account_id,
             models.Transaction.source == "manual",
             models.Transaction.is_verified == False,   # noqa: E712 (SQL boolean)
             models.Transaction.import_id.is_(None),
             models.Transaction.transaction_type.in_(MATCH_TYPES),
-            models.Transaction.date >= lo,
-            models.Transaction.date <= hi,
         )
         .all()
     )
 
-    tolerance = min(
-        max(abs(bank_amount) * MATCH_AMOUNT_TOLERANCE_PCT, MATCH_AMOUNT_TOLERANCE_MIN),
-        MATCH_AMOUNT_TOLERANCE_MAX,
-    )
-    valid = [c for c in candidates if abs(float(c.amount) - bank_amount) <= tolerance]
-    if not valid:
-        return None
+    ready_rows = [r for r in draft.rows if not r.excluded and r.amount is not None]
 
-    return min(
-        valid,
-        key=lambda c: (abs(float(c.amount) - bank_amount), abs((c.date - bank_date).days)),
-    )
+    # Precompute residuals once per candidate.
+    cand_residual = {c.id: _merchant_residual(c.description) for c in candidates}
+
+    # Build the assignable pair set: structurally-valid pairs that are either
+    # comparable-with-score>=FLOOR, or not-comparable. Comparable-but-<FLOOR is
+    # discarded (cross-merchant — spec §3 H1, §4.3 step 1).
+    pairs = []  # each: (comparable, score, amt_diff, date_diff, candidate, row)
+    for row in ready_rows:
+        bank_amount = float(row.amount)
+        survivors = 0
+        br = _merchant_residual(row.description)
+        for c in candidates:
+            if not _passes_structural_gate(c, draft.account_id, row.date, bank_amount):
+                continue
+            survivors += 1
+            er = cand_residual[c.id]
+            comparable = bool(br) and bool(er)
+            score = fuzz.token_set_ratio(br, er) / 100.0 if comparable else 0.0
+            if comparable and score < MATCH_MERCHANT_FLOOR:
+                continue   # compared merchants, they differ → reject (cross-merchant)
+            amt_diff = abs(float(c.amount) - bank_amount)
+            date_diff = abs((c.date - row.date).days)
+            pairs.append((comparable, score, amt_diff, date_diff, c, row))
+        if survivors > MATCH_FANOUT_WARN:
+            # Perf sanity (spec §12.6) — fuzzy is cheap, this just documents expectation.
+            import logging
+            logging.getLogger(__name__).info(
+                "import matcher: row_id=%s survived structural gate against %d candidates",
+                row.id, survivors,
+            )
+
+    # Sort assignable pairs: comparable first, then score desc, then closest
+    # amount/date, then stable id/index tiebreaks (spec §4.3 step 2). row_index is
+    # the ordering tiebreak ONLY — identity is always row.id.
+    pairs.sort(key=lambda p: (
+        not p[0],            # comparable desc (False sorts before True → invert)
+        -p[1],               # score desc
+        p[2],                # |amt diff| asc
+        p[3],                # |date diff| asc
+        p[4].id,             # candidate.id asc
+        p[5].row_index,      # row.row_index asc
+    ))
+
+    plan: dict[int, MatchPlanEntry] = {}
+    consumed_rows: set[int] = set()
+    consumed_cands: set[int] = set()
+    for comparable, score, _amt, _date, cand, row in pairs:
+        if row.id in consumed_rows or cand.id in consumed_cands:
+            continue
+        consumed_rows.add(row.id)
+        consumed_cands.add(cand.id)
+        tier = "confident" if (comparable and score >= MATCH_MERCHANT_HIGH) else "review"
+        plan[row.id] = MatchPlanEntry(
+            row_id=row.id,
+            candidate_id=cand.id,
+            score=score,
+            tier=tier,
+            comparable=comparable,
+            candidate_desc=cand.description,
+            candidate_amount=float(cand.amount),
+            candidate_date=cand.date,
+            bank_desc=row.description,
+            bank_amount=float(row.amount),
+            bank_date=row.date,
+        )
+    return plan
 
 
 def _build_preview_response(db: Session, draft: models.ImportDraft) -> schemas.ImportDraftPreviewResponse:
@@ -401,6 +549,31 @@ def _build_preview_response(db: Session, draft: models.ImportDraft) -> schemas.I
     candidate_schemas = (
         [schemas.CandidateTableSchema(**c) for c in candidates] if candidates else None
     )
+
+    # BACKLOG-036 — compute the merchant-confidence plan for display. Confident
+    # pairs ship as id-pairs only (cheap even at ~200, spec §12.3); Review pairs
+    # ship in full so the wizard can render the quick-check card.
+    plan = _compute_match_plan(db, draft)
+    confident_matches: list[schemas.ConfidentPair] = []
+    review_suggestions: list[schemas.MatchSuggestion] = []
+    for entry in plan.values():
+        if entry.tier == "confident":
+            confident_matches.append(schemas.ConfidentPair(
+                row_id=entry.row_id,
+                candidate_transaction_id=entry.candidate_id,
+            ))
+        else:
+            review_suggestions.append(schemas.MatchSuggestion(
+                row_id=entry.row_id,
+                score=entry.score,
+                candidate_transaction_id=entry.candidate_id,
+                candidate_description=entry.candidate_desc,
+                candidate_amount=entry.candidate_amount,
+                candidate_date=entry.candidate_date,
+                bank_description=entry.bank_desc,
+                bank_amount=entry.bank_amount,
+                bank_date=entry.bank_date,
+            ))
 
     return schemas.ImportDraftPreviewResponse(
         id=draft.id,
@@ -419,6 +592,9 @@ def _build_preview_response(db: Session, draft: models.ImportDraft) -> schemas.I
         extraction_strategy=meta.get("extraction_strategy"),
         candidate_tables=candidate_schemas,
         selected_table_index=meta.get("selected_table_index"),
+        confident_matches=confident_matches,
+        confident_match_count=len(confident_matches),
+        review_suggestions=review_suggestions,
     )
 
 
@@ -622,6 +798,7 @@ def patch_draft(
 @router.post("/{draft_id}/commit", response_model=schemas.ImportCommitResponse)
 def commit_draft(
     draft_id: int,
+    payload: schemas.ImportCommitRequest = schemas.ImportCommitRequest(),
     db: Session = Depends(get_db),
     user: models.User = Depends(require_owner),
 ):
@@ -645,27 +822,73 @@ def commit_draft(
 
     draft = db.query(models.ImportDraft).filter(models.ImportDraft.id == draft_id).first()
 
+    # BACKLOG-036 — unified commit-apply guard (spec §12.1).
+    #   (1) Plan computed ONCE, read-only, materialised before any write.
+    #   (2) Nothing applies unless the client echoed {row_id, candidate_transaction_id}
+    #       AND the recomputed plan still maps that row to that candidate at the same tier.
+    #   (3) The FULL structural gate is re-checked against the live candidate at apply.
+    #   (4) Confident and accepted-Review share ONE apply path (this is what makes the
+    #       §7 rollback claim true).
+    plan = _compute_match_plan(db, draft)
+
+    # The client echoes BOTH auto-checked Confident pairs and user-toggled Review pairs.
+    # Build a {row_id → candidate_transaction_id} lookup of what the client confirmed.
+    confirmed = {m.row_id: m.candidate_transaction_id for m in payload.confirmed_matches}
+
     # FE-012 — reconciliation matcher. All mutations below (match-revisions, inserts,
     # and the committing→committed flip) share the single db.commit() at the end so
     # they land in ONE unit of work on the same connection as the BASTION-5 TOCTOU
     # UPDATE (A3). A failure anywhere in the loop leaves zero rows mutated.
     created = 0
-    matched = 0
+    auto_matched = 0
+    confirmed_matched = 0
+    could_not_apply = 0
     amount_diff_warnings: list[schemas.MatchWarning] = []
+
+    # Cache live candidate rows by id for the apply-time gate re-check.
+    cand_cache: dict[int, Optional[models.Transaction]] = {}
+
+    def _live_candidate(cid: int) -> Optional[models.Transaction]:
+        if cid not in cand_cache:
+            cand_cache[cid] = (
+                db.query(models.Transaction)
+                .filter(models.Transaction.id == cid)
+                .first()
+            )
+        return cand_cache[cid]
 
     for row in draft.rows:
         if row.excluded:
             continue
-        if row.amount is None:
-            # No usable amount → fall back to inserting a zero-amount import row
-            # (prior behaviour) rather than attempting a match.
-            row_amount = 0.0
-            match = None
-        else:
-            row_amount = float(row.amount)   # MASON-2: cast Numeric→float
-            match = _find_match(db, draft.account_id, row.date, row_amount)
+        row_amount = 0.0 if row.amount is None else float(row.amount)
+
+        entry = plan.get(row.id)
+        # A pair applies only if: planned this run, client confirmed the SAME candidate,
+        # and the recomputed plan still maps that row to that candidate (spec §12.1.2).
+        # Confident pairs are echoed automatically by the UI, so the same echo check
+        # covers both tiers — a post-preview edit changes the recomputed plan (or drops
+        # the row entirely), the echo no longer matches, and it falls through to import-new.
+        match = None
+        if entry is not None and confirmed.get(row.id) == entry.candidate_id:
+            candidate = _live_candidate(entry.candidate_id)
+            # §12.1.3 — re-run the FULL structural gate against the LIVE candidate.
+            if candidate is not None and _passes_structural_gate(
+                candidate, draft.account_id, row.date, row_amount
+            ):
+                match = candidate
+            else:
+                # Client confirmed a pair that no longer passes the gate (concurrent
+                # candidate mutation). Import as new + count it (spec §12.4).
+                could_not_apply += 1
+        elif row.id in confirmed:
+            # Client echoed this row but the recomputed plan no longer maps it to that
+            # candidate — either remapped to a different candidate, or dropped from the
+            # plan (a post-preview row edit moved it out of any tier). Safe default:
+            # import as new + count as could-not-apply (spec §12.1.2 + §12.4).
+            could_not_apply += 1
 
         if match is not None:
+            tier = entry.tier
             manual_amount = float(match.amount)
             if abs(manual_amount - row_amount) > 0.005:
                 # Amounts differ — bank wins; preserve the original for rollback/provenance.
@@ -687,7 +910,10 @@ def commit_draft(
             match.is_verified = True
             match.source = "manual"          # keep manual provenance (user category/notes)
             match.import_id = draft.id        # tag so rollback can revert THIS import's matches
-            matched += 1
+            if tier == "confident":
+                auto_matched += 1
+            else:
+                confirmed_matched += 1
         else:
             # A5: an unmatched row flagged as a near-duplicate (duplicate_of set) that the
             # user chose NOT to exclude commits as a manual-style estimate — is_verified=False
@@ -712,13 +938,18 @@ def commit_draft(
 
     committed_at = _as_utc(draft.committed_at)
     rollback_until = committed_at + timedelta(seconds=IMPORT_ROLLBACK_WINDOW_SECONDS)
+    matched = auto_matched + confirmed_matched
     return schemas.ImportCommitResponse(
         id=draft.id,
         status=draft.status,
         committed_at=committed_at,
         rollback_until=rollback_until,
         transactions_created=created,
-        matched_count=matched,
+        matched_count=matched,                 # back-compat = auto + confirmed
+        auto_matched_count=auto_matched,
+        confirmed_matched_count=confirmed_matched,
+        review_suggested_count=sum(1 for e in plan.values() if e.tier == "review"),
+        could_not_apply_count=could_not_apply,
         amount_diff_warnings=amount_diff_warnings,
     )
 
