@@ -1,0 +1,62 @@
+name: scan
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  personal-data-scan:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out PR head (full history for base..head)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Personal-data scan (CITADEL backstop)
+        env:
+          CITADEL_PATTERNS_B64: ${{ secrets.CITADEL_PATTERNS_B64 }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Fail fast (exit 2 = error) if the pattern secret is not configured.
+          if [ -z "${CITADEL_PATTERNS_B64:-}" ]; then
+            echo "::error::CITADEL_PATTERNS_B64 is not set — cannot run the personal-data backstop." >&2
+            exit 2
+          fi
+
+          # Decode the secret: base64 of a gzipped tar of the two pattern files.
+          PATTERN_DIR="$RUNNER_TEMP/citadel-patterns"
+          mkdir -p "$PATTERN_DIR" && chmod 700 "$PATTERN_DIR"
+
+          # Clean up the decoded patterns on exit, no matter what.
+          trap 'rm -rf "$PATTERN_DIR"' EXIT
+
+          printf '%s' "$CITADEL_PATTERNS_B64" | base64 -d | tar -xz -C "$PATTERN_DIR"
+
+          if [ ! -f "$PATTERN_DIR/institution-patterns.txt" ] || [ ! -f "$PATTERN_DIR/name-patterns.txt" ]; then
+            echo "::error::Decoded CITADEL_PATTERNS_B64 is missing institution-patterns.txt or name-patterns.txt." >&2
+            exit 2
+          fi
+
+          # Defense-in-depth masking: GitHub only auto-masks the registered B64 blob,
+          # not the decoded individual patterns. Mask every non-empty pattern line
+          # from BOTH files BEFORE invoking the scanner.
+          while IFS= read -r line || [ -n "$line" ]; do
+            [ -n "$line" ] && echo "::add-mask::$line"
+          done < "$PATTERN_DIR/institution-patterns.txt"
+          while IFS= read -r line || [ -n "$line" ]; do
+            [ -n "$line" ] && echo "::add-mask::$line"
+          done < "$PATTERN_DIR/name-patterns.txt"
+
+          # Feed the commit range via --prereceive stdin (<oldrev> <newrev> <refname>).
+          # Exit 0 = clean (pass); 1 = finding (fail); 2 = error (fail).
+          printf '%s %s %s\n' "$BASE_SHA" "$HEAD_SHA" "refs/pull/$PR_NUMBER/merge" \
+            | PATTERN_DIR="$PATTERN_DIR" ci/scanner.sh --ci --prereceive
