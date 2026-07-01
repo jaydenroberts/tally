@@ -45,3 +45,4 @@ backend/app/static/
 
 # Data
 data/
+.githooks/

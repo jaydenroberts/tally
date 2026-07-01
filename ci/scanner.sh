@@ -1,47 +1,53 @@
 #!/usr/bin/env bash
-# ci/scanner.sh — CITADEL DRY scanner
+# ci/scanner.sh — personal-data / secret scan gate (portable, dependency-free)
 #
-# Used at 4 enforcement points:
-#   1. PreToolUse hook (pre-write-scan.sh) — blocks before file hits disk
-#   2. Client pre-commit hook (installed by bootstrap)
-#   3. Client pre-push hook (Tally canonical dev box → GitHub)  [--ci]
-#   4. Server pre-receive hook on bare repos — cannot be bypassed with --no-verify
-#   + GitHub Actions backstop job (MASON) — public CI, unbypassable [--ci]
+# Enforcement points:
+#   1. Pre-write hook — blocks a sensitive write before it hits disk
+#   2. Client pre-commit hook
+#   3. Client pre-push hook  [--ci]
+#   4. Server-side pre-receive hook — cannot be bypassed with --no-verify
+#   + GitHub Actions backstop job — public CI, authoritative + unbypassable [--ci]
 #
 # Modes / flags:
 #   ci/scanner.sh --prereceive       reads git stdin (pre-receive mode)
-#   ci/scanner.sh --file <path>      scans a single file (PreToolUse mode)
+#   ci/scanner.sh --file <path>      scans a single file
 #   ci/scanner.sh --selftest         regression self-check
 #   ci/scanner.sh                    no args → prereceive mode (hook symlink compat)
 #   ci/scanner.sh --ci ...           CLIENT/CI-safe modifier (see below)
 #
 # --ci modifier (composes with --prereceive / --file):
-#   * Quiet PII output: a PII / real-name / institution-name match prints
-#     "PII pattern match in <file>:<line>" WITHOUT the matched literal, so the
-#     operator's real name / bank names never reach public Actions logs.
-#     (Generic credential/secret/entropy findings print as normal — not sensitive.)
-#   * PATTERN_DIR env override is honored ONLY under --ci. Without --ci the
-#     hardcoded /etc/citadel/patterns is forced (cannot be neutered locally).
-#   * LOG_DIR env override honored ONLY under --ci, and a missing/unwritable
-#     log dir is NON-FATAL (warn + continue) so a client/CI box that cannot
-#     write /var/log/aiops-prerec is never blocked. Fatal in normal modes.
+#   * Quiet output: a sensitive-pattern match prints "PII pattern match in
+#     <file>:<line>" WITHOUT the matched literal, so no sensitive value reaches
+#     public CI logs. (Generic credential/secret/entropy findings print as normal.)
+#   * PATTERN_DIR / LOG_DIR env overrides are honored ONLY under --ci. In normal
+#     modes they are ignored and the pattern source is fixed by the host install
+#     config (see below), so the local gate cannot be neutered by the environment.
+#   * A missing/unwritable log dir is NON-FATAL under --ci (warn + continue) so a
+#     client/CI box that cannot write its log dir is never blocked. Fatal otherwise.
 #
 # Exit codes:
 #   0 = clean
 #   1 = finding (push/write blocked)
 #   2 = error   (fail-closed — git rejects push on any non-zero)
 #
-# Pattern files (outside vault — not agent-writable):
-#   /etc/citadel/patterns/institution-patterns.txt
-#   /etc/citadel/patterns/name-patterns.txt
+# Pattern source:
+#   Every *.txt file in the resolved pattern dir is loaded as a newline list of
+#   regex patterns. Defaults are portable and repo-relative; a deployed host
+#   supplies its real (non-public) pattern/log dirs via an install-time config
+#   file that is NOT part of this repo (see the resolution block below). The
+#   public source contains no host-specific absolute paths or pattern categories.
 #
-# Logs: /var/log/aiops-prerec/YYYYMMDDTHHMMSSZ-scanner.log
+# Logs: <resolved-log-dir>/YYYYMMDDTHHMMSSZ-scanner.log
 
 set -uo pipefail
 
 TS=$(date -u +"%Y%m%dT%H%M%SZ")
-readonly PATTERN_DIR_DEFAULT="/etc/citadel/patterns"
-readonly LOG_DIR_DEFAULT="/var/log/aiops-prerec"
+# Portable, project-neutral defaults. A deployed host overrides these via the
+# install-time config sourced in the resolution block below; the public source
+# carries no host-specific absolute paths.
+readonly PATTERN_DIR_DEFAULT="${SCANNER_PATTERN_DIR:-.ci/patterns}"
+readonly LOG_DIR_DEFAULT="${SCANNER_LOG_DIR:-${TMPDIR:-/tmp}/scan-gate-logs}"
+readonly INSTALL_CONF_DEFAULT="/etc/scan-gate/scanner.conf"
 
 CI_MODE=0
 FINDINGS=0
@@ -84,14 +90,33 @@ done
 [[ -z "${MODE}" ]] && MODE="prereceive"
 
 # ---- Resolve PATTERN_DIR / LOG_DIR --------------------------------------------
-# Overrides honored ONLY under --ci. Otherwise force hardcoded defaults so the
-# PreToolUse / pre-receive gates can never be pointed at an empty/neutered dir.
+# Resolution precedence:
+#   * A deployed host MAY supply its real (non-public) pattern/log dirs via an
+#     install-time config file — root-owned, OUTSIDE this repo — that sets
+#     INSTALL_PATTERN_DIR / INSTALL_LOG_DIR. Because it is a SOURCED file, not an
+#     environment variable, it CANNOT be neutered by an env override: this
+#     preserves the "the local gate cannot be pointed at an empty/neutered dir"
+#     guarantee that a hardcoded path previously provided.
+#   * Environment overrides (PATTERN_DIR / LOG_DIR) are honored ONLY under --ci,
+#     which is explicitly best-effort/bypassable (the authoritative gate is the
+#     server-side CI backstop, which injects its own pattern dir). In normal
+#     modes env overrides are ignored.
+#   * Otherwise fall back to the portable, repo-relative defaults.
+INSTALL_PATTERN_DIR=""
+INSTALL_LOG_DIR=""
 if [[ ${CI_MODE} -eq 1 ]]; then
-    PATTERN_DIR="${PATTERN_DIR:-${PATTERN_DIR_DEFAULT}}"
-    LOG_DIR="${LOG_DIR:-${LOG_DIR_DEFAULT}}"
+    _install_conf="${SCANNER_INSTALL_CONF:-${INSTALL_CONF_DEFAULT}}"
+    # shellcheck disable=SC1090
+    [[ -r "${_install_conf}" ]] && source "${_install_conf}"
+    PATTERN_DIR="${PATTERN_DIR:-${INSTALL_PATTERN_DIR:-${PATTERN_DIR_DEFAULT}}}"
+    LOG_DIR="${LOG_DIR:-${INSTALL_LOG_DIR:-${LOG_DIR_DEFAULT}}}"
 else
-    PATTERN_DIR="${PATTERN_DIR_DEFAULT}"
-    LOG_DIR="${LOG_DIR_DEFAULT}"
+    # Fixed install-conf path (NOT env-overridable) so the local gate's pattern
+    # source is controlled only by root, never by the calling environment.
+    # shellcheck disable=SC1090
+    [[ -r "${INSTALL_CONF_DEFAULT}" ]] && source "${INSTALL_CONF_DEFAULT}"
+    PATTERN_DIR="${INSTALL_PATTERN_DIR:-${PATTERN_DIR_DEFAULT}}"
+    LOG_DIR="${INSTALL_LOG_DIR:-${LOG_DIR_DEFAULT}}"
 fi
 readonly PATTERN_DIR LOG_DIR CI_MODE
 LOG_FILE="${LOG_DIR}/${TS}-scanner.log"
@@ -109,11 +134,13 @@ fi
 SCANNER_SHA=$(sha256sum "$0" 2>/dev/null | awk '{print $1}' || echo "unknown")
 _log "scanner.sh start — mode=${MODE} ci=${CI_MODE} sha=${SCANNER_SHA}"
 
-# Pattern files must exist for every enforcement path (fail-closed). selftest
-# builds its own temp patterns and does not depend on the system pattern dir.
+# At least one pattern file must exist for every enforcement path (fail-closed).
+# selftest builds its own temp patterns and does not depend on the host dir.
 if [[ "${MODE}" != "selftest" ]]; then
-    [[ -f "${PATTERN_DIR}/institution-patterns.txt" ]] || _err_exit "Missing institution-patterns.txt"
-    [[ -f "${PATTERN_DIR}/name-patterns.txt" ]] || _err_exit "Missing name-patterns.txt"
+    shopt -s nullglob
+    _pat_files=("${PATTERN_DIR}"/*.txt)
+    shopt -u nullglob
+    [[ ${#_pat_files[@]} -gt 0 ]] || _err_exit "No pattern files (*.txt) in ${PATTERN_DIR}"
 fi
 
 scan_filename() {
@@ -127,10 +154,13 @@ scan_filename() {
 
 scan_text() {
     local label="$1" content="$2"
-    local pattern _ln
-    # Institution-name patterns. Under --ci, NEVER emit the matched literal
-    # (would leak bank names into public CI logs).
-    if [[ -f "${PATTERN_DIR}/institution-patterns.txt" ]]; then
+    local pattern _ln _pf
+    # Sensitive-data patterns, loaded from EVERY *.txt in the pattern dir. The
+    # public source names no wordlist categories. Under --ci, NEVER emit the
+    # matched literal (would leak a sensitive value into public CI logs); emit a
+    # generic PII finding with the line number instead.
+    for _pf in "${PATTERN_DIR}"/*.txt; do
+        [[ -f "${_pf}" ]] || continue
         while IFS= read -r pattern; do
             [[ "${pattern}" =~ ^[[:space:]]*# ]] && continue
             [[ -z "${pattern// /}" ]] && continue
@@ -139,26 +169,11 @@ scan_text() {
                     _ln=$(printf '%s' "${content}" | grep -inE "${pattern}" | head -n1 | cut -d: -f1)
                     _finding "PII pattern match in ${label}:${_ln:-?}"
                 else
-                    _finding "institution-name match '${pattern}' in ${label}"
+                    _finding "sensitive-pattern match '${pattern}' in ${label}"
                 fi
             fi
-        done < "${PATTERN_DIR}/institution-patterns.txt"
-    fi
-    # Real-name patterns. Same quiet treatment under --ci.
-    if [[ -f "${PATTERN_DIR}/name-patterns.txt" ]]; then
-        while IFS= read -r pattern; do
-            [[ "${pattern}" =~ ^[[:space:]]*# ]] && continue
-            [[ -z "${pattern// /}" ]] && continue
-            if printf '%s' "${content}" | grep -iqE "${pattern}"; then
-                if [[ ${CI_MODE} -eq 1 ]]; then
-                    _ln=$(printf '%s' "${content}" | grep -inE "${pattern}" | head -n1 | cut -d: -f1)
-                    _finding "PII pattern match in ${label}:${_ln:-?}"
-                else
-                    _finding "real-name match '${pattern}' in ${label}"
-                fi
-            fi
-        done < "${PATTERN_DIR}/name-patterns.txt"
-    fi
+        done < "${_pf}"
+    done
     printf '%s' "${content}" | grep -qiE '^sensitivity:[[:space:]]*(restricted|secret)[[:space:]]*$' && _finding "restricted/secret frontmatter in ${label}"
     printf '%s' "${content}" | grep -qE '(sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|glpat-[A-Za-z0-9_-]{20,})' && _finding "known credential pattern in ${label}"
     # b) Key=value with long opaque value (password/secret assignments)
@@ -254,7 +269,7 @@ run_selftest() {
     # Regression fixtures. Control fixtures for the 4c exemption are BUILT AT
     # RUNTIME from fragments so the full secret pattern never appears as a literal
     # in this source. Integration fixtures (a–e) use a TEMP sentinel pattern dir
-    # so the selftest never depends on (or emits) real /etc/citadel patterns.
+    # so the selftest never depends on (or emits) the host's real patterns.
     local fails=0
     # Resolve to an ABSOLUTE path: case (d) invokes "${self}" from inside a temp
     # repo (cd "${repo}"), so a relative $0 (e.g. ci/scanner.sh) would fail to
@@ -312,8 +327,8 @@ run_selftest() {
     ptmp="${tmproot}/patterns"
     mkdir -p "${ptmp}"
     # Sentinel patterns — match nothing real; safe to print in any context.
-    printf '%s\n' 'ACMEHOLDINGS_SENTINEL' > "${ptmp}/institution-patterns.txt"
-    printf '%s\n' 'ZZSENTINELNAME' > "${ptmp}/name-patterns.txt"
+    printf '%s\n' 'ACMEHOLDINGS_SENTINEL' > "${ptmp}/patterns-a.txt"
+    printf '%s\n' 'ZZSENTINELNAME' > "${ptmp}/patterns-b.txt"
     local pii_file="${tmproot}/leak.txt"
     printf 'line one\nmy institution is ACMEHOLDINGS_SENTINEL here\nline three\n' > "${pii_file}"
 
@@ -378,8 +393,8 @@ run_selftest() {
     out=$(env PATTERN_DIR="${ptmp}" "${self}" --ci --file "${clean_file}" 2>&1); rc=$?
     [[ ${rc} -eq 0 ]] || { echo "SELFTEST FAIL (e): clean file flagged (rc=${rc})" >&2; fails=$((fails+1)); }
 
-    if [[ ${fails} -eq 0 ]]; then echo "[CITADEL] selftest PASS"; return 0; fi
-    echo "[CITADEL] selftest FAILED — ${fails} case(s)" >&2; return 1
+    if [[ ${fails} -eq 0 ]]; then echo "[scan-gate] selftest PASS"; return 0; fi
+    echo "[scan-gate] selftest FAILED — ${fails} case(s)" >&2; return 1
 }
 
 run_prereceive() {
@@ -416,11 +431,11 @@ run_prereceive() {
     _log "scan complete — findings=${FINDINGS}"
     if [[ ${FINDINGS} -gt 0 ]]; then
         _log "REJECTED: ${FINDINGS} finding(s)"
-        echo "" >&2; echo "╔ CITADEL SCAN GATE: PUSH REJECTED - ${FINDINGS} finding(s). See ${LOG_FILE:-stderr}" >&2
+        echo "" >&2; echo "╔ SCAN GATE: PUSH REJECTED - ${FINDINGS} finding(s). See ${LOG_FILE:-stderr}" >&2
         return 1
     fi
     _log "ACCEPTED"
-    echo "[CITADEL] scan gate: ACCEPTED (sha=${SCANNER_SHA:0:12})" >&2
+    echo "[scan-gate] scan gate: ACCEPTED (sha=${SCANNER_SHA:0:12})" >&2
     return 0
 }
 
@@ -432,7 +447,7 @@ run_file() {
     content=$(cat "${TARGET_FILE}") || _err_exit "Cannot read file: ${TARGET_FILE}"
     scan_text "${TARGET_FILE}" "${content}"
     _log "scan complete — findings=${FINDINGS}"
-    [[ ${FINDINGS} -gt 0 ]] && { echo "CITADEL: write blocked - ${FINDINGS} finding(s). See ${LOG_FILE:-stderr}" >&2; return 1; }
+    [[ ${FINDINGS} -gt 0 ]] && { echo "scan-gate: write blocked - ${FINDINGS} finding(s). See ${LOG_FILE:-stderr}" >&2; return 1; }
     return 0
 }
 
