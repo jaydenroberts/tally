@@ -1,40 +1,66 @@
-name: Publish to DockerHub
+name: Publish Tally image (GHCR + DockerHub)
 
 on:
   push:
     tags:
       - "v*.*.*"
 
+# Least privilege: nothing by default, granted per-job.
+permissions: {}
+
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    name: build-and-push
+    runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: read        # checkout
+      packages: write       # push image + attestation to GHCR
+      id-token: write       # keyless OIDC signing (attest-build-provenance)
+      attestations: write   # write attestation to the GitHub attestations store
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Extract version from tag
+      - name: Derive version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Log in to DockerHub
-        uses: docker/login-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR (primary, via built-in GITHUB_TOKEN)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to DockerHub (retained for existing users)
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Build and push (GHCR + DockerHub) with provenance + SBOM
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/tally:${{ steps.version.outputs.VERSION }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/tally:latest
+            ghcr.io/jaydenroberts/tally:${{ steps.version.outputs.VERSION }}
+            ghcr.io/jaydenroberts/tally:latest
+            jaydenroberts/tally:${{ steps.version.outputs.VERSION }}
+            jaydenroberts/tally:latest
+          provenance: true   # SLSA provenance as OCI attestation manifest (both registries)
+          sbom: true         # SBOM as OCI attestation manifest (both registries)
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Attest build provenance (GHCR image, keyless OIDC / Sigstore)
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-name: ghcr.io/jaydenroberts/tally
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
