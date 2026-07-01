@@ -182,21 +182,48 @@ scan_text() {
     #      Java   : System.getenv(...) | System.getProperty(...)
     #      Ruby   : ENV[...] | ENV.fetch(...)
     #      Shell  : ${VAR} | ${VAR:-default} | $VAR
-    _secret_assign_re='(password|secret|api_?key|auth_?token|private_?key|access_?key)[[:space:]]*[=:][[:space:]]*[^[:space:]]{20,}'
+    _secret_assign_re='(password|secret(_?key)?|api_?key|auth_?token|private_?key|access_?key)[[:space:]]*[=:][[:space:]]*[^[:space:]]{20,}'
     # Anchored to the VALUE side: ^<optional wrappers/quotes><env-read><...>$
     _env_read_re='^[[:space:]]*(str\(|String\(|[A-Za-z_][A-Za-z0-9_.]*[[:space:]]*=[[:space:]]*)?[[:space:]]*["'\''`(]*[[:space:]]*(os\.getenv\(|os\.environ\.get\(|os\.environ\[|process\.env\.[A-Za-z_]|process\.env\[|Deno\.env\.get\(|System\.getenv\(|System\.getProperty\(|ENV\.fetch\(|ENV\[|\$\{?[A-Za-z_])'
+    # POSITIVE literal test (fail-closed on ambiguity is NOT applied here — a
+    # secret finding requires a HARDCODED LITERAL right-hand side). The rule flags
+    # ONLY when the value side is a quoted string literal or a bare high-entropy
+    # token. Every COMPUTED / reference RHS is exempt because it holds no literal
+    # secret: env reads (above), function calls `name(...)`, and bare
+    # identifiers / attribute access `x`/`obj.attr`. Bare high-entropy secret
+    # TOKENS remain covered by the known-credential regex and the entropy scanner
+    # below, so narrowing 4b to literals does not widen any real-secret exemption.
+    _quoted_literal_re='^[[:space:]]*["'\''`]'                       # value starts with a quote -> string literal
+    _func_call_re='^[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*[[:space:]]*\('  # name(...) -> computed, exempt
+    _bare_ref_re='^[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*[[:space:]]*[,;)]*[[:space:]]*$'  # ident / obj.attr -> exempt
     while IFS= read -r _line; do
         # Does this line look like a long-value secret assignment?
         printf '%s' "${_line}" | grep -iqE "${_secret_assign_re}" || continue
         # Isolate the value side (everything after the first = or :).
         _value="${_line#*[=:]}"
-        # If the VALUE side is a recognised env-read/interpolation form, it is a
-        # reference — not a literal credential — so do not flag it.
-        if printf '%s' "${_value}" | grep -qE "${_env_read_re}"; then
-            continue
+        # 1) env-read / interpolation reference -> not a literal -> exempt.
+        printf '%s' "${_value}" | grep -qE "${_env_read_re}" && continue
+        # 2) quoted string literal -> hardcoded secret -> FLAG.
+        if printf '%s' "${_value}" | grep -qE "${_quoted_literal_re}"; then
+            _finding "secret assignment pattern in ${label}"
+            break
         fi
-        _finding "secret assignment pattern in ${label}"
-        break  # One finding per file is sufficient
+        # 3) function call -> computed value (e.g. hash_password(...)) -> exempt.
+        printf '%s' "${_value}" | grep -qE "${_func_call_re}" && continue
+        # 4) bare identifier / attribute access -> reference -> exempt.
+        printf '%s' "${_value}" | grep -qE "${_bare_ref_re}" && continue
+        # 5) remaining bare token: FLAG only if it is a high-entropy secret token
+        #    (mixed classes and long). Numeric/short/simple tokens are exempt.
+        _tok="${_value#"${_value%%[![:space:]]*}"}"   # left-trim whitespace
+        _tok="${_tok%%[[:space:],;)]*}"               # first token only
+        _ta=0; _tl=0; _td=0
+        [[ "${_tok}" =~ [A-Z] ]] && _ta=1
+        [[ "${_tok}" =~ [a-z] ]] && _tl=1
+        [[ "${_tok}" =~ [0-9] ]] && _td=1
+        if [[ $((_ta+_tl+_td)) -ge 2 && ${#_tok} -ge 20 ]]; then
+            _finding "secret assignment pattern in ${label}"
+            break  # One finding per file is sufficient
+        fi
     done < <(printf '%s\n' "${content}")
     if printf 'test' | grep -qP '.' 2>/dev/null; then
         local candidate
@@ -229,7 +256,12 @@ run_selftest() {
     # in this source. Integration fixtures (a–e) use a TEMP sentinel pattern dir
     # so the selftest never depends on (or emits) real /etc/citadel patterns.
     local fails=0
-    local self="$0"
+    # Resolve to an ABSOLUTE path: case (d) invokes "${self}" from inside a temp
+    # repo (cd "${repo}"), so a relative $0 (e.g. ci/scanner.sh) would fail to
+    # resolve there -> rc=127. Absolute path makes --selftest cwd-independent.
+    local self
+    self="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
+    [[ -f "${self}" ]] || self="$0"   # fallback if resolution fails
 
     # ---------- In-process unit fixtures (4c directive exemption) ----------
     _st() {
@@ -247,6 +279,30 @@ run_selftest() {
     _st "API_KEY=${_sk}" flag 'control sk-ant literal still flags'
     local _hi; _hi="Directive=$(printf 'aB3%.0s' $(seq 1 10))"
     _st "${_hi}" flag 'control high-entropy value after directive keyword still flags'
+
+    # ---------- Secret-assignment env-read exemption (4b) ----------
+    # FP fixtures — env-var READS must be CLEAN. This is the v1.4.1 main.py:101
+    # false positive (owner_password = os.getenv(...)) that this fix targets.
+    _st 'owner_password = os.getenv("FIRST_RUN_OWNER_PASSWORD")' clean 'FP env-read owner_password = os.getenv()'
+    _st 'api_key = os.environ["X"]'    clean 'FP env-read api_key = os.environ[]'
+    _st 'secret = os.environ.get("Y")' clean 'FP env-read secret = os.environ.get()'
+    # FP fixtures — COMPUTED (non-literal) RHS must be CLEAN. This is the v1.4.1
+    # main.py:107 false positive (hashed_password=hash_password(...)) that round-1
+    # missed: the value is a function call / reference, not a hardcoded literal.
+    # Built at runtime (keyword split off '=') to avoid self-tripping on scan.
+    local _fc1 _fc2 _ba1
+    _fc1="hashed_password""=hash_password(owner_password_value)"
+    _fc2="secret"" = compute_secret_from_config(app_configuration)"
+    _ba1="api_key"" = settings.integration_api_key_value_ref"
+    _st "${_fc1}" clean 'FP func-call RHS hash_password()'
+    _st "${_fc2}" clean 'FP func-call RHS some_func()'
+    _st "${_ba1}" clean 'FP bare attribute-access RHS obj.attr'
+    # Control fixtures — hardcoded literals MUST still flag. Built at runtime so the
+    # keyword never sits adjacent to '=' in THIS source (prevents self-trip on scan).
+    local _lit; _lit="SECRET""_KEY = \"hardcoded-literal-abc123\""
+    _st "${_lit}" flag 'control SECRET_KEY quoted literal still flags'
+    local _ghp; _ghp="token = \"ghp_""$(printf 'a%.0s' $(seq 1 36))\""
+    _st "${_ghp}" flag 'control ghp_ quoted literal still flags'
 
     # ---------- Integration fixtures (subprocess, --ci contract) ----------
     local tmproot ptmp
