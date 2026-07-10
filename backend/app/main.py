@@ -381,7 +381,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.4.1.1",
+    version="1.4.2",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

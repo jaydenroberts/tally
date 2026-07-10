@@ -76,8 +76,9 @@ def update_debt(
     debt = _load_debt(db, debt_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(debt, field, value)
-    if debt.current_balance <= 0:
-        debt.is_paid_off = True
+    # Two-way paid-off flag (AUDIT-23): reflect the corrected balance in both
+    # directions — an upward correction re-opens a debt that was marked paid off.
+    debt.is_paid_off = debt.current_balance <= 0
     db.commit()
     return _load_debt(db, debt_id)
 
@@ -169,5 +170,28 @@ def delete_debt(
     debt = db.query(models.Debt).filter(models.Debt.id == debt_id).first()
     if not debt:
         raise HTTPException(status_code=404, detail="Debt not found")
+
+    payments = db.query(models.DebtPayment).filter(
+        models.DebtPayment.debt_id == debt_id
+    ).all()
+    for payment in payments:
+        if payment.transaction_id is not None:
+            tx = db.query(models.Transaction).filter(
+                models.Transaction.id == payment.transaction_id
+            ).first()
+            if tx is not None:
+                tx.debt_id = None
+                # Revert to a plain row by sign so it isn't stranded as debt_payment.
+                tx.transaction_type = "income" if tx.amount > 0 else "expense"
+        db.delete(payment)
+    # Also clear any transaction whose debt_id points here but had no DebtPayment row.
+    orphan_txs = db.query(models.Transaction).filter(
+        models.Transaction.debt_id == debt_id
+    ).all()
+    for tx in orphan_txs:
+        tx.debt_id = None
+        if tx.transaction_type == "debt_payment":
+            tx.transaction_type = "income" if tx.amount > 0 else "expense"
+
     db.delete(debt)
     db.commit()
