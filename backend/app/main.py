@@ -280,37 +280,72 @@ def run_startup_migrations(db: Session) -> None:
     # Introduced in v1.1.5 alongside duplicate detection. This one-time cleanup removes
     # exact duplicates (same account_id, date, amount, description, source='import'),
     # keeping only the earliest row (lowest id) per group.
+    #
+    # AUDIT-02/BACKLOG-041 (v1.4.1.1): this cleanup is destructive, so — unlike the
+    # idempotent column/data fixes above — it must run EXACTLY ONCE. We gate it behind
+    # a persisted marker row in schema_migrations. We also never delete a transaction
+    # that is still referenced by a child row (debt_payments, savings_contributions,
+    # import_draft_rows), which would raise IntegrityError under PRAGMA foreign_keys=ON.
+    db.execute(text(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    ))
+    db.commit()
 
-    # Find all import transactions grouped by the four dedup fields
-    # Identify groups that have more than one row (i.e. have duplicates)
-    # For each such group, delete all rows except the one with the minimum id.
-    # We do this in Python to stay compatible with SQLite (no DELETE...JOIN syntax).
+    already_applied = db.execute(text(
+        "SELECT 1 FROM schema_migrations WHERE id = 'M-003'"
+    )).first()
 
-    dupes_removed = 0
-    import_txs = (
-        db.query(models.Transaction)
-        .filter(models.Transaction.source == "import")
-        .order_by(models.Transaction.account_id, models.Transaction.date, models.Transaction.amount, models.Transaction.description, models.Transaction.id)
-        .all()
-    )
+    if not already_applied:
+        # Find all import transactions grouped by the four dedup fields.
+        # Identify groups that have more than one row (i.e. have duplicates).
+        # For each such group, delete all rows except the one with the minimum id.
+        # We do this in Python to stay compatible with SQLite (no DELETE...JOIN syntax).
+        dupes_removed = 0
+        import_txs = (
+            db.query(models.Transaction)
+            .filter(models.Transaction.source == "import")
+            .order_by(models.Transaction.account_id, models.Transaction.date, models.Transaction.amount, models.Transaction.description, models.Transaction.id)
+            .all()
+        )
 
-    # Group by (account_id, date, amount, description)
-    seen = {}
-    to_delete = []
-    for tx in import_txs:
-        key = (tx.account_id, tx.date, tx.amount, tx.description)
-        if key in seen:
-            to_delete.append(tx)
-        else:
-            seen[key] = tx.id
+        # Collect transaction ids that are still referenced by a child row. Deleting
+        # any of these would violate a foreign key, so we skip them entirely.
+        referenced_ids = set()
+        for table, col in (
+            ("debt_payments", "transaction_id"),
+            ("savings_contributions", "transaction_id"),
+            ("import_draft_rows", "duplicate_of"),
+        ):
+            rows = db.execute(text(
+                f"SELECT DISTINCT {col} FROM {table} WHERE {col} IS NOT NULL"
+            )).fetchall()
+            referenced_ids.update(r[0] for r in rows)
 
-    for tx in to_delete:
-        db.delete(tx)
-        dupes_removed += 1
+        # Group by (account_id, date, amount, description); keep the earliest id.
+        seen = {}
+        to_delete = []
+        for tx in import_txs:
+            key = (tx.account_id, tx.date, tx.amount, tx.description)
+            if key in seen:
+                # Never delete a transaction another table still points at.
+                if tx.id in referenced_ids:
+                    continue
+                to_delete.append(tx)
+            else:
+                seen[key] = tx.id
 
-    if dupes_removed:
+        for tx in to_delete:
+            db.delete(tx)
+            dupes_removed += 1
+
+        # Record the marker in the same transaction as the deletes so the cleanup
+        # and its completion marker commit atomically — it can never run twice.
+        db.execute(text("INSERT INTO schema_migrations (id) VALUES ('M-003')"))
         db.commit()
-        log.info("[M-003] Removed %d duplicate imported transaction(s)", dupes_removed)
+        if dupes_removed:
+            log.info("[M-003] Removed %d duplicate imported transaction(s)", dupes_removed)
+        log.info("[M-003] One-time dedup cleanup complete; marker recorded")
 
 
 @asynccontextmanager
@@ -346,7 +381,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.4.1",
+    version="1.4.1.1",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -392,9 +427,20 @@ if STATIC_DIR.exists():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
-        """Catch-all: serve static files if they exist, otherwise serve index.html."""
-        requested = STATIC_DIR / full_path
-        if requested.exists() and requested.is_file():
+        """Catch-all: serve static files if they exist, otherwise serve index.html.
+
+        AUDIT-01/BACKLOG-040 (v1.4.1.1): this route is unauthenticated, so the
+        requested path MUST be confined to STATIC_DIR. Without containment,
+        GET /../../data/tally.db escapes the static root and leaks the database.
+        We resolve the path and confirm it stays inside STATIC_DIR before serving;
+        anything outside falls through to the SPA index.
+        """
+        static_root = STATIC_DIR.resolve()
+        requested = (STATIC_DIR / full_path).resolve(strict=False)
+        if (
+            requested.is_file()
+            and requested.is_relative_to(static_root)
+        ):
             return FileResponse(requested)
         index = STATIC_DIR / "index.html"
         if index.exists():
