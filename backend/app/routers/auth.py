@@ -1,19 +1,20 @@
 import os
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models, schemas
-from ..auth import hash_password, verify_password, create_access_token
+from ..auth import hash_password, verify_password, create_access_token, rate_limit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=schemas.Token)
-def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
+def login(payload: schemas.LoginRequest, request: Request, db: Session = Depends(get_db)):
+    rate_limit(request, "login")
     user = db.query(models.User).filter(
         models.User.username == payload.username,
         models.User.is_active == True,
@@ -23,7 +24,7 @@ def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
         )
-    token = create_access_token(user.id)
+    token = create_access_token(user.id, user.token_version)
     return schemas.Token(access_token=token, user=user)
 
 
@@ -61,7 +62,7 @@ class RecoverRequest(BaseModel):
 
 
 @router.post("/recover", status_code=status.HTTP_200_OK)
-def recover_owner_password(payload: RecoverRequest, db: Session = Depends(get_db)):
+def recover_owner_password(payload: RecoverRequest, request: Request, db: Session = Depends(get_db)):
     """
     Reset the first owner account's password using a pre-shared env var token.
 
@@ -71,6 +72,7 @@ def recover_owner_password(payload: RecoverRequest, db: Session = Depends(get_db
 
     Security: token comparison uses secrets.compare_digest to prevent timing attacks.
     """
+    rate_limit(request, "recover")
     recovery_token = os.getenv("RECOVERY_TOKEN")
     if not recovery_token:
         # Behave as if the route does not exist when the token is unset.
@@ -101,6 +103,7 @@ def recover_owner_password(payload: RecoverRequest, db: Session = Depends(get_db
         )
 
     owner.hashed_password = hash_password(payload.new_password)
+    owner.token_version = (owner.token_version or 0) + 1  # AUDIT-29: invalidate old tokens
     db.commit()
 
     return {"detail": f"Password reset for owner account '{owner.username}'. Remove RECOVERY_TOKEN and restart."}

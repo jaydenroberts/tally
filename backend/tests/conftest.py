@@ -11,6 +11,17 @@ from app.database import Base, get_db
 from app.main import app
 from app import models
 from app.auth import hash_password
+from app import auth as _auth
+
+
+@pytest.fixture(autouse=True)
+def _reset_auth_rate_limits():
+    """AUDIT-27: the in-process login/recover rate limiter keeps state across
+    requests. Tests share one TestClient IP and log in many times, so reset the
+    buckets before every test to avoid spurious 429s in unrelated tests."""
+    _auth.reset_rate_limits()
+    yield
+    _auth.reset_rate_limits()
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
 

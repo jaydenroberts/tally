@@ -99,6 +99,9 @@ class User(Base):
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
     persona_id = Column(Integer, ForeignKey("personas.id"), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    # AUDIT-29: bumped on password change to invalidate outstanding JWTs (the token
+    # carries a matching "ver" claim; a mismatch is rejected).
+    token_version = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

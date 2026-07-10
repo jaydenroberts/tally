@@ -6,6 +6,21 @@ A self-hosted personal finance web application for households. Track accounts, t
 
 ---
 
+> ### ⚠️ Security: single-tenant only
+>
+> Tally is designed for a **single household you fully trust**. Authentication
+> gates access to the app, but the data layer is **not user-scoped**: any
+> authenticated user (owner *or* viewer) can read all accounts, transactions,
+> budgets, debts, and savings in the instance. Roles limit *actions*, not *data
+> visibility*.
+>
+> **Do not expose Tally as a shared multi-user service** to people who should not
+> see each other's finances, and do not put it on the public internet. Run it on
+> your LAN or behind a private tunnel/VPN. Per-user data isolation is tracked as a
+> future enhancement.
+
+---
+
 ## Features
 
 - **Multi-user** with configurable roles (Owner / Viewer by default)
