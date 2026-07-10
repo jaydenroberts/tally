@@ -4,6 +4,18 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.4.1.1] - 2026-07-10
+
+### Security
+
+- **Fixed an unauthenticated path-traversal hole in the static file server.** The single-page-app fallback route served any file path it was handed without confirming the file lived inside the app's static directory, so a crafted request could read files outside it — including the application database. Requested paths are now resolved and confirmed to stay within the static root before being served; anything outside falls back to the app's index page.
+
+### Fixed
+
+- **The one-time import-deduplication cleanup no longer re-runs on every startup.** A maintenance step that removes exact duplicate imported transactions was running on each boot and could fail — or delete a transaction still referenced by a linked payment, saving contribution, or import review row. It now runs exactly once (guarded by a persisted marker) and always skips any transaction another record still points to, so startup can never crash on it and linked history is preserved.
+
+---
+
 ## [1.4.1] - 2026-05-22
 
 ### Fixed
