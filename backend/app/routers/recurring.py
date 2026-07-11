@@ -181,6 +181,9 @@ def _fast_forward_next_due(rec: models.RecurringTransaction, today: date) -> Non
     guard = 0
     while rec.next_due < today:
         if rec.end_date and rec.next_due >= rec.end_date:
+            # Schedule has fully elapsed: deactivate so it doesn't linger active
+            # with a stale past next_due (the caller may have just reactivated it).
+            rec.is_active = False
             break
         rec.next_due = _advance_date(rec.next_due, rec.frequency, anchor_day)
         guard += 1

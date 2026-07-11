@@ -77,6 +77,8 @@ def test_fast_forward_respects_end_date():
     )
     _fast_forward_next_due(rec, today=date(2026, 7, 10))
     assert rec.next_due <= date(2025, 6, 1)
+    # A fully-elapsed schedule must not linger active with a stale past next_due.
+    assert rec.is_active is False
 
 
 # ---------------------------------------------------------------------------

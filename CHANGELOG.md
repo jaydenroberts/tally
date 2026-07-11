@@ -49,7 +49,7 @@ Correctness & security hardening release. No new features; a broad sweep of mone
 
 ### Fixed — UI
 
-- Recurring/debt date badges and new-entry date defaults now use your local date (correct "Due today" and no saving to yesterday).
+- Recurring/debt date badges and new-entry date defaults now use your local date (correct "Due today" and no saving to yesterday). Savings goal deadlines use the same local-date basis, so an "overdue"/on-time badge no longer flips a day early.
 - Failed dashboard loads and import preview actions now show an error instead of hanging or silently failing; un-checking an import row to exclude it reliably sticks.
 - The dashboard "Budget used" figure no longer shows "NaN%".
 

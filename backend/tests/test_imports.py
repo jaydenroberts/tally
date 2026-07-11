@@ -421,6 +421,10 @@ def test_pdf_oversized_page_count_rejected(client, auth_headers, test_account):
         ("$1,234.56 cr",  Decimal("1234.56")),
         ("$9.99 DR",      Decimal("-9.99")),
         ("100.00 Cr",     Decimal("100.00")),
+        # AUDIT-03: inner "-" AND a debit marker must stay negative, not double-
+        # negate back to positive. A revert to bare `-value` flips these to income.
+        ("-48.56 Dr",     Decimal("-48.56")),
+        ("(-48.56)",      Decimal("-48.56")),
         # Accounting parens-negative
         ("(1234.56)",     Decimal("-1234.56")),
         ("($48.56)",      Decimal("-48.56")),

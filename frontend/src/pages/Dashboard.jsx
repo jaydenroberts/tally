@@ -115,7 +115,10 @@ export default function Dashboard() {
   // cash-flow (income - expenses per month), NOT a net-worth trend. The range
   // selector slices this returned window client-side; a real net-worth trend and
   // a backend range param are a separate v1.5 item.
-  const CASHFLOW_RANGES = { '1M': 1, '3M': 3, '6M': 6, '12M': 12 }
+  // 1M slices the last 2 points (not 1): the Sparkline needs ≥2 points to draw,
+  // so "1M" shows the month-over-month step into the current month rather than a
+  // blank chart. The 1M/3M/6M/12M button labels are unchanged (BACKLOG-034a).
+  const CASHFLOW_RANGES = { '1M': 2, '3M': 3, '6M': 6, '12M': 12 }
   const fullSeries = summary.netWorthHistory || []
   const cashflowSeries = fullSeries.slice(-CASHFLOW_RANGES[range])
   const greeting = greetingFor(new Date())
@@ -309,7 +312,8 @@ export default function Dashboard() {
             <div style={dashStyles.divider}/>
             <div style={{ padding: '14px 20px', display: 'grid', gap: 12 }}>
               {summary.budgetCategories.map(c => {
-                const pct = (c.spent / c.budget) * 100
+                // Guard divide-by-zero: no budget set -> 0% rather than NaN%/Infinity%.
+                const pct = c.budget > 0 ? (c.spent / c.budget) * 100 : 0
                 const over = pct > 100
                 return (
                   <div key={c.name}>

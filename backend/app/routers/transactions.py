@@ -892,7 +892,7 @@ def link_transaction_to_debt(
     if not debt:
         raise HTTPException(status_code=404, detail="Debt not found")
 
-    if debt.is_paid_off:
+    if debt.is_paid_off or debt.current_balance <= 0:
         raise HTTPException(status_code=400, detail="Debt is already paid off")
 
     # Guard against double-recording (e.g. the tx was previously linked then unlinked
