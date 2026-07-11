@@ -7,7 +7,7 @@ import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
 import PageHeader from '../components/PageHeader'
 import useBreakpoint from '../hooks/useBreakpoint'
-import { formatDate } from '../utils/dateFormat'
+import { formatDate, parseLocalDate, todayLocalISO } from '../utils/dateFormat'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -24,9 +24,11 @@ const FREQUENCIES = [
 function StatusBadge({ rec }) {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
-  const nextDue = new Date(rec.next_due)
-  const overdue = !rec.is_active ? false : nextDue < today
-  const dueToday = !rec.is_active ? false : nextDue.getTime() === today.getTime()
+  // Parse the date-only next_due as a LOCAL date, not UTC midnight — otherwise
+  // "Due today" never matches for UTC+ users (AUDIT-24).
+  const nextDue = parseLocalDate(rec.next_due)
+  const overdue = !rec.is_active || !nextDue ? false : nextDue < today
+  const dueToday = !rec.is_active || !nextDue ? false : nextDue.getTime() === today.getTime()
 
   if (!rec.is_active) {
     return <span style={badge('var(--text-muted)')}>Inactive</span>
@@ -124,7 +126,7 @@ function RecurringForm({ initial, accounts, categories, onSave, onCancel, saving
     account_id:   initial?.account_id   ?? (accounts[0]?.id ?? ''),
     category_id:  initial?.category_id  ?? '',
     frequency:    initial?.frequency    ?? 'monthly',
-    start_date:   initial?.start_date   ?? new Date().toISOString().slice(0, 10),
+    start_date:   initial?.start_date   ?? todayLocalISO(),
     end_date:     initial?.end_date     ?? '',
     notes:        initial?.notes        ?? '',
   })

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Button from '../../components/Button'
 import FormField, { inputStyle, selectStyle } from '../../components/FormField'
+import { todayLocalISO } from '../../utils/dateFormat'
 
 const TX_TYPES = [
   { key: 'expense',  label: '− Expense',   accent: 'var(--negative)'   },
@@ -19,7 +20,7 @@ const moreToggleStyle = {
 }
 
 export default function AddTransactionForm({ accounts, categories, onSave, onCancel, saving }) {
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayLocalISO()   // local date, not UTC — avoids saving yesterday (AUDIT-24)
 
   const [txType, setTxType] = useState('expense')
 

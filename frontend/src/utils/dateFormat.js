@@ -78,3 +78,35 @@ export function formatDateTime(iso) {
   const min  = String(dt.getMinutes()).padStart(2, '0')
   return `${dd}-${mm}-${yyyy} ${hh}:${min}`
 }
+
+/**
+ * Parse a plain calendar date string ('YYYY-MM-DD') into a LOCAL Date at
+ * midnight. `new Date('2026-07-10')` parses as UTC midnight, which in UTC+
+ * zones (e.g. ACST) lands on the previous local day — so date-only badge
+ * arithmetic ("is this due today?") silently breaks (AUDIT-24). Splitting the
+ * parts and feeding the local Date constructor pins it to local midnight.
+ */
+export function parseLocalDate(value) {
+  if (!value) return null
+  if (value instanceof Date) return value
+  const parts = String(value).slice(0, 10).split('-')
+  if (parts.length !== 3) return null
+  const [y, m, d] = parts.map(Number)
+  if (!y || !m || !d) return null
+  const dt = new Date(y, m - 1, d)  // local midnight
+  return isNaN(dt.getTime()) ? null : dt
+}
+
+/**
+ * Today's date as a 'YYYY-MM-DD' string in the LOCAL timezone. Use for date
+ * input defaults instead of `new Date().toISOString().slice(0, 10)`, which
+ * returns the UTC date and saves YESTERDAY for UTC+ users after local midnight
+ * but before UTC midnight (AUDIT-24).
+ */
+export function todayLocalISO() {
+  const now = new Date()
+  const yyyy = now.getFullYear()
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const dd = String(now.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
