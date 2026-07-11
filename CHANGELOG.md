@@ -4,6 +4,28 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.4.3] - 2026-07-11
+
+Import feature release — debt-payment reconciliation, smarter matching for reference-only statement lines, and scheduled recurring generation.
+
+### Added
+
+- **Debt payments now reconcile on import.** An unverified debt-payment estimate is matched against the corresponding statement line just like ordinary spending. When the bank figure differs from your estimate, Tally asks you to confirm rather than changing it silently; confirming updates the transaction, the payment record, and the debt balance together so they always agree.
+- **Reference-only statement lines match more often.** When a statement line and one of your estimates carry no recognisable merchant name but share the same receipt/reference number, Tally now treats them as a confident match instead of asking you to check it.
+- **Recurring transactions now generate on a daily schedule, not only at startup.** A lightweight in-process timer wakes shortly after midnight (UTC) each day and creates any due recurring entries, so a long-running instance no longer needs a restart to catch up. No new dependencies and no external scheduler.
+
+### Changed
+
+- **The import review step now separates "will reconcile" from "new."** The summary and the import button show how many transactions will merge into ones you already have versus how many are genuinely new — updating live as you include or exclude rows.
+- The statement-upload size cap is now configurable via `MAX_UPLOAD_BYTES` (default 10 MB).
+
+### Fixed
+
+- Reconciling a debt payment whose amount changed can no longer be silently auto-verified — it is always surfaced for confirmation, because it moves a debt balance.
+- Undo is blocked (with a clear message) on an import that adjusted a debt balance from a confirmed payment, so a rollback can never leave the debt out of step.
+
+---
+
 ## [1.4.2] - 2026-07-10
 
 Correctness & security hardening release. No new features; a broad sweep of money-accuracy, AI-chat, dashboard, import, and security fixes from a full code audit.
