@@ -7,7 +7,7 @@ import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
 import PageHeader from '../components/PageHeader'
 import useBreakpoint from '../hooks/useBreakpoint'
-import { formatDate as formatDateDMY } from '../utils/dateFormat'
+import { formatDate as formatDateDMY, parseLocalDate } from '../utils/dateFormat'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -32,8 +32,11 @@ const INTEREST_EXPIRY_CAUTION_DAYS = 180 // orange caution
 // ─── Status / colour helpers ──────────────────────────────────────────────────
 
 function daysUntil(dateStr) {
-  if (!dateStr) return null
-  return Math.floor((new Date(dateStr) - new Date()) / (1000 * 60 * 60 * 24))
+  const target = parseLocalDate(dateStr)   // local midnight, not UTC (AUDIT-24)
+  if (!target) return null
+  const now = new Date()
+  now.setHours(0, 0, 0, 0)
+  return Math.round((target - now) / (1000 * 60 * 60 * 24))
 }
 
 /**

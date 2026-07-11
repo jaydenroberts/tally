@@ -13,6 +13,25 @@ from ..auth import get_current_user, require_owner
 router = APIRouter(prefix="/api/budgets", tags=["budgets"])
 
 
+def _period_month_amount(budget_amount: float, period: str, year: int, month: int) -> float:
+    """
+    Pro-rate a budget's amount into a single-month view so weekly/yearly budgets
+    compare correctly against a month of spend (AUDIT-21).
+
+      monthly → amount as-is
+      weekly  → amount × (days_in_month / 7)   (≈4.35 weeks)
+      yearly  → amount / 12
+
+    Unknown periods fall back to the raw amount.
+    """
+    if period == "weekly":
+        days_in_month = calendar.monthrange(year, month)[1]
+        return budget_amount * (days_in_month / 7.0)
+    if period == "yearly":
+        return budget_amount / 12.0
+    return budget_amount  # monthly (default)
+
+
 @router.get("/summary", response_model=List[schemas.BudgetStatus])
 def budget_summary(
     year: int = Query(..., ge=2000, le=2100),
@@ -81,17 +100,24 @@ def budget_summary(
         verified_spend  = max(0.0, -verified_raw)
         estimated_spend = max(0.0, -estimated_raw)
         total_spend     = verified_spend + estimated_spend
-        remaining       = budget.amount - total_spend
 
-        # Avoid division by zero for $0 budgets
-        divisor = budget.amount if budget.amount > 0 else 1.0
+        # Pro-rate the budget into this month's view so weekly/yearly budgets
+        # compare against a month of spend rather than their raw period amount
+        # (AUDIT-21). Monthly budgets are unchanged.
+        month_budget_amount = _period_month_amount(budget.amount, budget.period, year, month)
+        remaining = month_budget_amount - total_spend
+
+        # Avoid division by zero for $0 (pro-rated) budgets
+        divisor = month_budget_amount if month_budget_amount > 0 else 1.0
         pct_verified  = round((verified_spend  / divisor) * 100, 1)
         pct_estimated = round((estimated_spend / divisor) * 100, 1)
         pct_total     = round((total_spend     / divisor) * 100, 1)
 
-        if pct_total >= 90:
+        # Thresholds aligned with AUDIT-16: over is strictly above budget (>100),
+        # warning at 80%+. Matches the UI's ">100% = over" semantics.
+        if pct_total > 100:
             budget_status = "over"
-        elif pct_total >= 75:
+        elif pct_total >= 80:
             budget_status = "warning"
         else:
             budget_status = "healthy"

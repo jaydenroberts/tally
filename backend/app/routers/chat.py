@@ -387,6 +387,10 @@ def _execute_tool(
                     models.Transaction.date >= first_day,
                     models.Transaction.date <= last_day,
                     models.Transaction.is_verified == True,
+                    or_(
+                        models.Transaction.transaction_type == "expense",
+                        models.Transaction.transaction_type == None,
+                    ),
                 )
                 .scalar()
             ) or 0.0
@@ -399,6 +403,10 @@ def _execute_tool(
                     models.Transaction.date >= first_day,
                     models.Transaction.date <= last_day,
                     models.Transaction.is_verified == False,
+                    or_(
+                        models.Transaction.transaction_type == "expense",
+                        models.Transaction.transaction_type == None,
+                    ),
                 )
                 .scalar()
             ) or 0.0
@@ -408,9 +416,10 @@ def _execute_tool(
             total_spend     = round(verified_spend + estimated_spend, 2)
             divisor = budget_amount if budget_amount > 0 else 1.0
             pct = round((total_spend / divisor) * 100, 1)
-            if pct >= 90:
+            # AUDIT-16: align with the UI — over only above 100%, warning from 80%.
+            if pct > 100:
                 status = "over"
-            elif pct >= 75:
+            elif pct >= 80:
                 status = "warning"
             else:
                 status = "healthy"
@@ -468,6 +477,9 @@ def _execute_tool(
             notes=notes or None,
             source="manual",
             is_verified=False,
+            # AUDIT-17: derive type from the sign so positive (income) amounts aren't
+            # stored as "expense" (the column default) and netted against budgets.
+            transaction_type="income" if amount > 0 else "expense",
         )
         db.add(tx)
         db.commit()
@@ -664,9 +676,11 @@ def _inject_budget_table(
         remaining       = round(budget_amount - total_spend, 2)
         pct             = round((total_spend / budget_amount) * 100, 1) if budget_amount > 0 else 0.0
 
-        if pct >= 90:
+        # AUDIT-16: align the system-prompt budget table with the UI + get_budget_summary
+        # (over above 100%, warning from 80%) so the AI never contradicts the screen.
+        if pct > 100:
             status = "OVER"
-        elif pct >= 75:
+        elif pct >= 80:
             status = "warning"
         else:
             status = "healthy"
@@ -903,13 +917,20 @@ async def chat(
     # data_access_level == "summary" → family-style persona; no raw data access.
     window_start = date.today() - timedelta(days=persona.data_window_days)
 
-    # Build tool list scoped to persona capabilities
-    available_tools = list(READ_TOOLS)
+    # Build tool list scoped to persona capabilities.
+    #
+    # AUDIT-14: a "summary" persona is aggregates-only and must NEVER receive raw
+    # data tools — read OR write. can_modify_data is orthogonal to data_access_level,
+    # so a summary persona that also has can_modify_data set (a misconfiguration, or
+    # a shared persona reused across users) must still get an empty tool list. Gate
+    # the write-tool append on data_access_level, not just can_modify_data.
     if persona.data_access_level == "summary":
-        # summary access: no raw transaction/account/category tool access
+        # summary access: no raw transaction/account/category tool access, read or write
         available_tools = []
-    if persona.can_modify_data:
-        available_tools = available_tools + list(WRITE_TOOLS)
+    else:
+        available_tools = list(READ_TOOLS)
+        if persona.can_modify_data:
+            available_tools = available_tools + list(WRITE_TOOLS)
 
     # Local provider write-tool kill switch: strip write tools when AI_PROVIDER=ollama
     # unless explicitly opted in via TALLY_LOCAL_PROVIDER_WRITE_TOOLS=allow.
@@ -929,123 +950,147 @@ async def chat(
 
     async def event_stream():
         # We may need to run multiple rounds if the model uses tools.
-        # Each round appends the assistant's tool calls and tool results to
-        # `messages`, then re-invokes the model.
+        #
+        # AUDIT-13: the whole loop is wrapped so a provider/network exception mid-stream
+        # emits a clean SSE `error` (provider details redacted) then `done`, instead of
+        # aborting the stream and letting the frontend persist a blank assistant message
+        # that poisons the next send.
+        # AUDIT-18: at MAX_TOOL_ROUNDS the prior round's writes already committed, so a
+        # bare "max depth" error reports success as failure. Run one final tools-stripped
+        # round so the model summarises instead.
+        import logging
+        _stream_log = logging.getLogger("tally.chat")
+
         MAX_TOOL_ROUNDS = 6
         current_messages = list(messages)
         tool_call_counts: dict[str, int] = {}  # per-tool call counter (F-CHAT-07)
 
-        for _round in range(MAX_TOOL_ROUNDS + 1):
-            if _round == MAX_TOOL_ROUNDS:
-                yield _sse("error", "Maximum tool call depth reached.")
-                break
+        try:
+            for _round in range(MAX_TOOL_ROUNDS + 1):
+                # AUDIT-18: the final iteration strips tools so the model can only produce
+                # a text summary of the work already done — no new tool calls.
+                final_round = _round == MAX_TOOL_ROUNDS
+                round_tools = [] if final_round else available_tools
 
-            tool_calls_this_round: list[dict] = []
-            assistant_text = ""
+                tool_calls_this_round: list[dict] = []
+                assistant_text = ""
 
-            async for chunk in stream_chat(
-                messages=current_messages,
-                tools=available_tools,
-                system=system_prompt,
-            ):
-                if chunk.startswith(SENTINEL):
-                    # Tool call sentinel
-                    tool_data = json.loads(chunk[len(SENTINEL):])
-                    tool_calls_this_round.append(tool_data)
-                    yield _sse("tool_call", json.dumps({
-                        "name": tool_data["name"],
-                        "input": tool_data["input"],
-                    }))
-                else:
-                    assistant_text += chunk
-                    yield _sse("delta", chunk)
-
-            if not tool_calls_this_round:
-                # No tool calls — conversation turn complete
-                break
-
-            # Append the assistant's turn and tool results to history, then loop.
-            # Format differs by provider: Anthropic uses content blocks; OpenAI uses
-            # separate role="tool" messages.
-            if AI_PROVIDER == "anthropic":
-                # Assistant message must include tool_use content blocks alongside any text.
-                assistant_content: list[dict] = []
-                if assistant_text:
-                    assistant_content.append({"type": "text", "text": assistant_text})
-                for tc in tool_calls_this_round:
-                    assistant_content.append({
-                        "type": "tool_use",
-                        "id": tc["id"],
-                        "name": tc["name"],
-                        "input": tc["input"],
-                    })
-                current_messages.append({"role": "assistant", "content": assistant_content})
-
-                # All tool results go in a single user message as tool_result blocks.
-                tool_result_blocks: list[dict] = []
-                for tc in tool_calls_this_round:
-                    # Per-tool rate limiting (F-CHAT-07)
-                    tool_call_counts[tc["name"]] = tool_call_counts.get(tc["name"], 0) + 1
-                    limit = TOOL_CALL_LIMITS.get(tc["name"], 3)
-                    if tool_call_counts[tc["name"]] > limit:
-                        result = {"error": f"Tool '{tc['name']}' has exceeded its per-conversation limit of {limit} calls."}
+                async for chunk in stream_chat(
+                    messages=current_messages,
+                    tools=round_tools,
+                    system=system_prompt,
+                ):
+                    if chunk.startswith(SENTINEL):
+                        # Tool call sentinel
+                        tool_data = json.loads(chunk[len(SENTINEL):])
+                        tool_calls_this_round.append(tool_data)
+                        yield _sse("tool_call", json.dumps({
+                            "name": tool_data["name"],
+                            "input": tool_data["input"],
+                        }))
                     else:
-                        result = _execute_tool(
-                            tool_name=tc["name"],
-                            tool_input=tc["input"],
-                            db=db,
-                            current_user=current_user,
-                            persona=persona,
-                            window_start=window_start,
-                        )
-                    yield _sse("tool_result", json.dumps({"name": tc["name"]}))
-                    tool_result_blocks.append({
-                        "type": "tool_result",
-                        "tool_use_id": tc["id"],
-                        "content": json.dumps(result),
-                    })
-                current_messages.append({"role": "user", "content": tool_result_blocks})
-            else:
-                # OpenAI / ollama / compatible: assistant message with tool_calls array,
-                # then individual role="tool" messages with tool_call_id.
-                assistant_msg: dict = {
-                    "role": "assistant",
-                    "content": assistant_text or None,
-                    "tool_calls": [
-                        {
+                        assistant_text += chunk
+                        yield _sse("delta", chunk)
+
+                if final_round:
+                    # Tools were stripped; whatever the model produced is the summary.
+                    break
+
+                if not tool_calls_this_round:
+                    # No tool calls — conversation turn complete
+                    break
+
+                # Append the assistant's turn and tool results to history, then loop.
+                # Format differs by provider: Anthropic uses content blocks; OpenAI uses
+                # separate role="tool" messages.
+                if AI_PROVIDER == "anthropic":
+                    # Assistant message must include tool_use content blocks alongside any text.
+                    assistant_content: list[dict] = []
+                    if assistant_text:
+                        assistant_content.append({"type": "text", "text": assistant_text})
+                    for tc in tool_calls_this_round:
+                        assistant_content.append({
+                            "type": "tool_use",
                             "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": json.dumps(tc["input"]),
-                            },
-                        }
-                        for tc in tool_calls_this_round
-                    ],
-                }
-                current_messages.append(assistant_msg)
+                            "name": tc["name"],
+                            "input": tc["input"],
+                        })
+                    current_messages.append({"role": "assistant", "content": assistant_content})
 
-                for tc in tool_calls_this_round:
-                    # Per-tool rate limiting (F-CHAT-07)
-                    tool_call_counts[tc["name"]] = tool_call_counts.get(tc["name"], 0) + 1
-                    limit = TOOL_CALL_LIMITS.get(tc["name"], 3)
-                    if tool_call_counts[tc["name"]] > limit:
-                        result = {"error": f"Tool '{tc['name']}' has exceeded its per-conversation limit of {limit} calls."}
-                    else:
-                        result = _execute_tool(
-                            tool_name=tc["name"],
-                            tool_input=tc["input"],
-                            db=db,
-                            current_user=current_user,
-                            persona=persona,
-                            window_start=window_start,
-                        )
-                    yield _sse("tool_result", json.dumps({"name": tc["name"]}))
-                    current_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc["id"],
-                        "content": json.dumps(result),
-                    })
+                    # All tool results go in a single user message as tool_result blocks.
+                    tool_result_blocks: list[dict] = []
+                    for tc in tool_calls_this_round:
+                        # Per-tool rate limiting (F-CHAT-07)
+                        tool_call_counts[tc["name"]] = tool_call_counts.get(tc["name"], 0) + 1
+                        limit = TOOL_CALL_LIMITS.get(tc["name"], 3)
+                        if tool_call_counts[tc["name"]] > limit:
+                            result = {"error": f"Tool '{tc['name']}' has exceeded its per-conversation limit of {limit} calls."}
+                        else:
+                            result = _execute_tool(
+                                tool_name=tc["name"],
+                                tool_input=tc["input"],
+                                db=db,
+                                current_user=current_user,
+                                persona=persona,
+                                window_start=window_start,
+                            )
+                        yield _sse("tool_result", json.dumps({"name": tc["name"]}))
+                        tool_result_blocks.append({
+                            "type": "tool_result",
+                            "tool_use_id": tc["id"],
+                            "content": json.dumps(result),
+                        })
+                    current_messages.append({"role": "user", "content": tool_result_blocks})
+                else:
+                    # OpenAI / ollama / compatible: assistant message with tool_calls array,
+                    # then individual role="tool" messages with tool_call_id.
+                    assistant_msg: dict = {
+                        "role": "assistant",
+                        "content": assistant_text or None,
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": json.dumps(tc["input"]),
+                                },
+                            }
+                            for tc in tool_calls_this_round
+                        ],
+                    }
+                    current_messages.append(assistant_msg)
+
+                    for tc in tool_calls_this_round:
+                        # Per-tool rate limiting (F-CHAT-07)
+                        tool_call_counts[tc["name"]] = tool_call_counts.get(tc["name"], 0) + 1
+                        limit = TOOL_CALL_LIMITS.get(tc["name"], 3)
+                        if tool_call_counts[tc["name"]] > limit:
+                            result = {"error": f"Tool '{tc['name']}' has exceeded its per-conversation limit of {limit} calls."}
+                        else:
+                            result = _execute_tool(
+                                tool_name=tc["name"],
+                                tool_input=tc["input"],
+                                db=db,
+                                current_user=current_user,
+                                persona=persona,
+                                window_start=window_start,
+                            )
+                        yield _sse("tool_result", json.dumps({"name": tc["name"]}))
+                        current_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": json.dumps(result),
+                        })
+        except Exception as exc:
+            # AUDIT-13: log the real cause server-side; return only a generic,
+            # provider-agnostic message so no provider/model/internal detail leaks.
+            _stream_log.exception("Chat stream failed mid-response: %s", type(exc).__name__)
+            yield _sse(
+                "error",
+                "The assistant hit an error and couldn't finish responding. "
+                "Your message was not saved — please try again.",
+            )
 
         yield _sse("done", "[DONE]")
 

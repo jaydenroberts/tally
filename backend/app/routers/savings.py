@@ -165,17 +165,31 @@ def withdraw_goal(
     if goal.current_amount <= 0:
         raise HTTPException(status_code=400, detail="Goal has no saved amount to withdraw")
 
+    withdrawn = round(goal.current_amount, 2)
     tx = models.Transaction(
         account_id=goal.linked_account_id,
         date=date_type.today(),
         description=f"Savings withdrawal: {goal.name}",
-        amount=round(-goal.current_amount, 2),
+        amount=round(-withdrawn, 2),
         source="manual",
         is_verified=False,
         savings_goal_id=goal.id,
     )
     db.add(tx)
-    goal.is_completed = True
+    db.flush()  # assign tx.id so the audit row can reference it
+
+    # Draining the goal takes its balance to zero and leaves an audit trail
+    # (LOW: current_amount was previously left stale with no SavingsContribution row).
+    goal.current_amount = 0.0
+    db.add(models.SavingsContribution(
+        goal_id=goal.id,
+        amount=-withdrawn,           # negative = withdrawal direction
+        balance_after=0.0,
+        notes="Goal withdrawal",
+        transaction_id=tx.id,
+    ))
+    # Not marked complete: a withdrawal is a spend, not goal attainment (AUDIT-23).
+
     db.commit()
     db.refresh(tx)
     return schemas.WithdrawResponse(
@@ -219,9 +233,10 @@ def update_savings_goal(
     goal = _load_goal(db, goal_id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(goal, field, value)
-    # Auto-complete if current meets or exceeds target
-    if goal.current_amount >= goal.target_amount:
-        goal.is_completed = True
+    # Two-way completion flag (AUDIT-23): a goal is complete only when it has a real
+    # positive target AND the balance meets it. Setting target to 0 no longer locks
+    # the goal complete, and lowering the balance below target re-opens it.
+    goal.is_completed = goal.target_amount > 0 and goal.current_amount >= goal.target_amount
     db.commit()
     return _load_goal(db, goal_id)
 
@@ -287,5 +302,24 @@ def delete_savings_goal(
     goal = db.query(models.SavingsGoal).filter(models.SavingsGoal.id == goal_id).first()
     if not goal:
         raise HTTPException(status_code=404, detail="Savings goal not found")
+
+    contributions = db.query(models.SavingsContribution).filter(
+        models.SavingsContribution.goal_id == goal_id
+    ).all()
+    for contrib in contributions:
+        if contrib.transaction_id is not None:
+            tx = db.query(models.Transaction).filter(
+                models.Transaction.id == contrib.transaction_id
+            ).first()
+            if tx is not None and tx.transaction_type == "savings_transfer":
+                tx.transaction_type = "income" if tx.amount > 0 else "expense"
+        db.delete(contrib)
+    # Clear the withdrawal-transaction backref (Transaction.savings_goal_id) too.
+    linked_txs = db.query(models.Transaction).filter(
+        models.Transaction.savings_goal_id == goal_id
+    ).all()
+    for tx in linked_txs:
+        tx.savings_goal_id = None
+
     db.delete(goal)
     db.commit()

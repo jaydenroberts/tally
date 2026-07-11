@@ -109,11 +109,19 @@ def _sanitise_filename(raw: str) -> str:
 
 
 def _detect_account_last4(raw_lines: list[str]) -> Optional[str]:
-    """Scan first ~5 lines for a 4+ digit number — naive account matching hint."""
+    """Scan first ~5 lines for a masked-account number — naive matching hint.
+
+    LOW (imports.py last4): require a 6+ digit run so a bare 4-digit year
+    ("2026") or a "20/04/2026" date token can't masquerade as an account tail.
+    Real account/card numbers are always longer than 4 digits; statement dates
+    are 4-digit years. We also skip any digit-run inside an obvious date pattern.
+    """
+    date_like = re.compile(r"\d{1,4}[/\-]\d{1,2}[/\-]\d{1,4}")
     for line in raw_lines[:5]:
-        m = re.search(r"\b(\d{4,})\b", line)
+        scrubbed = date_like.sub(" ", line)          # remove dd/mm/yyyy style tokens
+        m = re.search(r"\b\d{6,}\b", scrubbed)        # need 6+ digits to be an account
         if m:
-            return m.group(1)[-4:]
+            return m.group(0)[-4:]
     return None
 
 
@@ -133,6 +141,46 @@ _CR_DR_SUFFIX_RE = re.compile(r"\s*(cr|dr)\s*$", re.IGNORECASE)
 
 # Accounting parens-negative — "(1234.56)" or "($1,234.56)".
 _PARENS_RE = re.compile(r"^\((.*)\)$")
+
+# AUDIT-05/AUDIT-09 — structured match_note header. On reconcile we overwrite a
+# manual estimate's amount (and now its date, A9) with the bank row's. To let a
+# re-imported statement dedup against that row (A5), and to preserve the estimate's
+# original date for provenance (A9), we stamp the bank row's identity into match_note
+# as a machine-parseable first line, followed by the existing human-readable note.
+_MATCH_META_PREFIX = "[recon]"
+_MATCH_META_RE = re.compile(
+    r"^\[recon\]\s+bankdesc=(?P<bankdesc>.*?)\tbankdate=(?P<bankdate>\S*)\testdate=(?P<estdate>\S*)"
+    r"(?:\s+\|\s+(?P<human>.*))?$",
+    re.DOTALL,
+)
+
+
+def _make_match_note(*, bank_desc, bank_date, est_date, human: str) -> str:
+    """Build a match_note carrying the reconciled bank row's identity + the estimate's
+    original date, so dedup (A5) and provenance (A9) work without new columns."""
+    bd = (bank_desc or "").replace("\t", " ").replace("\n", " ")
+    bank_date_s = bank_date.isoformat() if bank_date else ""
+    est_date_s = est_date.isoformat() if est_date else ""
+    return (
+        f"{_MATCH_META_PREFIX} bankdesc={bd}\tbankdate={bank_date_s}\testdate={est_date_s}"
+        f" | {human}"
+    )
+
+
+def _parse_match_note(note):
+    """Extract {bank_desc, bank_date, est_date, human} from a structured match_note,
+    or None if the note is absent/legacy/unstructured."""
+    if not note:
+        return None
+    m = _MATCH_META_RE.match(note)
+    if not m:
+        return None
+    return {
+        "bank_desc": m.group("bankdesc") or "",
+        "bank_date": _normalise_date(m.group("bankdate")),
+        "est_date": _normalise_date(m.group("estdate")),
+        "human": m.group("human") or "",
+    }
 
 
 def _normalise_amount(raw):
@@ -188,8 +236,13 @@ def _normalise_amount(raw):
     except (InvalidOperation, ValueError):
         return None
 
+    # AUDIT-03: apply the detected sign as -abs(value), never a bare negation.
+    # A Dr suffix or accounting parens means "this is negative" — if the numeric
+    # body ALSO carried a "-" (e.g. "-48.56 Dr" or "(-48.56)"), a bare `-value`
+    # double-negates back to positive, booking a debit as income. Force the
+    # magnitude negative instead so sign detection is idempotent.
     if sign == -1:
-        value = -value
+        value = -abs(value)
     return value
 
 
@@ -352,7 +405,16 @@ def _dedup_row(
     for c in candidates:
         if round(float(c.amount), 2) != target_amount:
             continue
-        score = fuzz.WRatio(row_desc, c.description or "") / 100.0
+        # AUDIT-05: a reconciled estimate keeps source='manual' with the bank amount,
+        # but its description/date are the user's original estimate — so a re-imported
+        # statement row (which carries the BANK desc/date) would never dedup against it
+        # and would double-count. If this candidate was reconciled, compare against the
+        # stored bank description; fall back to the visible desc for un-reconciled rows.
+        meta = _parse_match_note(getattr(c, "match_note", None))
+        compare_desc = c.description or ""
+        if meta is not None and meta.get("bank_desc"):
+            compare_desc = meta["bank_desc"]
+        score = fuzz.WRatio(row_desc, compare_desc) / 100.0
         if score >= DEDUP_SCORE_THRESHOLD:
             return c.id, score
 
@@ -410,7 +472,14 @@ def _passes_structural_gate(
         return False
     if abs((candidate.date - bank_date).days) > MATCH_DATE_WINDOW_DAYS:
         return False
-    if abs(float(candidate.amount) - bank_amount) > _amount_tolerance(bank_amount):
+    cand_amount = float(candidate.amount)
+    # LOW (cross-sign sub-$1): the $1 tolerance floor otherwise lets a +$0.50 estimate
+    # match a -$0.50 bank row (|diff| = $1.00). An income estimate must never reconcile
+    # against an expense debit (or vice-versa) — require the same sign. Zero on either
+    # side is treated as sign-compatible (a $0 row carries no direction).
+    if cand_amount and bank_amount and (cand_amount > 0) != (bank_amount > 0):
+        return False
+    if abs(cand_amount - bank_amount) > _amount_tolerance(bank_amount):
         return False
     return True
 
@@ -778,6 +847,17 @@ def patch_draft(
 
     if mapping_changed:
         for row in draft.rows:
+            # AUDIT-10: a mapping change must NOT clobber rows the user hand-edited.
+            # user_edited rows carry deliberate overrides — re-deriving them from the
+            # new column map would silently discard the user's corrections.
+            if row.user_edited:
+                dup_id, dup_score = _dedup_row(
+                    db, draft.account_id, row.date, row.amount, row.description
+                )
+                row.duplicate_of = dup_id
+                row.duplicate_score = dup_score
+                continue
+
             row_date, row_desc, row_amount = _apply_mapping(row.raw, draft.column_mapping)
             row.date = row_date
             row.description = row_desc
@@ -785,6 +865,9 @@ def patch_draft(
             dup_id, dup_score = _dedup_row(db, draft.account_id, row_date, row_amount, row_desc)
             row.duplicate_of = dup_id
             row.duplicate_score = dup_score
+            # AUDIT-10: remap recomputed duplicate_of but previously left `excluded` stale —
+            # reset exclude to track the fresh dedup result for non-user-edited rows.
+            row.excluded = (dup_id is not None)
 
     db.commit()
     db.refresh(draft)
@@ -808,19 +891,41 @@ def commit_draft(
     # The intermediate 'committing' state blocks a concurrent request from also matching
     # 'preview_ready'. A crash here leaves the draft in 'committing'; the startup recovery
     # in run_startup_migrations() resets it to 'preview_ready' (BASTION-8).
+    # AUDIT-11: gate on expires_at inside the atomic UPDATE so a draft that crossed
+    # its TTL while open in the wizard (stale dedup flags) can't be committed.
+    now_utc = datetime.utcnow()
     result = db.execute(
         text(
             "UPDATE import_drafts SET status = 'committing', committed_at = :now "
-            "WHERE id = :id AND user_id = :uid AND status = 'preview_ready'"
+            "WHERE id = :id AND user_id = :uid AND status = 'preview_ready' "
+            "AND expires_at > :now"
         ),
-        {"id": draft_id, "uid": user.id, "now": datetime.utcnow()},
+        {"id": draft_id, "uid": user.id, "now": now_utc},
     )
     if result.rowcount == 0:
+        draft_row = db.execute(
+            text("SELECT status, expires_at FROM import_drafts WHERE id = :id AND user_id = :uid"),
+            {"id": draft_id, "uid": user.id},
+        ).first()
+        if draft_row is not None and draft_row[0] == "preview_ready":
+            raise HTTPException(status_code=409, detail="Draft has expired; please re-upload")
         raise HTTPException(status_code=409, detail="Draft is not in preview_ready state")
 
     db.flush()   # BASTION-9: make write visible to subsequent ORM reads on this connection
 
     draft = db.query(models.ImportDraft).filter(models.ImportDraft.id == draft_id).first()
+
+    def _reject_and_reset(detail):
+        # AUDIT-04/AUDIT-11: we already flipped the draft to 'committing' (TOCTOU gate).
+        # A validation rejection must return the draft to 'preview_ready' immediately so
+        # the user can fix rows and retry without waiting for the BASTION-8 boot recovery.
+        db.execute(
+            text("UPDATE import_drafts SET status = 'preview_ready', committed_at = NULL "
+                 "WHERE id = :id AND status = 'committing'"),
+            {"id": draft_id},
+        )
+        db.commit()
+        raise HTTPException(status_code=409, detail=detail)
 
     # BACKLOG-036 — unified commit-apply guard (spec §12.1).
     #   (1) Plan computed ONCE, read-only, materialised before any write.
@@ -834,6 +939,49 @@ def commit_draft(
     # The client echoes BOTH auto-checked Confident pairs and user-toggled Review pairs.
     # Build a {row_id → candidate_transaction_id} lookup of what the client confirmed.
     confirmed = {m.row_id: m.candidate_transaction_id for m in payload.confirmed_matches}
+
+    # AUDIT-04: refuse to commit non-excluded rows with an unparseable amount or date.
+    # A None amount would book $0.00 as verified; a None date would 500 the INSERT.
+    # Reject the whole commit (nothing written) with the offending rows listed.
+    invalid_rows = [
+        {
+            "row_id": r.id,
+            "row_index": r.row_index,
+            "reason": "missing amount" if r.amount is None else "missing date",
+        }
+        for r in draft.rows
+        if not r.excluded and (r.amount is None or r.date is None)
+    ]
+    if invalid_rows:
+        _reject_and_reset({
+            "kind": "invalid_rows",
+            "message": (
+                f"{len(invalid_rows)} row(s) have no parseable amount or date. "
+                "Exclude or correct them before importing."
+            ),
+            "rows": invalid_rows,
+        })
+
+    # AUDIT-11: dedup flags were computed at UPLOAD; re-run dedup for every non-excluded,
+    # non-matcher row and 409 on a FRESH duplicate the user hasn't already acknowledged.
+    fresh_dupes = []
+    for r in draft.rows:
+        if r.excluded or r.amount is None or r.date is None:
+            continue
+        if r.id in plan:
+            continue
+        dup_id, _score = _dedup_row(db, draft.account_id, r.date, r.amount, r.description)
+        if dup_id is not None and r.duplicate_of is None:
+            fresh_dupes.append({"row_id": r.id, "row_index": r.row_index, "duplicate_of": dup_id})
+    if fresh_dupes:
+        _reject_and_reset({
+            "kind": "stale_duplicates",
+            "message": (
+                f"{len(fresh_dupes)} row(s) now match a transaction committed since upload. "
+                "Re-open the preview to review before importing."
+            ),
+            "rows": fresh_dupes,
+        })
 
     # FE-012 — reconciliation matcher. All mutations below (match-revisions, inserts,
     # and the committing→committed flip) share the single db.commit() at the end so
@@ -890,14 +1038,13 @@ def commit_draft(
         if match is not None:
             tier = entry.tier
             manual_amount = float(match.amount)
+            est_date = match.date          # AUDIT-09: capture BEFORE we overwrite it
             if abs(manual_amount - row_amount) > 0.005:
                 # Amounts differ — bank wins; preserve the original for rollback/provenance.
                 # A2: never overwrite a non-null original_amount (the candidate gate already
                 # guarantees a pristine import_id-null row, so this is always first-write).
                 match.original_amount = manual_amount
-                match.match_note = (
-                    f"Matched import; amount updated {manual_amount:+.2f} → {row_amount:+.2f}"
-                )
+                human = f"Matched import; amount updated {manual_amount:+.2f} → {row_amount:+.2f}"
                 amount_diff_warnings.append(schemas.MatchWarning(
                     transaction_id=match.id,
                     description=match.description,
@@ -905,8 +1052,24 @@ def commit_draft(
                     bank_amount=row_amount,
                 ))
             else:
-                match.match_note = "Matched import; amounts agreed"
+                human = "Matched import; amounts agreed"
+            # AUDIT-05 + AUDIT-09: stamp the bank row's identity (desc + date) and the
+            # estimate's ORIGINAL date into a structured match_note. Lets a re-imported
+            # statement dedup against this reconciled row (A5) and preserves the pre-reconcile
+            # date for provenance/rollback (A9) — all without new columns.
+            match.match_note = _make_match_note(
+                bank_desc=row.description,
+                bank_date=row.date,
+                est_date=est_date,
+                human=human,
+            )
             match.amount = row_amount
+            # AUDIT-09: the estimate's date was a guess; the bank row's date is authoritative.
+            # Keeping the estimate date books spend in the wrong month across a ±3-day
+            # boundary. Adopt the bank date. FORWARD-ONLY: affects only rows reconciled by
+            # THIS commit — no historical rows are touched (no migration).
+            if row.date is not None:
+                match.date = row.date
             match.is_verified = True
             match.source = "manual"          # keep manual provenance (user category/notes)
             match.import_id = draft.id        # tag so rollback can revert THIS import's matches
@@ -1007,6 +1170,11 @@ def rollback_import(
         tx.is_verified = False
         if tx.original_amount is not None:
             tx.amount = tx.original_amount
+        # AUDIT-09: if this row's date was overwritten with the bank date on reconcile,
+        # restore the estimate's original date (parked in the structured match_note).
+        meta = _parse_match_note(tx.match_note)
+        if meta is not None and meta.get("est_date") is not None:
+            tx.date = meta["est_date"]
         tx.original_amount = None
         tx.match_note = None
         tx.import_id = None
@@ -1117,7 +1285,9 @@ def list_imports(
                 status=d.status,
                 filename=d.filename,
                 account=d.account,
-                created_at=d.created_at,
+                # LOW (created_at not UTC): coerce naive UTC to an aware value so the
+                # wire value carries +00:00 and the FE never renders it as local time.
+                created_at=_as_utc(d.created_at),
                 committed_at=committed_at,
                 rollback_until=rollback_until,
                 rollback_available=rollback_available,

@@ -240,6 +240,19 @@ def run_startup_migrations(db: Session) -> None:
             if "duplicate column name" not in str(e).lower():
                 raise
 
+    # [M-010] Add token_version to users (AUDIT-29 — JWT invalidation on password change).
+    # Safe on existing DBs: existing rows default to 0, matching the default claim minted
+    # for pre-migration tokens.
+    user_cols = [row[1] for row in db.execute(text("PRAGMA table_info(users)")).fetchall()]
+    if "token_version" not in user_cols:
+        try:
+            db.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"))
+            db.commit()
+            log.info("[M-010] Added token_version column to users")
+        except Exception as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
     # [M-009] Add import_id column to transactions (staged-import wizard — v1.4.0).
     # New tables (import_drafts, import_draft_rows) are created by Base.metadata.create_all()
     # in lifespan — this migration only handles the ALTER on the existing transactions table.
@@ -381,17 +394,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.4.1.1",
+    version="1.4.2",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
 
+# CORS — Tally is served same-origin (SPA bundled into the app), so the browser
+# does not normally issue cross-origin requests. Auth is a Bearer header, not a
+# cookie, so credentialed CORS is unnecessary (and `allow_origins=["*"]` with
+# `allow_credentials=True` is rejected by the spec anyway). Operators who front
+# Tally with a separate origin list those origins explicitly via ALLOWED_ORIGINS.
+_allowed_origins = [
+    o.strip()
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:8091").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_allowed_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

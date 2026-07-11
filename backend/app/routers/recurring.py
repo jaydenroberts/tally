@@ -13,6 +13,7 @@ Frequency advancement:
   monthly     → +1 calendar month (same day, handles month-end clamping)
   yearly      → +1 calendar year
 """
+from calendar import monthrange
 from datetime import date, timedelta
 from typing import List
 
@@ -31,8 +32,22 @@ router = APIRouter(prefix="/api/recurring", tags=["recurring"])
 # Scheduling helpers
 # ---------------------------------------------------------------------------
 
-def _advance_date(current: date, frequency: str) -> date:
-    """Return the next due date after current for a given frequency."""
+def _clamp_to_month(year: int, month: int, day: int) -> date:
+    """Return date(year, month, day), clamping day to the month's last day."""
+    last = monthrange(year, month)[1]
+    return date(year, month, min(day, last))
+
+
+def _advance_date(current: date, frequency: str, anchor_day: int | None = None) -> date:
+    """
+    Return the next due date after ``current`` for a given frequency.
+
+    For monthly/yearly frequencies, ``anchor_day`` (the day-of-month of the
+    original start_date) is used to re-derive the target day each step. This
+    prevents month-end drift: a Jan-31 anchor advances Feb-28 → Mar-31 → Apr-30,
+    not Feb-28 → Mar-28 → forever (AUDIT-20). When ``anchor_day`` is None the
+    current day is used (backwards-compatible).
+    """
     if frequency == "daily":
         return current + timedelta(days=1)
     if frequency == "weekly":
@@ -40,9 +55,11 @@ def _advance_date(current: date, frequency: str) -> date:
     if frequency == "fortnightly":
         return current + timedelta(weeks=2)
     if frequency == "monthly":
-        return current + relativedelta(months=1)
+        nxt = current + relativedelta(months=1)
+        return _clamp_to_month(nxt.year, nxt.month, anchor_day or current.day)
     if frequency == "yearly":
-        return current + relativedelta(years=1)
+        nxt = current + relativedelta(years=1)
+        return _clamp_to_month(nxt.year, nxt.month, anchor_day or current.day)
     raise ValueError(f"Unknown frequency: {frequency!r}")
 
 
@@ -85,7 +102,7 @@ def run_due_recurring(db: Session) -> int:
             db.add(tx)
             generated += 1
 
-            due_date = _advance_date(due_date, rec.frequency)
+            due_date = _advance_date(due_date, rec.frequency, rec.start_date.day)
 
         # Advance next_due to the first future date
         rec.next_due = due_date
@@ -151,6 +168,29 @@ def get_recurring(
     return _load(db, rec_id)
 
 
+def _fast_forward_next_due(rec: models.RecurringTransaction, today: date) -> None:
+    """
+    Advance rec.next_due forward to the first due date >= today without
+    generating transactions. Called on reactivation so a long-paused entry does
+    not backfill every missed period on the next scheduler run (AUDIT-20).
+    Bounded by end_date; if the schedule has fully elapsed it stays inactive.
+    """
+    if rec.next_due >= today:
+        return
+    anchor_day = rec.start_date.day
+    guard = 0
+    while rec.next_due < today:
+        if rec.end_date and rec.next_due >= rec.end_date:
+            # Schedule has fully elapsed: deactivate so it doesn't linger active
+            # with a stale past next_due (the caller may have just reactivated it).
+            rec.is_active = False
+            break
+        rec.next_due = _advance_date(rec.next_due, rec.frequency, anchor_day)
+        guard += 1
+        if guard > 10_000:  # defensive: never spin on a bad frequency
+            break
+
+
 @router.patch("/{rec_id}", response_model=schemas.RecurringTransactionResponse)
 def update_recurring(
     rec_id: int,
@@ -159,8 +199,16 @@ def update_recurring(
     _: models.User = Depends(require_owner),
 ):
     rec = _load(db, rec_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    was_active = rec.is_active
+    updates = payload.model_dump(exclude_unset=True)
+    for field, value in updates.items():
         setattr(rec, field, value)
+
+    # On reactivation (False → True), fast-forward next_due to the current
+    # period so the next scheduler run does not backfill every missed period.
+    if not was_active and rec.is_active and "is_active" in updates:
+        _fast_forward_next_due(rec, date.today())
+
     db.commit()
     return _load(db, rec_id)
 

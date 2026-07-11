@@ -46,7 +46,13 @@ def _apply_tx_filters(
     elif amount_sign == "negative":
         q = q.filter(models.Transaction.amount < 0)
     if exclude_transfers:
-        q = q.filter(models.Transaction.transaction_type != "transfer")
+        # Canonical exclusion set (mirrored in dashboard.py / budgets.py):
+        # both transfer legs are excluded from income AND expense aggregates.
+        # debt_payment is handled separately (excluded from expenses only) by
+        # the summary aggregate, not here.
+        q = q.filter(
+            models.Transaction.transaction_type.notin_(("transfer", "savings_transfer"))
+        )
     if date_from is not None:
         q = q.filter(models.Transaction.date >= date_from)
     if date_to is not None:
@@ -102,6 +108,70 @@ def attach_allocations(tx: models.Transaction, db: Session) -> models.Transactio
     from_attributes=True picks them up on the response. Mutates and returns tx."""
     tx.allocations = build_allocations(tx, db)
     return tx
+
+
+def _reverse_debt_link(tx: models.Transaction, db: Session) -> None:
+    """Reverse a debt payment link the way DELETE /{tx_id}/link-debt does:
+    add the RECORDED payment amount back to the debt balance and clear paid-off.
+    The recorded DebtPayment.amount is the effective applied delta (AUDIT-07),
+    so this is exactly symmetric. Deletes the DebtPayment audit row."""
+    if tx.debt_id is None:
+        return
+    payment = db.query(models.DebtPayment).filter(
+        models.DebtPayment.transaction_id == tx.id
+    ).first()
+    if payment:
+        debt = db.query(models.Debt).filter(models.Debt.id == tx.debt_id).first()
+        if debt:
+            debt.current_balance = round(debt.current_balance + payment.amount, 2)
+            debt.is_paid_off = False  # upward correction — two-way reset (AUDIT-23)
+        db.delete(payment)
+    tx.debt_id = None
+
+
+def _reverse_savings_links(tx: models.Transaction, db: Session) -> None:
+    """Reverse every SavingsContribution attached to this transaction, restoring
+    each goal's current_amount by the signed contribution amount, and delete the
+    audit rows. Mirrors PHASE 2 of batch_update_allocations."""
+    contribs = db.query(models.SavingsContribution).filter(
+        models.SavingsContribution.transaction_id == tx.id
+    ).all()
+    for contrib in contribs:
+        goal = db.query(models.SavingsGoal).filter(
+            models.SavingsGoal.id == contrib.goal_id
+        ).first()
+        if goal:
+            # Subtract the signed amount: a contribution (+) reduces the goal back,
+            # a withdrawal (-) restores it. round() keeps float drift bounded.
+            goal.current_amount = round(max(0.0, goal.current_amount - contrib.amount), 2)
+            # Two-way completion flag (AUDIT-23): a reversal can only lower the
+            # balance, so re-open the goal if it now falls short of a real target.
+            if goal.current_amount < goal.target_amount:
+                goal.is_completed = False
+        db.delete(contrib)
+
+
+def _reset_transfer_pair_sibling(tx: models.Transaction, db: Session) -> None:
+    """When a transfer leg is deleted, its sibling must not be left stranded as a
+    dangling 'transfer' with a pair id that points at nothing (AUDIT-06). Reset
+    every OTHER member of the pair back to a plain income/expense row by sign."""
+    if tx.transfer_pair_id is None:
+        return
+    siblings = db.query(models.Transaction).filter(
+        models.Transaction.transfer_pair_id == tx.transfer_pair_id,
+        models.Transaction.id != tx.id,
+    ).all()
+    for sib in siblings:
+        sib.transaction_type = "income" if sib.amount > 0 else "expense"
+        sib.transfer_pair_id = None
+
+
+def _reverse_all_links_before_delete(tx: models.Transaction, db: Session) -> None:
+    """Single entry point for delete paths: reverse any debt/goal balance effect
+    and un-strand a transfer-pair sibling BEFORE the row is removed (AUDIT-06)."""
+    _reverse_debt_link(tx, db)
+    _reverse_savings_links(tx, db)
+    _reset_transfer_pair_sibling(tx, db)
 
 
 @router.get("", response_model=List[schemas.TransactionResponse])
@@ -192,9 +262,14 @@ def transaction_summary(
     income = money_q.with_entities(
         func.coalesce(func.sum(models.Transaction.amount), 0.0)
     ).filter(models.Transaction.amount > 0).scalar() or 0.0
+    # debt_payment legs are excluded from the expense aggregate to match budgets.py
+    # (a debt payment is a balance-sheet transfer, not discretionary spend).
     expenses = money_q.with_entities(
         func.coalesce(func.sum(models.Transaction.amount), 0.0)
-    ).filter(models.Transaction.amount < 0).scalar() or 0.0
+    ).filter(
+        models.Transaction.amount < 0,
+        models.Transaction.transaction_type != "debt_payment",
+    ).scalar() or 0.0
 
     unverified_count = _apply_tx_filters(
         db.query(models.Transaction),
@@ -240,18 +315,36 @@ def bulk_delete_transactions(
     db: Session = Depends(get_db),
     _: models.User = Depends(require_owner),
 ):
-    """Delete multiple transactions by ID. Owner-only. Silently skips IDs that don't exist."""
-    # Null FK refs before deleting to avoid constraint violations (foreign_keys=ON)
-    db.query(models.DebtPayment).filter(models.DebtPayment.transaction_id.in_(ids)).update(
-        {"transaction_id": None}, synchronize_session=False
-    )
-    db.query(models.SavingsContribution).filter(models.SavingsContribution.transaction_id.in_(ids)).update(
-        {"transaction_id": None}, synchronize_session=False
-    )
+    """Delete multiple transactions by ID. Owner-only. Silently skips IDs that don't exist.
+
+    Each transaction has its linked debt/goal balance effect reversed and any
+    transfer-pair sibling un-stranded before deletion (AUDIT-06), so a bulk delete
+    can never leave money orphaned. Reversals run per-row because the applied delta
+    lives on the individual DebtPayment/SavingsContribution audit rows.
+    """
+    txs = db.query(models.Transaction).filter(models.Transaction.id.in_(ids)).all()
+    # A transfer pair may be deleted whole (both legs in `ids`) or half. Reversing
+    # per-row is safe: _reset_transfer_pair_sibling only touches siblings NOT being
+    # deleted in the same call, because a sibling still in `ids` is reset-then-deleted.
+    delete_id_set = {t.id for t in txs}
+    for tx in txs:
+        _reverse_debt_link(tx, db)
+        _reverse_savings_links(tx, db)
+        if tx.transfer_pair_id is not None:
+            siblings = db.query(models.Transaction).filter(
+                models.Transaction.transfer_pair_id == tx.transfer_pair_id,
+                models.Transaction.id != tx.id,
+            ).all()
+            for sib in siblings:
+                if sib.id in delete_id_set:
+                    continue  # sibling is also being deleted; no need to reset it
+                sib.transaction_type = "income" if sib.amount > 0 else "expense"
+                sib.transfer_pair_id = None
     db.query(models.ImportDraftRow).filter(models.ImportDraftRow.duplicate_of.in_(ids)).update(
         {"duplicate_of": None}, synchronize_session=False
     )
-    db.query(models.Transaction).filter(models.Transaction.id.in_(ids)).delete(synchronize_session=False)
+    for tx in txs:
+        db.delete(tx)
     db.commit()
 
 
@@ -359,6 +452,17 @@ def link_transfer_pair(
     if tx_a.account_id == tx_b.account_id:
         raise HTTPException(status_code=400, detail="Transfer pair must be on different accounts")
 
+    # A transfer moves money OUT of one account and INTO another: the two legs must
+    # have opposite signs (one debit, one credit). Reject same-sign pairs and any
+    # zero-amount leg. Tolerance guards float noise around zero.
+    _SIGN_TOL = 0.005
+    if tx_a.amount > _SIGN_TOL and tx_b.amount > _SIGN_TOL:
+        raise HTTPException(status_code=400, detail="Transfer legs must have opposite signs (one debit, one credit)")
+    if tx_a.amount < -_SIGN_TOL and tx_b.amount < -_SIGN_TOL:
+        raise HTTPException(status_code=400, detail="Transfer legs must have opposite signs (one debit, one credit)")
+    if abs(tx_a.amount) <= _SIGN_TOL or abs(tx_b.amount) <= _SIGN_TOL:
+        raise HTTPException(status_code=400, detail="Transfer legs must have a non-zero amount")
+
     if tx_a.transfer_pair_id is not None or tx_b.transfer_pair_id is not None:
         raise HTTPException(status_code=409, detail="One or more transactions are already part of a transfer pair")
 
@@ -457,12 +561,15 @@ def link_savings_withdrawal(
     if goal.is_completed:
         raise HTTPException(status_code=400, detail="Savings goal is already completed")
 
-    withdrawal_amount = round(abs(tx.amount), 2)
-    new_amount = round(max(0.0, goal.current_amount - withdrawal_amount), 2)
+    requested = round(abs(tx.amount), 2)
+    # Effective applied delta (AUDIT-07): a withdrawal can only take the goal to zero,
+    # so record what was actually removed, keeping link/unlink symmetric.
+    withdrawal_amount = round(min(requested, goal.current_amount), 2)
+    new_amount = round(goal.current_amount - withdrawal_amount, 2)
 
     goal.current_amount = new_amount
-    if new_amount == 0:
-        goal.is_completed = True
+    # AUDIT-23: draining a goal to zero must NOT mark it complete+locked — a spend is
+    # not goal attainment. Completion is (current >= target AND target > 0) only.
 
     # Negative amount on the contribution indicates withdrawal direction
     contribution = models.SavingsContribution(
@@ -743,9 +850,12 @@ def delete_transaction(
     tx = db.query(models.Transaction).filter(models.Transaction.id == tx_id).first()
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    # Null FK refs before deleting to avoid constraint violations (foreign_keys=ON)
-    db.query(models.DebtPayment).filter(models.DebtPayment.transaction_id == tx_id).update({"transaction_id": None})
-    db.query(models.SavingsContribution).filter(models.SavingsContribution.transaction_id == tx_id).update({"transaction_id": None})
+    # Reverse any linked balance effect and un-strand a transfer-pair sibling BEFORE
+    # deleting, so money is never left orphaned on a debt/goal (AUDIT-06). This also
+    # deletes the DebtPayment/SavingsContribution audit rows that reference this tx.
+    _reverse_all_links_before_delete(tx, db)
+    # ImportDraftRow.duplicate_of is a soft pointer, not a reversible balance effect —
+    # just null it so the delete doesn't violate the FK.
     db.query(models.ImportDraftRow).filter(models.ImportDraftRow.duplicate_of == tx_id).update({"duplicate_of": None})
     db.delete(tx)
     db.commit()
@@ -782,7 +892,7 @@ def link_transaction_to_debt(
     if not debt:
         raise HTTPException(status_code=404, detail="Debt not found")
 
-    if debt.is_paid_off:
+    if debt.is_paid_off or debt.current_balance <= 0:
         raise HTTPException(status_code=400, detail="Debt is already paid off")
 
     # Guard against double-recording (e.g. the tx was previously linked then unlinked
@@ -793,8 +903,13 @@ def link_transaction_to_debt(
     if existing:
         raise HTTPException(status_code=409, detail="Transaction is already recorded as a payment")
 
-    payment_amount = round(abs(tx.amount), 2)
-    new_balance = round(max(0.0, debt.current_balance - payment_amount), 2)
+    requested = round(abs(tx.amount), 2)
+    # Record the EFFECTIVE applied delta, not the requested magnitude: an overpayment
+    # can only reduce the balance to zero, so the audit row (and thus the unlink
+    # reversal) must reflect what was actually applied (AUDIT-07). Otherwise unlink
+    # over-credits the debt.
+    payment_amount = round(min(requested, debt.current_balance), 2)
+    new_balance = round(debt.current_balance - payment_amount, 2)
 
     debt.current_balance = new_balance
     if new_balance == 0:

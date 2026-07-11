@@ -7,7 +7,7 @@ import Button from '../components/Button'
 import FormField, { inputStyle, selectStyle } from '../components/FormField'
 import PageHeader from '../components/PageHeader'
 import useBreakpoint from '../hooks/useBreakpoint'
-import { formatDate as formatDateDMY } from '../utils/dateFormat'
+import { formatDate as formatDateDMY, parseLocalDate } from '../utils/dateFormat'
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
@@ -26,10 +26,11 @@ function goalStatus(goal) {
 
   if (goal.deadline) {
     const today    = new Date()
-    const deadline = new Date(goal.deadline)
+    today.setHours(0, 0, 0, 0)          // local midnight, not "now" (AUDIT-24)
+    const deadline = parseLocalDate(goal.deadline)  // local midnight, not UTC
 
-    // Already past deadline and not done
-    if (today > deadline) return 'overdue'
+    // Already past deadline and not done (due-today is NOT overdue)
+    if (deadline && today > deadline) return 'overdue'
 
     // Project completion from monthly contribution
     const projected = projectedDate(goal)
@@ -134,7 +135,7 @@ function GoalCard({ goal, isOwner, onEdit, onDelete, onContribute, onHistory, on
   const projected = projectedDate(goal)
 
   const projectedOnTime = projected && goal.deadline
-    ? new Date(projected) <= new Date(goal.deadline)
+    ? new Date(projected) <= parseLocalDate(goal.deadline)  // local midnight (AUDIT-24)
     : null
 
   return (

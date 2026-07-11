@@ -560,10 +560,23 @@ function StepReview({ draft, account, onBack, onCommitted, onNeedsConfirm }) {
   }, [draft.id])
 
   const toggleExclude = async (rowId, currentlyExcluded) => {
-    const next = { ...preview }
-    next.rows = preview.rows.map(r => r.id === rowId ? { ...r, excluded: !currentlyExcluded } : r)
-    setPreview(next)
-    client.patch(`/imports/${draft.id}`, { row_updates: [{ id: rowId, excluded: !currentlyExcluded }] }).catch(() => {})
+    // Optimistically flip, then revert if the server rejects the change — otherwise
+    // the checkbox and the real included/excluded state silently diverge and an
+    // "unchecked" row still gets imported (AUDIT-25).
+    setPreview(prev => ({
+      ...prev,
+      rows: prev.rows.map(r => r.id === rowId ? { ...r, excluded: !currentlyExcluded } : r),
+    }))
+    setError(null)
+    try {
+      await client.patch(`/imports/${draft.id}`, { row_updates: [{ id: rowId, excluded: !currentlyExcluded }] })
+    } catch (e) {
+      setPreview(prev => ({
+        ...prev,
+        rows: prev.rows.map(r => r.id === rowId ? { ...r, excluded: currentlyExcluded } : r),
+      }))
+      setError(e.response?.data?.detail || 'Could not update that row — please try again')
+    }
   }
 
   // BACKLOG-036 — Confident pairs are echoed automatically (auto-checked); they alone do

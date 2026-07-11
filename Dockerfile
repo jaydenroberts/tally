@@ -17,16 +17,15 @@ RUN npx vite build --outDir /frontend-dist --emptyOutDir
 # ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.11-slim
 
-# System deps (pdfplumber needs pdfminer which needs no extra libs on slim)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
-# Install Python dependencies
+# Install Python dependencies. gcc is only needed to build any wheels at pip time;
+# install it, build, then purge it in the SAME layer so it never ships in the image.
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update && apt-get install -y --no-install-recommends gcc \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apt-get purge -y --auto-remove gcc \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy backend source
 COPY backend/app ./app
@@ -34,8 +33,13 @@ COPY backend/app ./app
 # Copy built frontend into static serving directory
 COPY --from=frontend-builder /frontend-dist ./app/static
 
-# Data volume mount point
-RUN mkdir -p /data /financial-data
+# Create a non-root user and the data mount points it must read/write.
+# /data (SQLite DB) must be writable; /financial-data is read-only-mounted at runtime.
+RUN mkdir -p /data /financial-data \
+    && groupadd -r tally && useradd -r -g tally -d /app tally \
+    && chown -R tally:tally /app /data /financial-data
+
+USER tally
 
 EXPOSE 8091
 

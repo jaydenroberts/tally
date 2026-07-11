@@ -81,6 +81,7 @@ def update_user(
         user.email = payload.email
     if payload.password is not None:
         user.hashed_password = hash_password(payload.password)
+        user.token_version = (user.token_version or 0) + 1  # AUDIT-29: invalidate old tokens
 
     # Owner-only fields — use exclude_unset so null persona_id explicitly clears the field
     if current_user.role.name == "owner":

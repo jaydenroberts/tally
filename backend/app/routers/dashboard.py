@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from calendar import monthrange
 
+from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -36,9 +37,22 @@ def get_dashboard_summary(
         )
         .all()
     )
+    # NOTE (LOW / multi-currency): this sums raw balances across accounts
+    # regardless of currency. It is correct only when all active accounts share
+    # one currency. A proper fix groups per-currency like the Accounts page does
+    # and returns a per-currency net-worth map — deferred to avoid changing the
+    # dashboard response contract in a hardening release.
+    # TODO(v1.5): return per-currency net worth (see BACKLOG net-worth track).
     net_worth = sum(a.balance for a in active_accounts)
+    _currencies = {a.currency for a in active_accounts}
+    net_worth_mixed_currency = len(_currencies) > 1
 
     # ── Monthly income / spend ───────────────────────────────────────────────
+    # Canonical exclusion invariant (matches budgets.py + transactions.py):
+    #   income/expense aggregates exclude transfer + savings_transfer legs, and
+    #   debt_payment is excluded from the expense (spend) side (it reduces a
+    #   liability, not a spending category).
+    _EXCLUDED_TYPES = ("transfer", "savings_transfer")
     month_txs = (
         db.query(models.Transaction)
         .join(models.Account)
@@ -46,22 +60,31 @@ def get_dashboard_summary(
             models.Account.is_active == True,
             models.Transaction.date >= month_start,
             models.Transaction.date <= today,
-            models.Transaction.transaction_type != "transfer",
+            models.Transaction.transaction_type.notin_(_EXCLUDED_TYPES),
         )
         .all()
     )
     month_income = sum(t.amount for t in month_txs if t.amount > 0)
-    month_spent = abs(sum(t.amount for t in month_txs if t.amount < 0))
+    month_spent = abs(
+        sum(
+            t.amount
+            for t in month_txs
+            if t.amount < 0 and t.transaction_type != "debt_payment"
+        )
+    )
 
     # Net worth change = this month's net (income minus expenses)
     net_worth_change = month_income - month_spent
 
     # ── Net worth history — last 12 monthly nets ─────────────────────────────
+    # Use real calendar-month arithmetic (relativedelta) anchored on the first
+    # of the current month. Fixed-width 28-day steps drift and double-count a
+    # month when a reference lands on day 29–31 (AUDIT-19).
+    this_month_first = date(today.year, today.month, 1)
     history = []
     for i in range(11, -1, -1):
-        ref = date(today.year, today.month, 1) - timedelta(days=i * 28)
-        ref_start = ref.replace(day=1)
-        ref_end = ref.replace(day=monthrange(ref.year, ref.month)[1])
+        ref_start = this_month_first - relativedelta(months=i)
+        ref_end = ref_start.replace(day=monthrange(ref_start.year, ref_start.month)[1])
         row = (
             db.query(func.coalesce(func.sum(models.Transaction.amount), 0))
             .join(models.Account)
@@ -69,7 +92,7 @@ def get_dashboard_summary(
                 models.Account.is_active == True,
                 models.Transaction.date >= ref_start,
                 models.Transaction.date <= ref_end,
-                models.Transaction.transaction_type != "transfer",
+                models.Transaction.transaction_type.notin_(_EXCLUDED_TYPES),
             )
             .scalar()
         )
@@ -175,6 +198,7 @@ def get_dashboard_summary(
 
     return {
         "netWorth": round(net_worth, 2),
+        "netWorthMixedCurrency": net_worth_mixed_currency,
         "netWorthChange": round(net_worth_change, 2),
         "netWorthHistory": [round(v, 2) for v in history],
         "monthIncome": round(month_income, 2),

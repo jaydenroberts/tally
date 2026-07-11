@@ -4,6 +4,65 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.4.2] - 2026-07-10
+
+Correctness & security hardening release. No new features; a broad sweep of money-accuracy, AI-chat, dashboard, import, and security fixes from a full code audit.
+
+### Security
+
+- **CORS is now locked down** — cross-origin access is restricted to an explicit allow-list (`ALLOWED_ORIGINS`, default local origin) and credentialed CORS is disabled (auth is a Bearer token, not cookies).
+- **Login and password-recovery endpoints are rate-limited** (per-IP, 5/min by default, configurable) to blunt brute-force. No new dependencies.
+- **The container no longer runs as root**, and the build-only C compiler is removed from the final image.
+- **Changing a password now invalidates existing sessions** — tokens carry a version stamp; a password change or recovery stops older tokens working.
+- **Tally is single-tenant by design** — authenticated users can see all data; roles limit actions, not visibility. Do not expose it as a multi-user service (see README).
+
+### Fixed — money accuracy
+
+- **Deleting a transaction that paid down a debt or funded a savings goal now reverses that money** (debt balance / goal total restored, payment/contribution removed) — single and bulk deletes. Deleting one side of a transfer no longer strands the other.
+- **Over-payments/withdrawals no longer inflate balances when undone** — only the amount actually applied is recorded, so link/unlink cancel out exactly.
+- **Deleting a debt or savings goal that has history no longer errors**; linked transactions revert to ordinary entries.
+- **Savings transfers and debt payments no longer distort income/expense totals** across the dashboard, budgets, and transactions pages.
+- **Emptying a savings goal no longer marks it "complete" and locks it**; goal/debt completion status now updates both ways.
+
+### Fixed — imports
+
+- Signed debits written as "-48.56 Dr" or "(-48.56)" are no longer flipped to income.
+- Rows with an unreadable amount or date are no longer imported as $0.00 — the import stops and lists them.
+- Re-importing a statement no longer double-counts rows already reconciled to an estimate.
+- A reconciled transaction now takes the bank statement's date (correct month); undo restores the original.
+- Changing the column mapping no longer overwrites hand-edited rows; duplicate/exclude flags stay in sync.
+- Committing re-checks duplicates and refuses an expired draft. Account-number detection ignores dates/years. Import timestamps carry an explicit UTC offset.
+
+### Fixed — AI chat
+
+- The chat no longer breaks itself when the assistant errors mid-reply (clean recovery, no leaked provider details).
+- Summary-only personas can no longer be handed data-changing tools.
+- The AI's budget figures and "over/warning" wording now match the rest of the app; AI-added income is recorded as income.
+- A long tool-using task ends with a summary instead of a bare "maximum depth" error.
+
+### Fixed — dashboard, recurring, budgets
+
+- Dashboard net-worth history no longer double-counts a month; income/spend totals apply the shared exclusion rules.
+- Recurring monthly/yearly entries no longer drift off month-end; reactivating a long-paused entry no longer backfills every missed period.
+- Weekly/yearly budgets are pro-rated into the month view; "over" triggers above 100% (warning from 80%).
+- Deleting a category that ever had a budget no longer returns an error.
+
+### Fixed — UI
+
+- Recurring/debt date badges and new-entry date defaults now use your local date (correct "Due today" and no saving to yesterday). Savings goal deadlines use the same local-date basis, so an "overdue"/on-time badge no longer flips a day early.
+- Failed dashboard loads and import preview actions now show an error instead of hanging or silently failing; un-checking an import row to exclude it reliably sticks.
+- The dashboard "Budget used" figure no longer shows "NaN%".
+
+### Changed
+
+- The dashboard trend graph is labelled "Monthly net cash flow" (its actual meaning), and its 1M/3M/6M/12M range selector now changes the window shown. A true net-worth trend is planned for a later release.
+
+### Known limitation
+
+- Dashboard net worth still sums raw balances across currencies (a mixed-currency flag is returned for the UI). Per-currency net worth is deferred.
+
+---
+
 ## [1.4.1.1] - 2026-07-10
 
 ### Security

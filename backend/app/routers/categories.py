@@ -117,11 +117,14 @@ def delete_category(
         models.RecurringTransaction.category_id == category_id
     ).update({"category_id": None}, synchronize_session=False)
 
-    # Budgets referencing this category are deactivated rather than left broken.
-    # A budget without a category is meaningless, so deactivating is cleaner.
+    # Budgets referencing this category must be hard-deleted, not just
+    # deactivated: budgets.category_id is NOT NULL, so a soft-deleted budget row
+    # still pins the category and makes the category delete fail with an
+    # integrity error / 500 (BACKLOG-029). A budget without a category is
+    # meaningless, so removing it is the correct behaviour. No schema change.
     db.query(models.Budget).filter(
         models.Budget.category_id == category_id
-    ).update({"is_active": False}, synchronize_session=False)
+    ).delete(synchronize_session=False)
 
     db.delete(category)
     db.commit()

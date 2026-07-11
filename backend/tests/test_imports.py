@@ -421,6 +421,10 @@ def test_pdf_oversized_page_count_rejected(client, auth_headers, test_account):
         ("$1,234.56 cr",  Decimal("1234.56")),
         ("$9.99 DR",      Decimal("-9.99")),
         ("100.00 Cr",     Decimal("100.00")),
+        # AUDIT-03: inner "-" AND a debit marker must stay negative, not double-
+        # negate back to positive. A revert to bare `-value` flips these to income.
+        ("-48.56 Dr",     Decimal("-48.56")),
+        ("(-48.56)",      Decimal("-48.56")),
         # Accounting parens-negative
         ("(1234.56)",     Decimal("-1234.56")),
         ("($48.56)",      Decimal("-48.56")),
@@ -744,7 +748,10 @@ def test_match_amounts_agree(client, auth_headers, test_account, db):
     assert est.is_verified is True
     assert est.amount == -50.00
     assert est.original_amount is None            # never set when amounts agreed
-    assert est.match_note == "Matched import; amounts agreed"
+    # AUDIT-05/09: match_note now carries a structured [recon] header (bank desc/date +
+    # original estimate date) followed by the human-readable note. The human tail is
+    # preserved; assert on it rather than the whole string.
+    assert est.match_note.endswith("Matched import; amounts agreed")
 
 
 # --- no match: insert new import row ---------------------------------------
