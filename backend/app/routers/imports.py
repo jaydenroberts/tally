@@ -40,7 +40,7 @@ from ..import_parsers import csv_parser, pdf_parser
 
 IMPORT_DRAFTS_ENABLED = os.getenv("IMPORT_DRAFTS_ENABLED", "true").lower() == "true"
 IMPORT_ROLLBACK_WINDOW_SECONDS = int(os.getenv("IMPORT_ROLLBACK_WINDOW_SECONDS", "300"))
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # 10 MB
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # default 10 MB
 DRAFT_TTL_HOURS = 24
 DEDUP_SCORE_THRESHOLD = 0.85
 SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._\- ]")
@@ -50,9 +50,16 @@ MATCH_DATE_WINDOW_DAYS     = 3
 MATCH_AMOUNT_TOLERANCE_PCT = 0.15
 MATCH_AMOUNT_TOLERANCE_MIN = 1.00    # always allow a $1 variance
 MATCH_AMOUNT_TOLERANCE_MAX = 15.00   # A7: cap so big-ticket estimates can't match wildly
-# A6: only sign-aware expense/income manual estimates are matchable. Transfers and
-# debt-linked typed rows carry linked records and are deliberately excluded.
-MATCH_TYPES = ("expense", "income")
+# A6: only sign-aware manual estimates are matchable. Transfers carry a linked
+# sibling and are deliberately excluded. BACKLOG-039: debt_payment estimates ARE
+# matchable — reconciling one adjusts its linked debt balance + DebtPayment audit
+# row in lockstep (see the commit-apply path). "transfer"/"savings_transfer" stay out.
+MATCH_TYPES = ("expense", "income", "debt_payment")
+
+# BACKLOG-039: a debt_payment match whose bank amount differs from the estimate by
+# more than this is money-touching (it moves a debt balance), so it must NEVER
+# silently auto-verify — it is forced to the Review tier for explicit confirmation.
+MATCH_DEBT_DRIFT_EPSILON = 0.005
 
 # BACKLOG-036 — merchant-confidence tiers. token_set_ratio returns 0-100; we
 # divide by 100.0 so these thresholds live on a 0-1 scale (spec §12.2).
@@ -441,6 +448,29 @@ def _merchant_residual(desc: Optional[str]) -> str:
     return " ".join(toks)
 
 
+# BACKLOG-037 — receipt/reference-number extraction. A statement line and a matching
+# estimate often share the same transaction reference even when neither carries a
+# usable merchant identity (pure boilerplate both sides). A conservative token: a run
+# of 6+ digits that is NOT part of a date (dd/mm/yyyy style). 6+ digits avoids 4-digit
+# years and short amounts; date-like tokens are masked first so "20/04/2026" can't leak
+# a "04" or a year as a reference. Returns the set of reference tokens found.
+_REF_DATE_RE = re.compile(r"\d{1,4}[/\-]\d{1,2}[/\-]\d{1,4}")
+_REF_NUM_RE = re.compile(r"\b\d{6,}\b")
+
+
+def _receipt_numbers(desc: Optional[str]) -> set[str]:
+    """Extract 6+ digit reference/receipt tokens from a description (BACKLOG-037).
+
+    Date tokens are masked out first so a statement date can never be read as a
+    reference number. Returns an empty set when the description is absent or carries
+    no qualifying token.
+    """
+    if not desc:
+        return set()
+    scrubbed = _REF_DATE_RE.sub(" ", desc)
+    return set(_REF_NUM_RE.findall(scrubbed))
+
+
 def _amount_tolerance(bank_amount: float) -> float:
     """A7 tolerance: min(max(|amount|*15%, $1), $15)."""
     return min(
@@ -590,6 +620,23 @@ def _compute_match_plan(
         consumed_rows.add(row.id)
         consumed_cands.add(cand.id)
         tier = "confident" if (comparable and score >= MATCH_MERCHANT_HIGH) else "review"
+        # BACKLOG-037: no-merchant grey zone (not comparable → normally Review). If the
+        # bank row and the estimate share a receipt/reference number, that IS positive
+        # identity → promote to Confident. Only ever promotes; never overrides the
+        # merchant-based branch (comparable pairs are untouched here).
+        if not comparable and tier == "review":
+            shared_refs = _receipt_numbers(row.description) & _receipt_numbers(cand.description)
+            if shared_refs:
+                tier = "confident"
+        # BACKLOG-039: a debt_payment match moves a debt balance. If the bank amount
+        # differs from the estimate beyond the epsilon it must be confirmed explicitly —
+        # force Review so it can never silently auto-verify. Runs last so it also
+        # overrides a receipt-number promotion for a drifting debt payment.
+        if (
+            cand.transaction_type == "debt_payment"
+            and abs(float(cand.amount) - float(row.amount)) > MATCH_DEBT_DRIFT_EPSILON
+        ):
+            tier = "review"
         plan[row.id] = MatchPlanEntry(
             row_id=row.id,
             candidate_id=cand.id,
@@ -1064,6 +1111,35 @@ def commit_draft(
                 human=human,
             )
             match.amount = row_amount
+            # BACKLOG-039: a drifting debt_payment reconcile must keep three figures in
+            # lockstep — the transaction amount (just set), the linked DebtPayment.amount,
+            # and the debt's current_balance. The lockstep delta is the change in payment
+            # MAGNITUDE: |bank| - |estimate|. Paying more (larger magnitude) reduces the
+            # balance further and raises the recorded payment by the same delta. Both legs
+            # move together or, on any failure below, neither does (single unit of work).
+            # Only reached when abs(manual - bank) > epsilon (drift gate forced Review; the
+            # user confirmed) AND the estimate is a linked debt_payment.
+            if (
+                match.transaction_type == "debt_payment"
+                and match.debt_id is not None
+                and abs(manual_amount - row_amount) > MATCH_DEBT_DRIFT_EPSILON
+            ):
+                payment = (
+                    db.query(models.DebtPayment)
+                    .filter(models.DebtPayment.transaction_id == match.id)
+                    .first()
+                )
+                debt = (
+                    db.query(models.Debt)
+                    .filter(models.Debt.id == match.debt_id)
+                    .first()
+                )
+                if payment is not None and debt is not None:
+                    payment_delta = round(abs(row_amount) - abs(manual_amount), 2)
+                    payment.amount = round(payment.amount + payment_delta, 2)
+                    debt.current_balance = round(debt.current_balance - payment_delta, 2)
+                    payment.balance_after = debt.current_balance
+                    debt.is_paid_off = debt.current_balance <= 0
             # AUDIT-09: the estimate's date was a guess; the bank row's date is authoritative.
             # Keeping the estimate date books spend in the wrong month across a ±3-day
             # boundary. Adopt the bank date. FORWARD-ONLY: affects only rows reconciled by
@@ -1143,6 +1219,28 @@ def rollback_import(
     if now > rollback_until:
         elapsed = int((now - rollback_until).total_seconds())
         raise HTTPException(status_code=409, detail=f"Rollback window expired ({elapsed}s ago)")
+
+    # BACKLOG-039: the revert loop below restores a matched estimate's amount/date/verify
+    # state, but it does NOT reverse a debt-leg adjustment (current_balance + DebtPayment
+    # .amount) made when a drifting debt_payment was confirmed. Undoing those rows would
+    # leave the debt balance stranded, so block the whole rollback with a 409. A row was
+    # drift-confirmed iff it is a linked debt_payment with original_amount stamped (set
+    # only when the bank overwrote a differing estimate amount). Checked BEFORE any write.
+    drift_debt_rows = db.query(models.Transaction.id).filter(
+        models.Transaction.import_id == draft.id,
+        models.Transaction.source == "manual",
+        models.Transaction.transaction_type == "debt_payment",
+        models.Transaction.debt_id.isnot(None),
+        models.Transaction.original_amount.isnot(None),
+    ).count()
+    if drift_debt_rows:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This import adjusted a debt balance on a confirmed payment; "
+                "rollback can't restore the debt. Correct the debt manually instead."
+            ),
+        )
 
     # BASTION-5: TOCTOU-safe transition for rollback
     result = db.execute(
