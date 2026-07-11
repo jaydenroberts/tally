@@ -44,7 +44,7 @@ If a persona has **can modify data** enabled, the AI can make changes to your Ta
 
 If **can modify data** is disabled, the AI can only read and discuss your data. It cannot make any changes.
 
-**Note:** Even with modify access enabled, the AI operates within Tally's standard permission model. It cannot create owner accounts, delete accounts, or perform destructive operations.
+**Note:** Even with modify access enabled, the AI operates within Tally's standard permission model. It cannot create owner accounts, delete accounts, or perform destructive operations. A **Summary** or **Readonly** persona is never given data-changing tools, regardless of the modify setting — write access applies only to personas that can see the underlying data.
 
 ---
 

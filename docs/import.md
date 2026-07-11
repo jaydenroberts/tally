@@ -19,7 +19,7 @@ Tally can import bank statements directly from CSV and PDF files. Imported trans
 
 Place your bank statement files in the directory you mounted as `/financial-data` when deploying Tally. Tally reads this directory as read-only — it never modifies or deletes your original files.
 
-Alternatively, you can upload files directly in the import UI without using the `/financial-data` directory.
+Alternatively, you can upload a file directly in the import wizard without using the `/financial-data` directory. Uploaded files must be `.csv` or `.pdf` and are size-capped (default 10 MB, set by `MAX_UPLOAD_BYTES`); larger files are rejected.
 
 ---
 
@@ -27,7 +27,7 @@ Alternatively, you can upload files directly in the import UI without using the 
 
 1. Go to the **Transactions** page
 2. Click the **Import** button
-3. The import modal opens with three steps
+3. The import wizard opens as a guided flow: **choose account → upload → match columns → review → confirm**
 
 ---
 
@@ -70,15 +70,28 @@ Click **Import** to run the import.
 
 ---
 
-## Step 3 — Reconciliation Results
+## Step 4 — Review
 
-After import, Tally displays a summary of what happened:
+Before anything is committed, the review step shows what the import will do, with a
+running count in the form **"X will reconcile · Y new"** — how many bank rows match
+an existing estimate (and will verify it) versus how many will be added as new
+transactions.
+
+Rows where an estimate matches but the bank amount has drifted are surfaced here for
+you to confirm. This includes **debt-payment estimates**: if you logged a payment as
+an estimate and the imported bank amount differs, the row goes to Review, and
+confirming it updates both the transaction and the linked debt balance to the bank's
+figure.
+
+## Step 5 — Confirmation Results
+
+After you confirm, Tally displays a summary of what happened:
 
 | Result | Meaning |
 |--------|---------|
-| Matched | An existing manual transaction was matched to this bank record and verified |
-| New | No matching manual transaction was found; a new transaction was created |
-| Amount difference | Match was made but the bank amount differed from your estimate by more than 15% |
+| Reconciled | An existing manual estimate was matched to this bank record and verified. The transaction adopts the bank statement's date (which may move it into the correct month); an undo restores the original date. |
+| New | No matching estimate was found; a new verified transaction was created |
+| Amount difference | A match was made but the bank amount differed from your estimate by more than 15% — shown for review |
 
 The amount difference table lists any transactions where the bank amount differed significantly from your estimate, showing both figures so you can review them.
 
@@ -94,7 +107,8 @@ When you import, Tally compares each bank record against your existing manual tr
 
 When a match is found:
 - The bank amount overwrites the estimate amount
-- The original estimated amount is saved for reference
+- The transaction adopts the bank statement's date (correcting the month if your estimate was dated differently)
+- The original estimated amount and date are saved for reference, so an undo restores them
 - A match note is recorded
 - The transaction is marked **Verified**
 - Your category and notes are preserved (the bank record does not overwrite them)
@@ -118,7 +132,7 @@ Go to **Import History** (owner-only, accessible from the sidebar) to see a log 
 
 ## Tips for Clean Imports
 
-- Set your date range in the bank's export to overlap your last import slightly — the reconciliation algorithm will not create duplicates if a transaction was already imported
+- Set your date range in the bank's export to overlap your last import slightly — re-importing rows that were already imported (or already reconciled to an estimate) will not create duplicates or double-count them
 - Use consistent account selection — always import a file to the correct account
 - Review the amount difference table after each import — large discrepancies usually indicate a mismatched estimate that needs correction
 

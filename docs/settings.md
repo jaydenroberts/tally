@@ -126,7 +126,7 @@ curl -X POST http://your-server-ip:8092/api/auth/recover \
 5. Log in with the owner account using your new password
 6. Stop the container, remove `RECOVERY_TOKEN` from the environment, and restart
 
-**Warning:** Remove `RECOVERY_TOKEN` after use. While it is set, anyone who can reach the endpoint and knows the token can reset the owner password.
+**Warning:** Remove `RECOVERY_TOKEN` from the environment after use. While it is set, anyone who can reach the endpoint and knows the token can attempt to reset the owner password. A password change or recovery also invalidates all existing login sessions (tokens carry a version stamp), so older logins stop working.
 
 The recovery endpoint resets the password of the owner account with the lowest ID (the first owner created). If you have multiple owner accounts, it resets the original one.
 

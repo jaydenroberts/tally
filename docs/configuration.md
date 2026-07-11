@@ -14,6 +14,10 @@ Tally is configured through environment variables passed to the Docker container
 | `FINANCIAL_DATA_PATH` | No | `/financial-data` | Path inside the container where Tally looks for importable bank statement files. Should match your read-only volume mount. |
 | `FIRST_RUN_OWNER_USERNAME` | No | — | If set, Tally auto-creates an owner account with this username on first startup. Has no effect if users already exist. |
 | `FIRST_RUN_OWNER_PASSWORD` | No | — | Required if `FIRST_RUN_OWNER_USERNAME` is set. |
+| `ALLOWED_ORIGINS` | No | local origin | Comma-separated allow-list of browser origins permitted to call the API (CORS). Defaults to the local origin; add your LAN or tunnel URL if you reach Tally from another hostname. |
+| `AUTH_RATE_LIMIT_MAX` | No | `5` | Maximum login/password-recovery attempts per IP within the rate-limit window. |
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | No | `60` | Length of the auth rate-limit window, in seconds. |
+| `MAX_UPLOAD_BYTES` | No | `10485760` | Maximum size (in bytes) of a statement file uploaded through the import wizard. Larger uploads are rejected. |
 | `RECOVERY_TOKEN` | No | — | When set, activates the password recovery endpoint (`POST /api/auth/recover`). Remove after use. See [Account Recovery](settings.md#account-recovery). |
 
 **Warning:** If you change `SECRET_KEY` after users have logged in, all existing sessions will be invalidated. Users will need to log in again.
@@ -31,6 +35,8 @@ The `/financial-data` volume is optional. If you do not mount it, file-picker im
 
 **Note:** Mount `/financial-data` as read-only (`:ro`) — Tally never writes to this directory.
 
+**Warning:** Tally runs as a **non-root** user inside the container. The host directory you mount at `/data` must be writable by that user, or Tally cannot create or open its database and the container will fail to start. On Unraid, `/mnt/user/appdata/` paths are writable by default; on a plain Linux host, make the data directory writable by the container user before starting.
+
 ---
 
 ## Ports
@@ -40,6 +46,18 @@ The `/financial-data` volume is optional. If you do not mount it, file-picker im
 | `8091` | `8092` | Tally web UI and API |
 
 Map the container port `8091` to any available port on your host. The examples in this documentation use `8092` as the host port.
+
+---
+
+## Cross-Origin Access (CORS)
+
+By default Tally only accepts browser API requests from the local origin. If you
+open the UI from a different hostname — a LAN IP, a reverse-proxy domain, or a
+tunnel URL — add that origin to `ALLOWED_ORIGINS` (comma-separated) so the browser
+is allowed to talk to the API. Requests from origins not on the list are rejected.
+
+Authentication uses a Bearer token rather than cookies, so credentialed
+cross-origin requests are disabled.
 
 ---
 

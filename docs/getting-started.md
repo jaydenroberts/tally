@@ -9,12 +9,20 @@ This guide walks you through deploying Tally for the first time — from pulling
 - A host running Docker (Unraid, TrueNAS, a Linux server, or any machine with Docker installed)
 - A terminal or Unraid Docker UI access
 - Port 8092 available on your host (or a port of your choosing)
-- A directory on your host for persistent data (e.g. `/mnt/user/appdata/tally`)
+- A directory on your host for persistent data (e.g. `/mnt/user/appdata/tally`), **writable by the container's non-root user** (see the note under Installation)
 - Optionally: a directory containing your bank statement files (CSV or PDF)
 
 ---
 
 ## Installation
+
+> **Warning:** Tally runs as a **non-root** user inside the container. The host
+> directory you mount at `/data` must be writable by that user, or Tally cannot
+> create its database and the container will fail to start on first run — the most
+> common new-install problem. On Unraid, paths under `/mnt/user/appdata/` are
+> writable by default. On a plain Linux host, create the directory and make it
+> writable by the container user before starting (check the user's UID with
+> `docker run --rm --entrypoint id <image>` and `chown` the directory to it).
 
 ### Option 1 — Docker Run
 
