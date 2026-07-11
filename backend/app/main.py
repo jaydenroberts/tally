@@ -1,8 +1,12 @@
+import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -361,9 +365,80 @@ def run_startup_migrations(db: Session) -> None:
         log.info("[M-003] One-time dedup cleanup complete; marker recorded")
 
 
+# ---------------------------------------------------------------------------
+# In-process daily recurring-transaction trigger (BACKLOG-025)
+# ---------------------------------------------------------------------------
+# A dependency-free asyncio task started in the lifespan. It wakes shortly
+# after local-midnight-UTC (00:05) each day and generates any due recurring
+# transactions, mirroring the startup run. No APScheduler / external scheduler.
+#
+# Idempotency: run_due_recurring() only processes rows with next_due <= today
+# and advances next_due past today after generating, so a same-day second run
+# (e.g. startup run + first timer run coinciding) generates nothing. The
+# next_due advancement IS the double-generation guard — no extra guard needed.
+# ---------------------------------------------------------------------------
+
+RECURRING_RUN_HOUR_UTC = 0
+RECURRING_RUN_MINUTE_UTC = 5
+
+
+def _seconds_until_next_run(now: datetime) -> float:
+    """
+    Seconds from ``now`` until the next 00:05 UTC. Pure and injectable so the
+    scheduling arithmetic is unit-testable without sleeping. ``now`` must be a
+    timezone-aware UTC datetime.
+    """
+    target = now.replace(
+        hour=RECURRING_RUN_HOUR_UTC,
+        minute=RECURRING_RUN_MINUTE_UTC,
+        second=0,
+        microsecond=0,
+    )
+    if target <= now:
+        target = target + timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+def _run_recurring_once() -> int:
+    """
+    Open a fresh DB session and generate any due recurring transactions.
+    Never reuses a request session. Returns the number generated. Any failure
+    is logged (message only — no data-bearing stack trace) and does not
+    propagate, so the timer loop survives one bad run.
+    """
+    log = logging.getLogger("tally")
+    db = SessionLocal()
+    try:
+        count = recurring.run_due_recurring(db)
+        if count:
+            log.info("Generated %d recurring transaction(s) on daily timer", count)
+        return count
+    except Exception as exc:  # noqa: BLE001 — loop must survive any single failure
+        db.rollback()
+        log.error("Recurring timer run failed: %s", type(exc).__name__)
+        return 0
+    finally:
+        db.close()
+
+
+async def _recurring_timer_loop() -> None:
+    """
+    Sleep until the next 00:05 UTC, run generation off the event loop (the DB
+    layer is sync SQLAlchemy), then repeat. Cancelled cleanly on shutdown.
+    """
+    log = logging.getLogger("tally")
+    try:
+        while True:
+            delay = _seconds_until_next_run(datetime.now(timezone.utc))
+            await asyncio.sleep(delay)
+            await run_in_threadpool(_run_recurring_once)
+    except asyncio.CancelledError:
+        log.info("Recurring timer stopped")
+        raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import logging
     # Create all tables
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
@@ -384,7 +459,17 @@ async def lifespan(app: FastAPI):
             "Use a token of at least 32 random characters (e.g. openssl rand -hex 32)."
         )
 
-    yield
+    # Start the daily in-process recurring-transaction timer (BACKLOG-025).
+    recurring_task = asyncio.create_task(_recurring_timer_loop())
+
+    try:
+        yield
+    finally:
+        recurring_task.cancel()
+        try:
+            await recurring_task
+        except asyncio.CancelledError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +479,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.4.2",
+    version="1.4.3",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
