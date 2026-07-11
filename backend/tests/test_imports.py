@@ -744,7 +744,10 @@ def test_match_amounts_agree(client, auth_headers, test_account, db):
     assert est.is_verified is True
     assert est.amount == -50.00
     assert est.original_amount is None            # never set when amounts agreed
-    assert est.match_note == "Matched import; amounts agreed"
+    # AUDIT-05/09: match_note now carries a structured [recon] header (bank desc/date +
+    # original estimate date) followed by the human-readable note. The human tail is
+    # preserved; assert on it rather than the whole string.
+    assert est.match_note.endswith("Matched import; amounts agreed")
 
 
 # --- no match: insert new import row ---------------------------------------
