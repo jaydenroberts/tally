@@ -14,6 +14,15 @@ from app.auth import hash_password
 from app import auth as _auth
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "thread_race: races real threads against the single shared test Session; "
+        "flaky under full-suite load, so CI deselects it via -m 'not thread_race'. "
+        "Always included in local runs.",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_auth_rate_limits():
     """AUDIT-27: the in-process login/recover rate limiter keeps state across
