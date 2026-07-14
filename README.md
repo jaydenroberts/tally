@@ -18,6 +18,10 @@ A self-hosted personal finance web application for households. Track accounts, t
 > see each other's finances, and do not put it on the public internet. Run it on
 > your LAN or behind a private tunnel/VPN. Per-user data isolation is tracked as a
 > future enhancement.
+>
+> Cross-origin browser access is additionally restricted to an explicit allow-list
+> (`ALLOWED_ORIGINS`), and the login and password-recovery endpoints are
+> rate-limited per IP. See [Configuration](docs/configuration.md).
 
 ---
 
@@ -41,6 +45,12 @@ A self-hosted personal finance web application for households. Track accounts, t
 ## Installation
 
 ### Option 1 — Docker run (quick start)
+
+> **Warning:** Tally runs as a **non-root** user inside the container. The host
+> directory you mount at `/data` must be **writable by that user**, or Tally will
+> fail to create its database on first start. On Unraid, `/mnt/user/appdata/...`
+> is writable by default. On a plain Linux host, make the data directory
+> writable by the container's user first (see [Getting Started](docs/getting-started.md)).
 
 ```bash
 # Generate a secret key
@@ -130,8 +140,12 @@ All configuration is via environment variables:
 | `FINANCIAL_DATA_PATH` | No | `/financial-data` | Container path where bank statement files are mounted. |
 | `AI_PROVIDER` | No | — | AI provider to use for the chat feature: `anthropic`, `openai`, or `ollama` (any OpenAI-compatible endpoint). Leave unset to disable the chat page. |
 | `AI_API_KEY` | No | — | API key for the selected provider. Not required for local Ollama. |
-| `AI_MODEL` | No | — | Model name to use (e.g. `claude-3-5-sonnet-20241022`, `gpt-4o`, `llama3`). |
+| `AI_MODEL` | No | — | Model name to use (e.g. `claude-sonnet-4-6`, `gpt-4o`, `llama3`). |
 | `AI_BASE_URL` | No | — | Base URL override for OpenAI-compatible endpoints (e.g. `http://ollama:11434/v1`). Required for Ollama; not needed for Anthropic or OpenAI. |
+| `ALLOWED_ORIGINS` | No | local origin | Comma-separated allow-list of origins permitted to call the API from a browser (CORS). Add your LAN/tunnel URL here if you access Tally from another hostname. |
+| `AUTH_RATE_LIMIT_MAX` | No | `5` | Maximum login/password-recovery attempts per IP within the rate-limit window. |
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | No | `60` | Length of the auth rate-limit window, in seconds. |
+| `MAX_UPLOAD_BYTES` | No | `10485760` | Maximum size (in bytes) of a statement file uploaded through the import wizard. Uploads over this limit are rejected. |
 | `RECOVERY_TOKEN` | No | — | Enables the `POST /api/auth/recover` endpoint for owner password recovery. Use a token of at least 32 random characters (`openssl rand -hex 32`). Remove after use. |
 
 ---

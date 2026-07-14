@@ -788,28 +788,23 @@ def test_income_estimate_matches(client, auth_headers, test_account, db):
     assert est.is_verified is True
 
 
-# --- A6: transfer / debt-linked rows are NOT matched -----------------------
+# --- A6: transfer rows are NOT matched (debt_payment now IS — BACKLOG-039) --
 
-def test_transfer_and_debt_rows_not_matched(client, auth_headers, test_account, db):
+def test_transfer_rows_not_matched(client, auth_headers, test_account, db):
     transfer = _manual_tx(db, test_account, amount=-100.00, on_date=date(2026, 5, 4),
                           description="Transfer Out", transaction_type="transfer")
-    debt = _manual_tx(db, test_account, amount=-100.00, on_date=date(2026, 5, 4),
-                      description="Loan Pmt", transaction_type="debt_payment")
 
     _, commit = _commit_one_row_csv(
         client, auth_headers, test_account,
-        on_date="2026-05-04", description="Loan Pmt", amount="-100.00",
+        on_date="2026-05-04", description="Transfer Out", amount="-100.00",
     )
-    # Neither typed row is a candidate → a brand-new import row is inserted instead.
+    # A transfer row is not a candidate → a brand-new import row is inserted instead.
     assert commit["matched_count"] == 0
     assert commit["transactions_created"] == 1
 
     db.refresh(transfer)
-    db.refresh(debt)
     assert transfer.is_verified is False
-    assert debt.is_verified is False
     assert transfer.import_id is None
-    assert debt.import_id is None
 
 
 # --- A5: near-duplicate unmatched row stays in Review ----------------------
@@ -1473,3 +1468,180 @@ def test_concurrent_candidate_amount_edit_full_gate_rejects(client, auth_headers
     assert est_after.is_verified is False
     assert est_after.import_id is None
     assert est_after.amount == -500.00           # untouched by the import
+
+
+# ===========================================================================
+# BACKLOG-039 — debt_payment reconciliation
+# ===========================================================================
+
+def _mk_debt_estimate(db, account, *, amount, on_date, description, balance):
+    """Seed a debt + a linked, pristine debt_payment estimate + its DebtPayment audit
+    row, mirroring the state produced by /transactions/{id}/link-debt. amount is the
+    signed (negative) estimate; the DebtPayment.amount is the positive applied delta."""
+    debt = models.Debt(
+        user_id=account.user_id, name="Card", original_amount=balance,
+        current_balance=balance, is_paid_off=False,
+    )
+    db.add(debt)
+    db.flush()
+    tx = _manual_tx(db, account, amount=amount, on_date=on_date,
+                    description=description, transaction_type="debt_payment")
+    tx.debt_id = debt.id
+    applied = round(min(abs(amount), balance), 2)
+    debt.current_balance = round(balance - applied, 2)
+    payment = models.DebtPayment(
+        debt_id=debt.id, amount=applied, balance_after=debt.current_balance,
+        paid_at=on_date, transaction_id=tx.id,
+    )
+    db.add(payment)
+    db.commit()
+    db.refresh(debt)
+    db.refresh(tx)
+    db.refresh(payment)
+    return debt, tx, payment
+
+
+def test_debt_payment_exact_reconciles_confident(client, auth_headers, test_account, db):
+    # Exact-amount debt_payment with matching merchant → Confident auto-reconcile.
+    debt, tx, payment = _mk_debt_estimate(
+        db, test_account, amount=-200.00, on_date=date(2026, 5, 3),
+        description="ZORPCO FINANCE", balance=1000.00,
+    )
+    csv = b"Date,Description,Amount\n2026-05-03,ZORPCO FINANCE,-200.00\n"
+    resp = client.post(f"/api/imports?account_id={test_account.id}", headers=auth_headers,
+                       files={"file": ("d.csv", io.BytesIO(csv), "text/csv")})
+    draft_id = resp.json()["id"]
+    preview = client.get(f"/api/imports/{draft_id}/preview", headers=auth_headers).json()
+    assert preview["confident_match_count"] == 1        # exact + same merchant → Confident
+    body = _confirmed_from_preview(preview)
+    commit = client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers, json=body).json()
+    assert commit["auto_matched_count"] == 1
+    assert commit["transactions_created"] == 0
+
+    db.refresh(tx); db.refresh(debt); db.refresh(payment)
+    assert tx.is_verified is True
+    assert tx.amount == -200.00
+    assert debt.current_balance == 800.00               # unchanged — amounts agreed
+    assert payment.amount == 200.00
+
+
+def test_debt_payment_drift_not_auto_verified(client, auth_headers, test_account, db):
+    # Drifting debt_payment must NOT auto-verify — it goes to Review even with a
+    # matching merchant (money-touching gate). Not echoed → imported as new, estimate
+    # left untouched.
+    debt, tx, payment = _mk_debt_estimate(
+        db, test_account, amount=-200.00, on_date=date(2026, 5, 3),
+        description="ZORPCO FINANCE", balance=1000.00,
+    )
+    csv = b"Date,Description,Amount\n2026-05-03,ZORPCO FINANCE,-205.00\n"
+    resp = client.post(f"/api/imports?account_id={test_account.id}", headers=auth_headers,
+                       files={"file": ("d.csv", io.BytesIO(csv), "text/csv")})
+    draft_id = resp.json()["id"]
+    preview = client.get(f"/api/imports/{draft_id}/preview", headers=auth_headers).json()
+    assert preview["confident_match_count"] == 0        # drift forced Review
+    assert len(preview["review_suggestions"]) == 1
+
+    # Commit WITHOUT accepting the review → estimate stays untouched, row imported new.
+    body = _confirmed_from_preview(preview)             # confident only (none)
+    commit = client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers, json=body).json()
+    assert commit["auto_matched_count"] == 0
+    assert commit["transactions_created"] == 1
+    db.refresh(tx); db.refresh(debt); db.refresh(payment)
+    assert tx.is_verified is False
+    assert tx.amount == -200.00
+    assert debt.current_balance == 800.00
+    assert payment.amount == 200.00
+
+
+def test_debt_payment_drift_confirm_applies_both_legs(client, auth_headers, test_account, db):
+    # Confirming a drifting debt_payment moves the tx amount, the DebtPayment.amount,
+    # AND the debt balance in lockstep by the payment-magnitude delta.
+    debt, tx, payment = _mk_debt_estimate(
+        db, test_account, amount=-200.00, on_date=date(2026, 5, 3),
+        description="ZORPCO FINANCE", balance=1000.00,
+    )
+    csv = b"Date,Description,Amount\n2026-05-03,ZORPCO FINANCE,-205.00\n"
+    resp = client.post(f"/api/imports?account_id={test_account.id}", headers=auth_headers,
+                       files={"file": ("d.csv", io.BytesIO(csv), "text/csv")})
+    draft_id = resp.json()["id"]
+    preview = client.get(f"/api/imports/{draft_id}/preview", headers=auth_headers).json()
+    body = _confirmed_from_preview(preview, accept_reviews=True)   # user confirms the drift
+    commit = client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers, json=body).json()
+    assert commit["confirmed_matched_count"] == 1
+    assert commit["transactions_created"] == 0
+
+    db.refresh(tx); db.refresh(debt); db.refresh(payment)
+    assert tx.amount == -205.00                 # bank wins
+    assert tx.original_amount == -200.00
+    assert payment.amount == 205.00             # +$5 applied delta
+    assert debt.current_balance == 795.00       # 800 - $5 delta (both legs moved)
+    assert payment.balance_after == 795.00
+
+
+def test_debt_payment_drift_confirm_blocks_rollback(client, auth_headers, test_account, db):
+    # Undo of a drift-confirmed debt_payment is blocked with 409 — the revert loop can't
+    # restore the debt leg, so we refuse rather than strand the balance.
+    debt, tx, payment = _mk_debt_estimate(
+        db, test_account, amount=-200.00, on_date=date(2026, 5, 3),
+        description="ZORPCO FINANCE", balance=1000.00,
+    )
+    csv = b"Date,Description,Amount\n2026-05-03,ZORPCO FINANCE,-205.00\n"
+    resp = client.post(f"/api/imports?account_id={test_account.id}", headers=auth_headers,
+                       files={"file": ("d.csv", io.BytesIO(csv), "text/csv")})
+    draft_id = resp.json()["id"]
+    preview = client.get(f"/api/imports/{draft_id}/preview", headers=auth_headers).json()
+    body = _confirmed_from_preview(preview, accept_reviews=True)
+    client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers, json=body)
+
+    resp = client.post(f"/api/imports/{draft_id}/rollback", headers=auth_headers)
+    assert resp.status_code == 409, resp.text
+    assert "debt" in resp.json()["detail"].lower()
+    # Nothing reverted — balance/legs stay as the confirm left them.
+    db.refresh(debt); db.refresh(payment)
+    assert debt.current_balance == 795.00
+    assert payment.amount == 205.00
+
+
+# ===========================================================================
+# BACKLOG-037 — receipt-number promotion in the no-merchant grey zone
+# ===========================================================================
+
+def test_receipt_number_promotes_no_merchant_pair(db, test_account):
+    # Both sides pure boilerplate (no merchant identity) BUT share a 6+ digit reference
+    # → promote Review → Confident.
+    est = _manual_tx(db, test_account, amount=-161.66, on_date=date(2026, 5, 5),
+                     description="Direct Debit Receipt 998877")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 5), "Direct Debit Receipt 998877", -161.66),
+    ])
+    plan = _compute_match_plan(db, draft)
+    rid = draft.rows[0].id
+    assert rid in plan
+    assert plan[rid].comparable is False        # still the no-merchant grey zone
+    assert plan[rid].tier == "confident"        # promoted by the shared reference
+
+
+def test_different_receipt_numbers_do_not_promote(db, test_account):
+    # No-merchant grey zone, DIFFERENT references → stays Review (no promotion).
+    est = _manual_tx(db, test_account, amount=-161.66, on_date=date(2026, 5, 5),
+                     description="Direct Debit Receipt 111111")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 5), "Direct Debit Receipt 222222", -161.66),
+    ])
+    plan = _compute_match_plan(db, draft)
+    rid = draft.rows[0].id
+    assert rid in plan
+    assert plan[rid].tier == "review"
+
+
+def test_receipt_number_never_overrides_merchant(db, test_account):
+    # A comparable pair below FLOOR (cross-merchant) is rejected on merchant grounds and
+    # a shared reference must NOT rescue it — receipt promotion only touches the
+    # not-comparable branch.
+    _manual_tx(db, test_account, amount=-50.00, on_date=date(2026, 5, 5),
+               description="ZORPCO MART 998877")
+    draft = _make_draft(db, test_account, [
+        (0, date(2026, 5, 5), "QUUXNET BROADBAND 998877", -50.00),
+    ])
+    plan = _compute_match_plan(db, draft)
+    assert draft.rows[0].id not in plan         # cross-merchant → None, not promoted

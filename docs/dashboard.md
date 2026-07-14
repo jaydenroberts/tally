@@ -42,6 +42,17 @@ This panel shows a fixed number of recent entries. To see the full transaction h
 
 ---
 
+## Monthly Net Cash Flow
+
+The Dashboard shows a **Monthly net cash flow** chart — income minus spending for
+each month, using the same exclusion rules as the rest of the app (transfers, debt
+payments, and savings transfers are not counted as income or expense).
+
+A range selector lets you switch the window shown between **1M**, **3M**, **6M**, and
+**12M**. A full net-worth trend over time is planned for a later release.
+
+---
+
 ## Status Badges
 
 Tally uses a colour-coded badge system throughout the UI:

@@ -108,7 +108,7 @@ Select multiple transactions using the checkboxes on the left of each row. Once 
 Available bulk actions:
 
 - **Set category** — apply the same category to all selected transactions. A confirmation strip shows the count before applying.
-- **Delete** — permanently delete selected transactions. A confirmation modal appears. Errors (if any) are shown in the modal before deleting.
+- **Delete** — permanently delete selected transactions. A confirmation modal appears. Errors (if any) are shown in the modal before deleting. Deleting a transaction that was linked to a debt or a savings goal reverses that link automatically — the debt balance or goal total is restored and the payment/contribution is removed. Deleting one side of a transfer leaves the other side intact.
 
 Bulk category update uses parallel updates; if any individual update fails, the rest still apply and the failures are reported.
 

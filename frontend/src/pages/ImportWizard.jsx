@@ -608,8 +608,21 @@ function StepReview({ draft, account, onBack, onCommitted, onNeedsConfirm }) {
 
   if (!preview.rows) return <div style={{ padding: 32, color: 'var(--text-faint)' }}>Loading preview…</div>
 
-  const willImport = preview.rows.filter(r => !r.excluded).length
-  const dupCount   = preview.rows.filter(r => r.duplicate_of).length
+  // BACKLOG-038 — split the import summary into "will reconcile" vs "new" using the
+  // matcher plan already carried on the preview. A row reconciles if it's the bank side
+  // of a Confident or Review-tier match (keyed by row id), or a near-duplicate of an
+  // already-reconciled statement row (duplicate_of). Counts are derived from preview.rows
+  // and gated on !excluded, so exclusion toggles update them live.
+  const reconcileRowIds = new Set([
+    ...(preview.confident_matches || []).map(m => m.row_id),
+    ...(preview.review_suggestions || []).map(s => s.row_id),
+  ])
+  const includedRows = preview.rows.filter(r => !r.excluded)
+  const willImport   = includedRows.length
+  const willReconcile = includedRows.filter(r => reconcileRowIds.has(r.id) || r.duplicate_of != null).length
+  const willBeNew     = willImport - willReconcile
+  const excludedCount = preview.rows.length - willImport
+  const dupCount      = preview.rows.filter(r => r.duplicate_of).length
 
   return (
     <>
@@ -620,7 +633,11 @@ function StepReview({ draft, account, onBack, onCommitted, onNeedsConfirm }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 18 }}>
           <SummaryStat label="Rows in file"   value={preview.summary?.total ?? preview.rows.length}/>
           <SummaryStat label="Duplicates"     value={dupCount} tone={dupCount > 0 ? 'var(--warning)' : 'var(--text)'}/>
-          <SummaryStat label="Will import"    value={willImport} tone="var(--positive)"/>
+          <SummaryStat label="Will reconcile" value={willReconcile} tone={willReconcile > 0 ? 'var(--brand)' : 'var(--text)'}/>
+          <SummaryStat label="New"            value={willBeNew} tone="var(--positive)"/>
+          {excludedCount > 0 && (
+            <SummaryStat label="Excluded"     value={excludedCount} tone="var(--text-faint)"/>
+          )}
         </div>
 
         {error && (
@@ -676,7 +693,9 @@ function StepReview({ draft, account, onBack, onCommitted, onNeedsConfirm }) {
         nextLabel={
           busy ? 'Importing…'
           : (preview.review_suggestions?.length ?? 0) > 0 ? 'Continue →'
-          : `Import ${willImport} transactions →`
+          : willReconcile > 0
+            ? `Import ${willBeNew} new · reconcile ${willReconcile} →`
+            : `Import ${willBeNew} new →`
         }
       />
     </>

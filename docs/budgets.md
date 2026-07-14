@@ -14,6 +14,8 @@ Each budget is a monthly spending limit for one category. At any point in the mo
 
 Budget progress is shown as a dual-segment progress bar. Transfers and non-expense transactions (savings transfers, debt payments) are excluded from budget calculations.
 
+Budgets set on a weekly or yearly period are pro-rated into the month view, so every budget is compared against the current month on the same basis.
+
 ---
 
 ## Reading the Progress Bars
@@ -25,7 +27,7 @@ Each budget card shows a progress bar with two segments:
 | Verified | Solid green | Spend confirmed by bank imports |
 | Estimated | Translucent pink | Spend from manual entries not yet verified |
 
-The bar fills left to right. If the combined total exceeds the budget limit, the bar turns red.
+The bar fills left to right. From 80% of the limit the bar shows a warning state, and it turns red for "over" once combined spend passes 100% of the limit.
 
 Below the bar, the card shows:
 - Verified spend amount
