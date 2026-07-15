@@ -138,8 +138,8 @@ All configuration is via environment variables:
 | `FIRST_RUN_OWNER_PASSWORD` | No | — | Required if `FIRST_RUN_OWNER_USERNAME` is set. |
 | `DATABASE_URL` | No | `sqlite:////data/tally.db` | SQLite database path. Change only if you know what you're doing. |
 | `FINANCIAL_DATA_PATH` | No | `/financial-data` | Container path where bank statement files are mounted. |
-| `AI_PROVIDER` | No | — | AI provider to use for the chat feature: `anthropic`, `openai`, or `ollama` (any OpenAI-compatible endpoint). Leave unset to disable the chat page. |
-| `AI_API_KEY` | No | — | API key for the selected provider. Not required for local Ollama. |
+| `AI_PROVIDER` | No | — | AI provider for the chat feature: `anthropic` (default when unset), `openai`, or `ollama` (any OpenAI-compatible endpoint). To keep the feature inactive, set no API key (see `AI_API_KEY`). |
+| `AI_API_KEY` | No | — | API key for the selected provider. If unset, falls back to `ANTHROPIC_API_KEY` when present in the container environment — unset both to keep the chat feature inactive. Not required for local Ollama. |
 | `AI_MODEL` | No | — | Model name to use (e.g. `claude-sonnet-4-6`, `gpt-4o`, `llama3`). |
 | `AI_BASE_URL` | No | — | Base URL override for OpenAI-compatible endpoints (e.g. `http://ollama:11434/v1`). Required for Ollama; not needed for Anthropic or OpenAI. |
 | `ALLOWED_ORIGINS` | No | local origin | Comma-separated allow-list of origins permitted to call the API from a browser (CORS). Add your LAN/tunnel URL here if you access Tally from another hostname. |
@@ -235,6 +235,18 @@ Tally mounts your existing financial files **read-only**. It never modifies orig
 Mount your files at `/financial-data` (or configure `FINANCIAL_DATA_PATH`).
 
 Supported formats: CSV (auto-detected column mapping), PDF bank statements (text extraction).
+
+---
+
+## Privacy
+
+Tally is fully self-hosted. Tally's application code collects no data, contains no telemetry or analytics, and makes no network requests on your behalf. All your financial data stays in your own SQLite database, on your own hardware. Mounted financial statement files are read-only and are only parsed locally for import (see [Financial File Import](#financial-file-import)).
+
+The **AI chat** feature (see [AI Coach](docs/ai-coach.md)) is optional, but it is not disabled by default: the provider defaults to `anthropic`, and the feature will make requests whenever an API key is available — from `AI_API_KEY`, or falling back to an `ANTHROPIC_API_KEY` present in the container environment. If you want the feature off, ensure neither variable is set; with no key available, no request is ever made and no data leaves your machine. When a key is configured, your chat messages and the financial context your persona settings permit are sent only to the AI provider you configure with your own API key — Anthropic, OpenAI, or a local OpenAI-compatible endpoint such as Ollama — under that provider's terms. Running a local model via Ollama keeps even that traffic on your own network.
+
+These statements describe what Tally's own code does. They do not cover the Docker base image, your operating system, or third-party services you choose to connect — those are outside Tally's control.
+
+**Note:** Tally is a budgeting and tracking tool, not financial advice. The software is provided as-is under the [MIT license](LICENSE).
 
 ---
 
