@@ -4,9 +4,10 @@
  * Streaming is handled via fetch + ReadableStream (not EventSource) so we
  * can include the Authorization header, which EventSource does not support.
  *
- * TODO: Chat history is ephemeral — each page load starts a fresh conversation.
- *       Revisit for persistent SQLite storage in a future phase so conversation
- *       history is retained across reloads and scoped per user/persona.
+ * Chat history is persistent (BACKLOG-016, v1.4.4): sessions live server-side,
+ * scoped per (user, persona). The sidebar lists recent sessions; the most
+ * recent one auto-loads on mount when its provider matches the active
+ * AI provider (sessions are provider-locked — no cross-provider resume).
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react'
@@ -16,9 +17,52 @@ import api from '../api/client'
 // Dracula purple
 const PURPLE = '#BD93F9'
 
+const PROVIDER_LOCK_NOTICE =
+  'This session was started under a different AI provider. Start a new chat to continue.'
+
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
+
+function SessionSidebar({ sessions, activeId, onSelect, onNew, onDelete }) {
+  return (
+    <div style={styles.sidebar} className="chat-sidebar">
+      <button style={styles.newChatBtn} onClick={onNew}>
+        + New
+      </button>
+      <div style={styles.sessionList}>
+        {sessions.length === 0 && (
+          <p style={styles.sidebarEmpty}>No previous chats</p>
+        )}
+        {sessions.map(s => (
+          <div
+            key={s.id}
+            style={{
+              ...styles.sessionRow,
+              ...(s.id === activeId ? styles.sessionRowActive : {}),
+            }}
+          >
+            <button
+              style={styles.sessionTitleBtn}
+              onClick={() => onSelect(s.id)}
+              title={s.title || 'New chat'}
+            >
+              {s.title || 'New chat'}
+            </button>
+            <button
+              style={styles.sessionDeleteBtn}
+              onClick={() => onDelete(s.id)}
+              title="Delete chat"
+              aria-label={`Delete chat: ${s.title || 'New chat'}`}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 function PersonaBadge({ persona }) {
   if (!persona) return null
@@ -99,6 +143,13 @@ export default function Chat() {
   const [activeTools, setActiveTools] = useState([])   // tool names currently executing
   const [error, setError]             = useState(null)
 
+  // Session persistence (BACKLOG-016)
+  const [sessions, setSessions]           = useState([])    // sidebar list {id, title, provider, updated_at}
+  const [sessionId, setSessionId]         = useState(null)  // null = unsaved / new chat
+  const [providerLocked, setProviderLocked] = useState(false) // active session is cross-provider (read-only)
+  const providerRef = useRef(null)          // active AI_PROVIDER, from the list endpoint
+  const sessionIdRef = useRef(null)         // mirrors sessionId for the streaming closure
+
   const bottomRef  = useRef(null)
   const abortRef   = useRef(null)   // AbortController for the active fetch
 
@@ -114,11 +165,85 @@ export default function Chat() {
   }, [messages, activeTools])
 
   // ---------------------------------------------------------------------------
+  // Session handlers (BACKLOG-016)
+  // ---------------------------------------------------------------------------
+
+  const loadSession = useCallback(async (id) => {
+    try {
+      const { data } = await api.get(`/chat/sessions/${id}`)
+      // v1 render policy: only user/assistant rows are displayed; tool rows
+      // stay in the DB and are replayed to the provider server-side.
+      setMessages(
+        data.messages
+          .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content !== '')
+          .map(m => ({ role: m.role, content: m.content })),
+      )
+      setSessionId(id)
+      sessionIdRef.current = id
+      const locked = providerRef.current !== null && data.provider !== providerRef.current
+      setProviderLocked(locked)
+      setError(locked ? PROVIDER_LOCK_NOTICE : null)
+    } catch {
+      setError('Could not load that chat session.')
+    }
+  }, [])
+
+  const loadSessions = useCallback(async ({ autoLoad = false } = {}) => {
+    try {
+      const { data } = await api.get('/chat/sessions')
+      providerRef.current = data.provider
+      setSessions(data.sessions)
+      if (autoLoad && data.sessions.length > 0) {
+        const mostRecent = data.sessions[0]
+        if (mostRecent.provider === data.provider) {
+          await loadSession(mostRecent.id)
+        } else {
+          // Provider-lock: force a fresh chat with the notice.
+          setProviderLocked(false)
+          setError(PROVIDER_LOCK_NOTICE)
+        }
+      }
+    } catch {
+      /* sidebar load failure is non-fatal — chat still works unsaved */
+    }
+  }, [loadSession])
+
+  // On mount: load the session list and auto-resume the most recent session.
+  useEffect(() => {
+    loadSessions({ autoLoad: true })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handleNewSession() {
+    if (streaming) handleStop()
+    setMessages([])
+    setSessionId(null)
+    sessionIdRef.current = null
+    setProviderLocked(false)
+    setError(null)
+  }
+
+  function handleSelectSession(id) {
+    if (id === sessionId) return
+    if (streaming) handleStop()
+    loadSession(id)
+  }
+
+  async function handleDeleteSession(id) {
+    try {
+      await api.delete(`/chat/sessions/${id}`)
+      setSessions(prev => prev.filter(s => s.id !== id))
+      if (id === sessionId) handleNewSession()
+    } catch {
+      setError('Could not delete that chat session.')
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Send a message
   // ---------------------------------------------------------------------------
   const sendMessage = useCallback(async () => {
     const text = input.trim()
-    if (!text || streaming || !persona) return
+    if (!text || streaming || !persona || providerLocked) return
 
     setError(null)
     setInput('')
@@ -144,8 +269,11 @@ export default function Chat() {
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          // Send full history (minus the blank placeholder we just added)
+          // Send full history (minus the blank placeholder we just added).
+          // With a session_id the server ignores everything but the trailing
+          // user turn and replays history from the DB.
           messages: nextMessages,
+          session_id: sessionIdRef.current,
         }),
         signal: ctrl.signal,
       })
@@ -190,6 +318,26 @@ export default function Chat() {
           if (!dataLine) continue
 
           switch (eventType) {
+            case 'session': {
+              // Server created a session for this conversation — adopt its id
+              // and surface it in the sidebar immediately.
+              try {
+                const payload = JSON.parse(dataLine)
+                setSessionId(payload.session_id)
+                sessionIdRef.current = payload.session_id
+                setSessions(prev => [
+                  {
+                    id: payload.session_id,
+                    title: text.length > 60 ? `${text.slice(0, 60)}…` : text,
+                    provider: providerRef.current,
+                    updated_at: new Date().toISOString(),
+                  },
+                  ...prev,
+                ])
+              } catch { /* ignore parse errors */ }
+              break
+            }
+
             case 'delta':
               // Append text to the last assistant message
               setMessages(prev => {
@@ -251,8 +399,10 @@ export default function Chat() {
       setStreaming(false)
       setActiveTools([])
       abortRef.current = null
+      // Sync the sidebar (server-derived titles, updated_at ordering).
+      loadSessions()
     }
-  }, [input, messages, streaming, persona])
+  }, [input, messages, streaming, persona, providerLocked, loadSessions])
 
   // Allow Ctrl+Enter or Enter (without Shift) to send
   function handleKeyDown(e) {
@@ -266,119 +416,125 @@ export default function Chat() {
     abortRef.current?.abort()
   }
 
-  function handleClear() {
-    if (streaming) handleStop()
-    setMessages([])
-    setError(null)
-  }
-
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
 
   const noPersona = !persona
+  const inputDisabled = noPersona || providerLocked
 
   return (
-    <div style={styles.page}>
-      {/* ── Header ── */}
-      <div style={styles.header}>
-        <div style={styles.headerLeft}>
-          <h1 style={styles.title}>Chat</h1>
-          <div style={styles.badges}>
-            {noPersona
-              ? <span style={styles.noBadge}>No persona assigned</span>
+    <div style={styles.wrapper}>
+      {/* Collapse the session sidebar on narrow screens (inline styles can't
+          express media queries; Layout.jsx uses the same pattern). */}
+      <style>{`@media (max-width: 900px) { .chat-sidebar { display: none !important } }`}</style>
+
+      {/* ── Session sidebar ── */}
+      <SessionSidebar
+        sessions={sessions}
+        activeId={sessionId}
+        onSelect={handleSelectSession}
+        onNew={handleNewSession}
+        onDelete={handleDeleteSession}
+      />
+
+      {/* ── Chat panel ── */}
+      <div style={styles.page}>
+        {/* ── Header ── */}
+        <div style={styles.header}>
+          <div style={styles.headerLeft}>
+            <h1 style={styles.title}>Chat</h1>
+            <div style={styles.badges}>
+              {noPersona
+                ? <span style={styles.noBadge}>No persona assigned</span>
+                : (
+                  <>
+                    <PersonaBadge persona={persona} />
+                    <WriteAccessBadge canModify={persona?.can_modify_data} />
+                  </>
+                )
+              }
+            </div>
+          </div>
+        </div>
+
+        {/* ── Disabled notice ── */}
+        {noPersona && (
+          <div style={styles.disabledNotice}>
+            No persona has been assigned to your account. Ask an owner to assign one in Settings before using the AI chat.
+          </div>
+        )}
+
+        {/* ── Message list ── */}
+        <div style={styles.messageList}>
+          {messages.length === 0 && !noPersona && (
+            <p style={styles.emptyHint}>
+              Ask anything about your finances — transactions, budgets, accounts, or debt.
+            </p>
+          )}
+
+          {messages.map((msg, idx) => (
+            <MessageBubble key={idx} message={msg} />
+          ))}
+
+          {/* Active tool call indicators */}
+          {activeTools.map((name, idx) => (
+            <ToolCallIndicator key={`tool-${idx}`} toolName={name} />
+          ))}
+
+          {/* Error banner */}
+          {error && (
+            <div style={styles.errorBanner}>
+              {error}
+            </div>
+          )}
+
+          <div ref={bottomRef} />
+        </div>
+
+        {/* ── Input area ── */}
+        <div style={styles.inputArea}>
+          <textarea
+            style={{
+              ...styles.textarea,
+              opacity: inputDisabled ? 0.45 : 1,
+            }}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              noPersona
+                ? 'Assign a persona first…'
+                : providerLocked
+                  ? 'Start a new chat to continue…'
+                  : 'Ask about your finances… (Enter to send, Shift+Enter for new line)'
+            }
+            disabled={inputDisabled || streaming}
+            rows={3}
+          />
+          <div style={styles.inputRow}>
+            <span style={styles.hint}>Enter to send · Shift+Enter for new line</span>
+            {streaming
+              ? (
+                <button style={styles.stopBtn} onClick={handleStop}>
+                  Stop
+                </button>
+              )
               : (
-                <>
-                  <PersonaBadge persona={persona} />
-                  <WriteAccessBadge canModify={persona?.can_modify_data} />
-                </>
+                <button
+                  style={{
+                    ...styles.sendBtn,
+                    opacity: inputDisabled || !input.trim() ? 0.45 : 1,
+                    cursor: inputDisabled || !input.trim() ? 'not-allowed' : 'pointer',
+                  }}
+                  onClick={sendMessage}
+                  disabled={inputDisabled || !input.trim()}
+                >
+                  Send
+                </button>
               )
             }
           </div>
-        </div>
-        <button
-          style={styles.clearBtn}
-          onClick={handleClear}
-          title="Clear conversation"
-        >
-          Clear
-        </button>
-      </div>
-
-      {/* ── Disabled notice ── */}
-      {noPersona && (
-        <div style={styles.disabledNotice}>
-          No persona has been assigned to your account. Ask an owner to assign one in Settings before using the AI chat.
-        </div>
-      )}
-
-      {/* ── Message list ── */}
-      <div style={styles.messageList}>
-        {messages.length === 0 && !noPersona && (
-          <p style={styles.emptyHint}>
-            Ask anything about your finances — transactions, budgets, accounts, or debt.
-          </p>
-        )}
-
-        {messages.map((msg, idx) => (
-          <MessageBubble key={idx} message={msg} />
-        ))}
-
-        {/* Active tool call indicators */}
-        {activeTools.map((name, idx) => (
-          <ToolCallIndicator key={`tool-${idx}`} toolName={name} />
-        ))}
-
-        {/* Error banner */}
-        {error && (
-          <div style={styles.errorBanner}>
-            {error}
-          </div>
-        )}
-
-        <div ref={bottomRef} />
-      </div>
-
-      {/* ── Input area ── */}
-      <div style={styles.inputArea}>
-        <textarea
-          style={{
-            ...styles.textarea,
-            opacity: noPersona ? 0.45 : 1,
-          }}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            noPersona
-              ? 'Assign a persona first…'
-              : 'Ask about your finances… (Enter to send, Shift+Enter for new line)'
-          }
-          disabled={noPersona || streaming}
-          rows={3}
-        />
-        <div style={styles.inputRow}>
-          <span style={styles.hint}>Enter to send · Shift+Enter for new line</span>
-          {streaming
-            ? (
-              <button style={styles.stopBtn} onClick={handleStop}>
-                Stop
-              </button>
-            )
-            : (
-              <button
-                style={{
-                  ...styles.sendBtn,
-                  opacity: noPersona || !input.trim() ? 0.45 : 1,
-                  cursor: noPersona || !input.trim() ? 'not-allowed' : 'pointer',
-                }}
-                onClick={sendMessage}
-                disabled={noPersona || !input.trim()}
-              >
-                Send
-              </button>
-            )
-          }
         </div>
       </div>
     </div>
@@ -390,10 +546,90 @@ export default function Chat() {
 // ---------------------------------------------------------------------------
 
 const styles = {
+  // Two-column shell: 260px session sidebar + chat panel (BACKLOG-016).
+  wrapper: {
+    display: 'flex',
+    height: '100%',
+    gap: 20,
+  },
+
+  // ── Session sidebar ───────────────────────────────────────────────────────
+  sidebar: {
+    width: 260,
+    flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+    borderRight: '1px solid var(--border)',
+    paddingRight: 14,
+    overflow: 'hidden',
+  },
+  newChatBtn: {
+    background: `${PURPLE}22`,
+    color: PURPLE,
+    border: `1px solid ${PURPLE}55`,
+    borderRadius: 'var(--radius)',
+    fontSize: 13,
+    fontWeight: 600,
+    padding: '8px 12px',
+    cursor: 'pointer',
+    textAlign: 'left',
+    flexShrink: 0,
+  },
+  sessionList: {
+    flex: 1,
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+  },
+  sidebarEmpty: {
+    color: 'var(--text-muted)',
+    fontSize: 13,
+    margin: '8px 4px',
+  },
+  sessionRow: {
+    display: 'flex',
+    alignItems: 'center',
+    borderRadius: 'var(--radius)',
+    border: '1px solid transparent',
+  },
+  sessionRowActive: {
+    background: `${PURPLE}18`,
+    border: `1px solid ${PURPLE}44`,
+  },
+  sessionTitleBtn: {
+    flex: 1,
+    minWidth: 0,
+    background: 'none',
+    border: 'none',
+    color: 'var(--text)',
+    fontSize: 13,
+    textAlign: 'left',
+    padding: '7px 8px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  sessionDeleteBtn: {
+    background: 'none',
+    border: 'none',
+    color: 'var(--text-muted)',
+    fontSize: 15,
+    lineHeight: 1,
+    padding: '6px 8px',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+
+  // ── Chat panel ────────────────────────────────────────────────────────────
   page: {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
+    flex: 1,
+    minWidth: 0,
     maxWidth: 820,
     margin: '0 auto',
     gap: 0,
@@ -457,17 +693,6 @@ const styles = {
     fontWeight: 600,
     padding: '2px 8px',
   },
-  clearBtn: {
-    background: 'none',
-    border: '1px solid var(--border)',
-    color: 'var(--text-muted)',
-    fontSize: 13,
-    padding: '5px 12px',
-    borderRadius: 'var(--radius)',
-    cursor: 'pointer',
-    flexShrink: 0,
-  },
-
   // ── Disabled notice ───────────────────────────────────────────────────────
   disabledNotice: {
     background: 'rgba(255,255,255,0.04)',
