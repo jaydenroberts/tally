@@ -13,18 +13,22 @@ Data access is scoped by the current user's persona:
 Write tools (update_transaction, add_transaction, add_savings_contribution,
 add_debt_payment) are only included when persona.can_modify_data is True.
 
-TODO: Chat history is ephemeral — each request is stateless. Revisit for
-      persistent SQLite storage in a future phase so conversations survive
-      page reloads and are scoped per user/persona.
+Chat history is persistent (BACKLOG-016, v1.4.4): every POST /api/chat runs
+against a chat_sessions row (created implicitly when session_id is omitted) and
+streams while persisting user/assistant/tool_call/tool_result rows per turn.
+Resumed sessions replay history from the database — the client's `messages`
+array beyond the trailing user turn is ignored.
 """
 
 from __future__ import annotations
 
+import asyncio
 import calendar
 import json
 import math
 import os
 import re
+import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -37,7 +41,8 @@ from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
 from .. import models, schemas
 from ..auth import get_current_user
-from ..providers import stream_chat, AI_PROVIDER
+from ..providers import stream_chat, AI_PROVIDER, AI_BASE_URL
+from .chat_sessions import get_owned_session
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -52,7 +57,12 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    # max_length stays at 50 — existing stateless clients still send full
+    # history. When session_id is present the server ignores everything except
+    # the trailing user turn (history is replayed from the DB), so no
+    # structural cap change is needed.
     messages: list[ChatMessage] = Field(max_length=50)
+    session_id: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -855,6 +865,363 @@ def _build_system_prompt(
 
 
 # ---------------------------------------------------------------------------
+# Session persistence helpers (BACKLOG-016)
+# ---------------------------------------------------------------------------
+
+# Per-row storage cap — mirrors ChatMessage.content (request schema) max_length.
+MESSAGE_CONTENT_CAP = 4000
+
+# Literal terminal-row content for interrupted streams. Never replaced with
+# exception text, model names, provider URLs, or request/response bodies —
+# the real error is logged server-side under a UUID correlation ID only.
+STREAM_INTERRUPTED = "[stream interrupted]"
+
+PROVIDER_MISMATCH_DETAIL = (
+    "This session was started under a different AI provider. "
+    "Start a new chat to continue."
+)
+
+CONVERSATION_MISMATCH_DETAIL = (
+    "Conversation is out of sync with the server. "
+    "Reload the session and try again."
+)
+
+# Directive synthetic tool_result content for orphaned tool_call rows
+# (interrupted before their result was recorded). The directive wording is
+# load-bearing: write-capable tools must not be auto-retried on resume.
+ORPHAN_TOOL_NOTICE = (
+    "Previous tool execution was interrupted before completing. "
+    "Do not retry automatically — acknowledge the interruption to the user "
+    "and ask whether to retry."
+)
+
+
+def _cap_content(text: str) -> str:
+    """Enforce the per-row content cap (4000 chars) on stored messages."""
+    return text[:MESSAGE_CONTENT_CAP]
+
+
+def _persist_row(
+    db: Session,
+    session_id: int,
+    role: str,
+    content: str,
+    tool_use_id: str | None = None,
+) -> None:
+    """Insert one chat_messages row and commit (streaming-safe write unit)."""
+    db.add(models.ChatMessage(
+        session_id=session_id,
+        role=role,
+        content=_cap_content(content),
+        tool_use_id=tool_use_id,
+    ))
+    db.commit()
+
+
+def _history_turn_limit(provider: str | None = None, base_url: str | None = None) -> int:
+    """
+    Provider-aware replay window: how many of the most recent user turns are
+    replayed to the model on resume (tool rounds ride along uncounted).
+    CHAT_HISTORY_TURNS overrides; defaults are a context-budget concern only —
+    full history always stays in the DB.
+    """
+    raw = os.getenv("CHAT_HISTORY_TURNS", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    provider = AI_PROVIDER if provider is None else provider
+    base_url = AI_BASE_URL if base_url is None else base_url
+    if provider == "ollama" or base_url:
+        # Local / OpenAI-compatible endpoints assume smaller context windows.
+        return 10
+    if provider in ("anthropic", "claude", "openai"):
+        return 30
+    return 20  # unknown provider — conservative
+
+
+def _load_history_rows(
+    db: Session,
+    session: models.ChatSession,
+    turn_limit: int,
+) -> list[models.ChatMessage]:
+    """
+    Load the session's rows ordered by id ASC (the ordering key), truncated to
+    the most recent `turn_limit` user turns. The cutoff lands on a user row, so
+    the replayed window always starts with a user message and never splits a
+    tool round.
+    """
+    rows = (
+        db.query(models.ChatMessage)
+        .filter(models.ChatMessage.session_id == session.id)
+        .order_by(models.ChatMessage.id.asc())
+        .all()
+    )
+    user_ids = [r.id for r in rows if r.role == "user"]
+    if len(user_ids) > turn_limit:
+        cutoff = user_ids[-turn_limit]
+        rows = [r for r in rows if r.id >= cutoff]
+    return rows
+
+
+def _build_replay_messages(
+    rows: list[models.ChatMessage],
+    provider: str,
+) -> list[dict]:
+    """
+    Reconstruct provider-format messages from stored rows.
+
+    Row layout per tool round (insert order): tool_call*, tool_result*, then
+    one assistant row closing the round. A plain assistant row (no pending
+    tool_call rows) is a text-only reply.
+
+    Orphan-tool reconciliation: any tool_call whose tool_use_id has no matching
+    tool_result before the round's closing assistant/user row gets a synthetic,
+    directive `is_error` tool_result — in-memory only, never written to the DB.
+
+    The format forks on the SESSION'S stored provider (Anthropic content
+    blocks vs OpenAI role:"tool" replay), not the active AI_PROVIDER — although
+    the provider lock guarantees they match in v1.
+
+    Replay is render-only: no tool is ever executed here.
+    """
+    import logging
+    log = logging.getLogger("tally.chat")
+
+    if provider in ("openai", "ollama"):
+        return _build_replay_openai(rows, log)
+    return _build_replay_anthropic(rows, log)
+
+
+def _parse_tool_call_row(row: models.ChatMessage, log) -> dict | None:
+    """Parse a stored tool_call row; skip (with a warning) if unparseable."""
+    try:
+        data = json.loads(row.content)
+        if not isinstance(data, dict) or not data.get("id") or not data.get("name"):
+            raise ValueError("missing id/name")
+        return data
+    except (json.JSONDecodeError, ValueError):
+        log.warning("Skipping unparseable tool_call row id=%d on replay", row.id)
+        return None
+
+
+def _build_replay_anthropic(rows: list[models.ChatMessage], log) -> list[dict]:
+    out: list[dict] = []
+    pending_calls: list[dict] = []
+    pending_results: dict[str, str] = {}
+    # tool_result blocks awaiting the next user turn (Anthropic requires every
+    # tool_use to be answered in the NEXT user message; roles must alternate).
+    carry_results: list[dict] = []
+
+    def emit_carry():
+        if carry_results:
+            out.append({"role": "user", "content": list(carry_results)})
+            carry_results.clear()
+
+    def flush_round(text: str):
+        """Close a tool round: assistant(text + tool_use) then buffer results."""
+        if not pending_calls:
+            return
+        content: list[dict] = []
+        if text:
+            content.append({"type": "text", "text": text})
+        for tc in pending_calls:
+            content.append({
+                "type": "tool_use",
+                "id": tc["id"],
+                "name": tc["name"],
+                "input": tc.get("input", {}),
+            })
+        out.append({"role": "assistant", "content": content})
+        for tc in pending_calls:
+            if tc["id"] in pending_results:
+                carry_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc["id"],
+                    "content": pending_results[tc["id"]],
+                })
+            else:
+                # Orphan — synthetic directive result (in-memory only).
+                carry_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc["id"],
+                    "is_error": True,
+                    "content": ORPHAN_TOOL_NOTICE,
+                })
+        pending_calls.clear()
+        pending_results.clear()
+
+    for row in rows:
+        if row.role == "tool_call":
+            parsed = _parse_tool_call_row(row, log)
+            if parsed:
+                pending_calls.append(parsed)
+        elif row.role == "tool_result":
+            if row.tool_use_id:
+                pending_results[row.tool_use_id] = row.content
+        elif row.role == "assistant":
+            if pending_calls:
+                emit_carry()
+                flush_round(row.content)
+            else:
+                emit_carry()
+                if row.content:
+                    out.append({"role": "assistant", "content": row.content})
+        elif row.role == "user":
+            # A user row after an unclosed round means the stream died before
+            # the terminal assistant row could be written — close it now.
+            flush_round("")
+            if carry_results:
+                # Merge pending tool_results into this user turn (alternation).
+                content = list(carry_results)
+                carry_results.clear()
+                content.append({"type": "text", "text": row.content})
+                out.append({"role": "user", "content": content})
+            else:
+                out.append({"role": "user", "content": row.content})
+
+    # Trailing unclosed round (should not normally survive past the last user
+    # row, but be defensive): close and flush.
+    flush_round("")
+    emit_carry()
+    return out
+
+
+def _build_replay_openai(rows: list[models.ChatMessage], log) -> list[dict]:
+    out: list[dict] = []
+    pending_calls: list[dict] = []
+    pending_results: dict[str, str] = {}
+
+    def flush_round(text: str):
+        if not pending_calls:
+            return
+        out.append({
+            "role": "assistant",
+            "content": text or None,
+            "tool_calls": [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(tc.get("input", {})),
+                    },
+                }
+                for tc in pending_calls
+            ],
+        })
+        for tc in pending_calls:
+            if tc["id"] in pending_results:
+                content = pending_results[tc["id"]]
+            else:
+                # Orphan — synthetic directive result (in-memory only).
+                content = json.dumps({"is_error": True, "content": ORPHAN_TOOL_NOTICE})
+            out.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
+        pending_calls.clear()
+        pending_results.clear()
+
+    for row in rows:
+        if row.role == "tool_call":
+            parsed = _parse_tool_call_row(row, log)
+            if parsed:
+                pending_calls.append(parsed)
+        elif row.role == "tool_result":
+            if row.tool_use_id:
+                pending_results[row.tool_use_id] = row.content
+        elif row.role == "assistant":
+            if pending_calls:
+                flush_round(row.content)
+            elif row.content:
+                out.append({"role": "assistant", "content": row.content})
+        elif row.role == "user":
+            flush_round("")
+            out.append({"role": "user", "content": row.content})
+
+    flush_round("")
+    return out
+
+
+def _truncate_on_whitespace(text: str, limit: int) -> str:
+    """Truncate to at most `limit` chars, cutting on a whitespace boundary."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip()
+
+
+def _finalize_session(db: Session, session_id: int) -> None:
+    """
+    On stream end: bump updated_at and set the title if still NULL.
+    Title v1: first user message truncated to 60 chars on a whitespace
+    boundary; if that message is ≤3 words, append the first 40 chars of the
+    assistant's first non-empty text reply (deterministic, no model call).
+    """
+    session = db.query(models.ChatSession).filter(
+        models.ChatSession.id == session_id
+    ).first()
+    if session is None:
+        return
+    session.updated_at = datetime.utcnow()
+    if not session.title:
+        first_user = (
+            db.query(models.ChatMessage)
+            .filter(
+                models.ChatMessage.session_id == session_id,
+                models.ChatMessage.role == "user",
+            )
+            .order_by(models.ChatMessage.id.asc())
+            .first()
+        )
+        if first_user is not None and first_user.content.strip():
+            title = _truncate_on_whitespace(first_user.content, 60)
+            if len(first_user.content.split()) <= 3:
+                first_assistant = (
+                    db.query(models.ChatMessage)
+                    .filter(
+                        models.ChatMessage.session_id == session_id,
+                        models.ChatMessage.role == "assistant",
+                        models.ChatMessage.content != "",
+                        models.ChatMessage.content != STREAM_INTERRUPTED,
+                    )
+                    .order_by(models.ChatMessage.id.asc())
+                    .first()
+                )
+                if first_assistant is not None:
+                    title = f"{title} — {_truncate_on_whitespace(first_assistant.content, 40)}"
+            session.title = title[:200]
+    db.commit()
+
+
+def _persist_interrupted(db: Session, session_id: int) -> None:
+    """
+    Record the truthful partial state after a mid-stream failure or client
+    disconnect: keep committed rows, add one terminal assistant row with the
+    literal redacted marker, and bump updated_at. Never raises.
+    """
+    try:
+        db.rollback()  # clear any half-flushed state from the failure point
+        db.add(models.ChatMessage(
+            session_id=session_id,
+            role="assistant",
+            content=STREAM_INTERRUPTED,
+        ))
+        session = db.query(models.ChatSession).filter(
+            models.ChatSession.id == session_id
+        ).first()
+        if session is not None:
+            session.updated_at = datetime.utcnow()
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+# ---------------------------------------------------------------------------
 # SSE helpers
 # ---------------------------------------------------------------------------
 
@@ -894,15 +1261,19 @@ async def chat(
     Stream an AI response to a conversation.
 
     The response is an SSE stream. Event types:
+        session    — emitted first when a session was implicitly created
+                     (data: JSON {"session_id": <int>})
         delta      — text fragment (data: raw text)
         tool_call  — tool being invoked (data: JSON {name, input})
         tool_result — tool result injected into conversation (data: JSON)
         done       — stream complete (data: "[DONE]")
-        error      — fatal error (data: message string)
+        error      — fatal error (data: redacted message + correlation ID)
 
     The client is responsible for accumulating delta events into the full
-    assistant message. Each request is stateless — the full conversation
-    history must be sent on every call.
+    assistant message. With `session_id` set, history is replayed server-side
+    from the session and only the trailing user turn of `messages` is used;
+    without it a new session is created and the client-provided history is
+    used as-is for generation (but only the trailing user turn is persisted).
     """
     # ── Persona check ─────────────────────────────────────────────────────────
     persona = current_user.persona
@@ -911,6 +1282,52 @@ async def chat(
             status_code=400,
             detail="No persona assigned to this user. Assign a persona in Settings before using the chat.",
         )
+
+    # ── Session resolution (BACKLOG-016) ──────────────────────────────────────
+    # Validate the trailing user turn before creating anything so a bad payload
+    # never leaves an empty orphan session behind.
+    if not payload.messages or payload.messages[-1].role != "user":
+        raise HTTPException(status_code=409, detail=CONVERSATION_MISMATCH_DETAIL)
+    user_text = payload.messages[-1].content
+
+    new_session = False
+    if payload.session_id is not None:
+        # Cross-cutting 404 invariant: single filtered query on
+        # (id, user_id, persona_id) — identical body/timing to the
+        # chat_sessions router. Also enforces persona immutability.
+        session = get_owned_session(payload.session_id, db, current_user)
+        # Provider lock: tool_use ids are provider-opaque; never silently strip
+        # tool rows and resume as text (context drift). Refuse instead.
+        if session.provider != AI_PROVIDER:
+            raise HTTPException(status_code=409, detail=PROVIDER_MISMATCH_DETAIL)
+    else:
+        session = models.ChatSession(
+            user_id=current_user.id,
+            persona_id=current_user.persona_id,
+            provider=AI_PROVIDER,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        new_session = True
+    session_row_id = session.id
+
+    # Tail-match idempotency: if the trailing DB row is already this exact user
+    # message (a retry after an interrupted stream), don't insert a duplicate —
+    # resume with the existing row. Tool and assistant rows are not compared.
+    tail = (
+        db.query(models.ChatMessage)
+        .filter(models.ChatMessage.session_id == session_row_id)
+        .order_by(models.ChatMessage.id.desc())
+        .first()
+    )
+    is_retry = (
+        tail is not None
+        and tail.role == "user"
+        and tail.content == _cap_content(user_text)
+    )
+    if not is_retry:
+        _persist_row(db, session_row_id, "user", user_text)
 
     # Enforce family persona access constraints (belt-and-braces; persona model
     # fields are the authoritative source — not the name).
@@ -945,8 +1362,19 @@ async def chat(
     # If multi-tenant user isolation is ever needed, scope must be enforced here.
     system_prompt = _build_system_prompt(persona, window_start, db, current_user)
 
-    # Convert request messages to provider format
-    messages = [{"role": m.role, "content": m.content} for m in payload.messages]
+    # Build the generation history.
+    if payload.session_id is not None:
+        # Resumed session: replay from the DB (client history beyond the
+        # trailing user turn is ignored). The replay reads rows under
+        # session.persona_id via the session row itself — belt-and-braces
+        # against any future path that bypasses the persona-immutability
+        # invariant — and forks format on the session's STORED provider.
+        rows = _load_history_rows(db, session, _history_turn_limit())
+        messages = _build_replay_messages(rows, session.provider)
+    else:
+        # New session: use the client-provided history as-is (legacy stateless
+        # shape). Only the trailing user turn was persisted above.
+        messages = [{"role": m.role, "content": m.content} for m in payload.messages]
 
     async def event_stream():
         # We may need to run multiple rounds if the model uses tools.
@@ -966,6 +1394,11 @@ async def chat(
         tool_call_counts: dict[str, int] = {}  # per-tool call counter (F-CHAT-07)
 
         try:
+            # BACKLOG-016: announce the implicitly created session before any
+            # other event so the client can adopt its id immediately.
+            if new_session:
+                yield _sse("session", json.dumps({"session_id": session_row_id}))
+
             for _round in range(MAX_TOOL_ROUNDS + 1):
                 # AUDIT-18: the final iteration strips tools so the model can only produce
                 # a text summary of the work already done — no new tool calls.
@@ -984,6 +1417,12 @@ async def chat(
                         # Tool call sentinel
                         tool_data = json.loads(chunk[len(SENTINEL):])
                         tool_calls_this_round.append(tool_data)
+                        # Persist the tool call as parsed (BACKLOG-016).
+                        _persist_row(
+                            db, session_row_id, "tool_call",
+                            json.dumps(tool_data),
+                            tool_use_id=tool_data.get("id"),
+                        )
                         yield _sse("tool_call", json.dumps({
                             "name": tool_data["name"],
                             "input": tool_data["input"],
@@ -994,10 +1433,14 @@ async def chat(
 
                 if final_round:
                     # Tools were stripped; whatever the model produced is the summary.
+                    if assistant_text:
+                        _persist_row(db, session_row_id, "assistant", assistant_text)
                     break
 
                 if not tool_calls_this_round:
                     # No tool calls — conversation turn complete
+                    if assistant_text:
+                        _persist_row(db, session_row_id, "assistant", assistant_text)
                     break
 
                 # Append the assistant's turn and tool results to history, then loop.
@@ -1034,6 +1477,12 @@ async def chat(
                                 persona=persona,
                                 window_start=window_start,
                             )
+                        # Persist the result under the same tool_use_id (BACKLOG-016).
+                        _persist_row(
+                            db, session_row_id, "tool_result",
+                            json.dumps(result),
+                            tool_use_id=tc["id"],
+                        )
                         yield _sse("tool_result", json.dumps({"name": tc["name"]}))
                         tool_result_blocks.append({
                             "type": "tool_result",
@@ -1076,20 +1525,47 @@ async def chat(
                                 persona=persona,
                                 window_start=window_start,
                             )
+                        # Persist the result under the same tool_use_id (BACKLOG-016).
+                        _persist_row(
+                            db, session_row_id, "tool_result",
+                            json.dumps(result),
+                            tool_use_id=tc["id"],
+                        )
                         yield _sse("tool_result", json.dumps({"name": tc["name"]}))
                         current_messages.append({
                             "role": "tool",
                             "tool_call_id": tc["id"],
                             "content": json.dumps(result),
                         })
+
+                # Close the tool round in storage: one assistant row with the
+                # round's accumulated text (may be empty — it still delimits
+                # the round for replay reconstruction).
+                _persist_row(db, session_row_id, "assistant", assistant_text)
+
+            # Stream completed normally: bump updated_at, set title if unset.
+            _finalize_session(db, session_row_id)
+        except (GeneratorExit, asyncio.CancelledError):
+            # Client disconnected mid-stream. Committed rows are the truthful
+            # partial state — close the round with the terminal marker row.
+            _persist_interrupted(db, session_row_id)
+            raise
         except Exception as exc:
             # AUDIT-13: log the real cause server-side; return only a generic,
             # provider-agnostic message so no provider/model/internal detail leaks.
-            _stream_log.exception("Chat stream failed mid-response: %s", type(exc).__name__)
+            # BACKLOG-016: a UUID correlation ID ties the SSE payload to the
+            # server log without exposing exception text, model names, or URLs.
+            correlation_id = str(uuid.uuid4())
+            _stream_log.exception(
+                "Chat stream failed mid-response [%s]: %s",
+                correlation_id, type(exc).__name__,
+            )
+            _persist_interrupted(db, session_row_id)
             yield _sse(
                 "error",
                 "The assistant hit an error and couldn't finish responding. "
-                "Your message was not saved — please try again.",
+                "Your message was saved — you can retry from this session. "
+                f"(ref: {correlation_id})",
             )
 
         yield _sse("done", "[DONE]")

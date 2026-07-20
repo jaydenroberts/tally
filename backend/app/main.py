@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from .database import engine, SessionLocal, Base
 from . import models
 from .auth import hash_password
-from .routers import auth, users, accounts, transactions, categories, budgets, savings, debt, imports, recurring, chat, dashboard
+from .routers import auth, users, accounts, transactions, categories, budgets, savings, debt, imports, recurring, chat, chat_sessions, dashboard
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +275,38 @@ def run_startup_migrations(db: Session) -> None:
             db.commit()
             log.info("[M-009] Added import_id column + partial index to transactions")
 
+    # [M-011] Chat session persistence (BACKLOG-016, v1.4.4).
+    # The chat_sessions / chat_messages tables are created by Base.metadata.create_all()
+    # in lifespan (before this runner). This migration only ensures the supporting
+    # indexes exist on databases upgraded from earlier versions, plus a defensive
+    # sanity check that create_all actually saw the new models (a missed model
+    # import in models.py would silently no-op table creation).
+    # NOTE: the BACKLOG-016 spec labels this "M-009"; renumbered to M-011 because
+    # M-009/M-009b/M-010 were consumed by v1.4.0/v1.4.2.
+    try:
+        db.execute(text("SELECT 1 FROM chat_sessions LIMIT 0"))
+        db.execute(text("SELECT 1 FROM chat_messages LIMIT 0"))
+    except Exception:
+        db.rollback()
+        log.warning(
+            "[M-011] chat_sessions/chat_messages tables missing after create_all — "
+            "chat persistence will not work. Check model imports in models.py."
+        )
+    else:
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_chat_sessions_user_persona_updated "
+            "ON chat_sessions(user_id, persona_id, updated_at DESC)"
+        ))
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_chat_messages_session_id "
+            "ON chat_messages(session_id, id)"
+        ))
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_chat_messages_tool_use_id "
+            "ON chat_messages(tool_use_id)"
+        ))
+        db.commit()
+
     # [M-009b] Auto-cancel expired import drafts (runs every boot — no scheduler needed for homelab).
     result = db.execute(text(
         "UPDATE import_drafts SET status = 'cancelled' "
@@ -515,6 +547,7 @@ app.include_router(savings.router)
 app.include_router(debt.router)
 app.include_router(imports.router, prefix="/api")
 app.include_router(recurring.router)
+app.include_router(chat_sessions.router)
 app.include_router(chat.router)
 app.include_router(dashboard.router)
 

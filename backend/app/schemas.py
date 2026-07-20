@@ -870,3 +870,46 @@ class ImportHistoryItem(BaseModel):
 class ImportHistoryResponse(BaseModel):
     items: list[ImportHistoryItem]
     total: int
+
+
+# ---------------------------------------------------------------------------
+# Chat Sessions  (persistent chat history — BACKLOG-016, v1.4.4)
+# ---------------------------------------------------------------------------
+
+ChatRole = Literal["user", "assistant", "tool_call", "tool_result"]
+
+
+class ChatSessionSummary(BaseModel):
+    """Sidebar list item — no message content."""
+    id: int
+    title: Optional[str] = None
+    provider: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ChatSessionListResponse(BaseModel):
+    sessions: list[ChatSessionSummary]
+    # The currently configured AI_PROVIDER — lets the client apply the
+    # provider-lock check (resume only when session.provider matches).
+    provider: str
+
+
+class ChatMessageResponse(BaseModel):
+    id: int
+    role: ChatRole
+    # Mirrors the per-row storage cap (4000 chars).
+    content: str
+    tool_use_id: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ChatSessionDetailResponse(ChatSessionSummary):
+    messages: list[ChatMessageResponse]
+    # True when older messages exist before the first one returned
+    # (fetch them with ?before_id=<first message id>).
+    has_more: bool = False
