@@ -1,7 +1,7 @@
 from datetime import datetime, date as date_type
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Float, ForeignKey,
-    Integer, JSON, Numeric, String, Text, UniqueConstraint,
+    Index, Integer, JSON, Numeric, String, Text, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -62,6 +62,82 @@ class PersonaMemoryFile(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     persona = relationship("Persona", back_populates="memory_files")
+
+
+# ---------------------------------------------------------------------------
+# Chat Sessions  (persistent chat history — BACKLOG-016, v1.4.4)
+# ---------------------------------------------------------------------------
+
+class ChatSession(Base):
+    """
+    A persisted chat conversation, scoped to (user, persona).
+
+    persona_id is immutable after creation — a session never follows a user
+    across persona switches (prevents cross-persona context bleed).
+    provider stamps AI_PROVIDER at creation; resume is refused if the active
+    provider differs (tool_use ids are provider-opaque — no cross-provider replay).
+    """
+    __tablename__ = "chat_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    persona_id = Column(Integer, ForeignKey("personas.id"), nullable=False)
+    title = Column(String(200), nullable=True)
+    provider = Column(String(20), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    # Reserved for v1.1 soft-delete/archive — unused in v1.
+    is_archived = Column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_chat_sessions_user_persona_updated",
+            "user_id", "persona_id", updated_at.desc(),
+        ),
+    )
+
+    user = relationship("User")
+    persona = relationship("Persona")
+    # ORM-level cascade (children deleted explicitly) — the FK's ON DELETE
+    # CASCADE remains as belt-and-braces for raw-SQL deletes. No passive_deletes:
+    # SQLite only honours the DB cascade with PRAGMA foreign_keys=ON, which the
+    # in-memory test engine does not set.
+    messages = relationship(
+        "ChatMessage",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.id",
+    )
+
+
+class ChatMessage(Base):
+    """
+    One row per chat turn fragment. `id` is the ordering key — SQLite rowids
+    are monotonic per table, so ordering by (session_id, id ASC) has no
+    MAX()+1 race window under streaming commits (no seq column by design).
+
+    role: "user" | "assistant" | "tool_call" | "tool_result"
+    content: text for user/assistant rows; JSON string for tool rows.
+    """
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(
+        Integer,
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role = Column(String(20), nullable=False)
+    # Mirrors the ChatRequest ChatMessage.content cap (4000 chars per row).
+    content = Column(Text, nullable=False, default="")
+    tool_use_id = Column(String(200), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_chat_messages_session_id", "session_id", "id"),
+    )
+
+    session = relationship("ChatSession", back_populates="messages")
 
 
 # ---------------------------------------------------------------------------
