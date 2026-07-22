@@ -4,6 +4,20 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.4.4.1] - 2026-07-21
+
+Security-patch hotfix — dependency version bumps that close known vulnerabilities in third-party libraries. No application behaviour changes.
+
+### Security
+
+- **Updated the multipart form parser** to a release that bounds the number of headers it will accept per part, closing a denial-of-service weakness where a crafted upload could exhaust server resources.
+- **Updated the JWT library** to a release with hardened algorithm handling, removing an algorithm-confusion risk on the authentication path.
+- **Updated the HTTP client** used by the web app to a release that closes a header-injection flaw and a request-routing weakness that could have been used to reach unintended destinations.
+- **Pinned an upper bound on the PDF text-extraction library** so imports always run against a known-good range rather than floating to an untested future release.
+- Updated the frontend build tool (development-only) to a release that closes local file-read issues in its development server.
+
+---
+
 ## [1.4.3] - 2026-07-11
 
 Import feature release — debt-payment reconciliation, smarter matching for reference-only statement lines, and scheduled recurring generation.
