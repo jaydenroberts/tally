@@ -9,8 +9,60 @@ on:
 permissions: {}
 
 jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read        # checkout
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Validate tag, version constant, and changelog
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "tag:      ${TAG}"
+          echo "version:  ${VERSION}"
+
+          FAIL=0
+
+          # Check 1: tag format vX.Y.Z or vX.Y.Z.N.
+          if printf '%s' "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+            echo "✓ tag '${TAG}' matches vX.Y.Z or vX.Y.Z.N"
+          else
+            echo "✗ tag '${TAG}' does not match vX.Y.Z or vX.Y.Z.N"
+            FAIL=1
+          fi
+
+          # Check 2: version constant in backend/app/main.py equals the released version.
+          if grep -qF "version=\"${VERSION}\"" backend/app/main.py; then
+            echo "✓ backend/app/main.py declares version=\"${VERSION}\""
+          else
+            echo "✗ backend/app/main.py does not contain version=\"${VERSION}\""
+            FAIL=1
+          fi
+
+          # Check 3: matching CHANGELOG entry.
+          ESCAPED="$(printf '%s' "${VERSION}" | sed 's/\./\\./g')"
+          if grep -qE "^## \[${ESCAPED}\]" CHANGELOG.md; then
+            echo "✓ CHANGELOG.md has an entry for '${VERSION}'"
+          else
+            echo "✗ CHANGELOG.md is missing a '## [${VERSION}]' entry"
+            FAIL=1
+          fi
+
+          if [ "${FAIL}" -ne 0 ]; then
+            echo "validate failed: release '${TAG}' is out of spec — refusing to build/push"
+            exit 1
+          fi
+          echo "validate passed: '${TAG}' is in spec"
+
   build-and-push:
     name: build-and-push
+    needs: validate
     runs-on: ubuntu-24.04
     permissions:
       contents: read        # checkout
