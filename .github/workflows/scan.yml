@@ -17,33 +17,45 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Personal-data scan (backstop)
+      - name: Set up scan patterns
+        id: patterns
+        uses: ./.github/actions/scan-patterns
+        with:
+          patterns-b64: ${{ secrets.SCAN_PATTERNS_B64 }}
+
+      # Two scans, because they answer different questions and a PR can fail
+      # either one independently.
+      #
+      # 1. DIFF — "is what this PR ADDS clean". Enumerates base..head and reads
+      #    each commit's post-image.
+      #
+      #    The enumeration now passes -c to diff-tree. Without it, diff-tree emits
+      #    NOTHING for a merge commit, so any merge in the range would have been
+      #    silently skipped. Measured on this repository: every branch to date has
+      #    zero merge commits, because the workflow squash-merges, so the old and
+      #    new commands examine identical bytes on every pull request there has
+      #    actually been. This closes a latent trap, not an active hole — it starts
+      #    mattering the first time someone merges main into a feature branch
+      #    instead of rebasing.
+      - name: Personal-data scan — diff (base..head)
         env:
-          SCAN_PATTERNS_B64: ${{ secrets.SCAN_PATTERNS_B64 }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PATTERN_DIR: ${{ steps.patterns.outputs.pattern-dir }}
         run: |
           set -euo pipefail
-          if [ -z "${SCAN_PATTERNS_B64:-}" ]; then
-            echo "::error::SCAN_PATTERNS_B64 is not set — cannot run the personal-data backstop." >&2
-            exit 2
-          fi
-          PATTERN_DIR="$RUNNER_TEMP/scan-patterns"
-          mkdir -p "$PATTERN_DIR" && chmod 700 "$PATTERN_DIR"
-          trap 'rm -rf "$PATTERN_DIR"' EXIT
-          printf '%s' "$SCAN_PATTERNS_B64" | base64 -d | tar -xz -C "$PATTERN_DIR"
-          shopt -s nullglob
-          pattern_files=("$PATTERN_DIR"/*.txt)
-          shopt -u nullglob
-          if [ "${#pattern_files[@]}" -eq 0 ]; then
-            echo "::error::Decoded SCAN_PATTERNS_B64 contains no pattern files (*.txt)." >&2
-            exit 2
-          fi
-          for pf in "${pattern_files[@]}"; do
-            while IFS= read -r line || [ -n "$line" ]; do
-              [ -n "$line" ] && echo "::add-mask::$line"
-            done < "$pf"
-          done
           printf '%s %s %s\n' "$BASE_SHA" "$HEAD_SHA" "refs/pull/$PR_NUMBER/merge" \
-            | PATTERN_DIR="$PATTERN_DIR" ci/scanner.sh --ci --prereceive
+            | ci/scanner.sh --ci --prereceive
+
+      # 2. TREE — "is the RESULT clean". A diff cannot see content that is present
+      #    but unchanged, so a PR that reintroduces a file from old history, or
+      #    one opened against a branch that was already dirty, passes the diff
+      #    scan while shipping a dirty tree. This step reads every blob in the
+      #    merged result.
+      - name: Personal-data scan — full tree of the merge result
+        env:
+          PATTERN_DIR: ${{ steps.patterns.outputs.pattern-dir }}
+        run: |
+          set -euo pipefail
+          ci/scanner.sh --ci --tree HEAD

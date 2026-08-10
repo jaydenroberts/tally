@@ -1,5 +1,5 @@
 """
-Regression tests for the v1.4.2 hardening fixes owned by MASON:
+Regression tests for the v1.4.2 hardening fixes owned by ENG:
   AUDIT-19  dashboard 12-month history real-month arithmetic
   AUDIT-20  recurring month-end anchor + reactivation fast-forward
   AUDIT-21  budget period pro-rating + threshold alignment

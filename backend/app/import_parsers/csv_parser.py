@@ -5,7 +5,7 @@ Moved verbatim from ``routers/imports.py:_validate_csv_content`` and renamed
 ``parse`` so that ``csv_parser`` and ``pdf_parser`` expose the same shape.
 Sub-module is deliberately named ``csv_parser`` (not ``csv``) so that the
 body can still call ``csv.reader`` from the stdlib without shadowing.
-LOCKED (MASON-1).
+LOCKED (ENG-1).
 """
 import csv
 import io
@@ -18,7 +18,7 @@ from .types import ParseResult
 def parse(raw_bytes: bytes, **_ignored) -> ParseResult:
     """Validate-by-result: bytes must decode as UTF-8 *and* parse as CSV with
     at least one data row. Raises 400 with ``kind: parse_error`` on failure.
-    Does NOT prove financial structure (BASTION-3 — same gate the legacy fn used).
+    Does NOT prove financial structure (SEC-3 — same gate the legacy fn used).
     """
     try:
         text_content = raw_bytes.decode("utf-8-sig")   # handle BOM

@@ -1,0 +1,54 @@
+name: Set up scan patterns
+description: >
+  Decode the personal-data pattern set into a private directory under RUNNER_TEMP
+  and register every pattern as a log mask. Fails closed when the secret is
+  missing, empty, or decodes to nothing usable.
+
+# WHY this is a shared action and not three copies of the same block: the defect
+# that made this hardening necessary was a gate that silently examined zero bytes.
+# Three hand-maintained copies of the setup is exactly how one call site quietly
+# drifts into that state again while the other two look fine. One implementation,
+# used by every scan entry point.
+
+inputs:
+  patterns-b64:
+    description: base64-encoded tar.gz of the pattern *.txt files
+    required: true
+
+outputs:
+  pattern-dir:
+    description: Directory holding the decoded pattern files
+    value: ${{ steps.setup.outputs.pattern-dir }}
+
+runs:
+  using: composite
+  steps:
+    - id: setup
+      shell: bash
+      env:
+        SCAN_PATTERNS_B64: ${{ inputs.patterns-b64 }}
+      run: |
+        set -euo pipefail
+        if [ -z "${SCAN_PATTERNS_B64:-}" ]; then
+          echo "::error::SCAN_PATTERNS_B64 is not set — cannot run the personal-data gate." >&2
+          exit 2
+        fi
+        PATTERN_DIR="$RUNNER_TEMP/scan-patterns"
+        mkdir -p "$PATTERN_DIR" && chmod 700 "$PATTERN_DIR"
+        printf '%s' "$SCAN_PATTERNS_B64" | base64 -d | tar -xz -C "$PATTERN_DIR"
+        shopt -s nullglob
+        pattern_files=("$PATTERN_DIR"/*.txt)
+        shopt -u nullglob
+        if [ "${#pattern_files[@]}" -eq 0 ]; then
+          echo "::error::Decoded SCAN_PATTERNS_B64 contains no pattern files (*.txt)." >&2
+          exit 2
+        fi
+        # Mask before any scan runs. Masks apply for the remainder of the job, so
+        # registering them here covers every later step in the calling workflow.
+        for pf in "${pattern_files[@]}"; do
+          while IFS= read -r line || [ -n "$line" ]; do
+            [ -n "$line" ] && echo "::add-mask::$line"
+          done < "$pf"
+        done
+        echo "pattern-dir=$PATTERN_DIR" >> "$GITHUB_OUTPUT"
+        echo "Loaded ${#pattern_files[@]} pattern file(s)."

@@ -1,0 +1,52 @@
+# History-sweep baseline
+#
+# Consumed by `ci/scanner.sh --history` (see .github/workflows/history-sweep.yml).
+# Each 40-hex blob OID below is reported as ACCEPTED rather than as a finding.
+# Anything not listed fails the sweep.
+#
+# WHY THIS EXISTS. This repository was public before it had a scan gate, and its
+# history contains matches that were reviewed and accepted: some are pattern
+# false positives, and some are content that is already published and cannot be
+# withdrawn without rewriting history, which was considered and rejected as more
+# damaging than the residual. Without a baseline the sweep would be red on every
+# run forever, and a check that is always red is a check nobody reads. That is a
+# worse outcome than not running the sweep at all.
+#
+# WHAT THIS IS NOT. It is not a way to silence a finding. Every entry is pinned by
+# object id, and an object id IS its content, so a line can only ever accept one
+# exact byte sequence that already exists — it cannot whitelist anything future.
+# Adding a line is a reviewable diff that the pull-request gate itself scans.
+#
+# The baseline applies ONLY to `--history`. It has no effect on `--tree`, which is
+# what gates publishing, so a baselined blob still blocks a release if it is
+# present in the tree being published. Verified, not assumed.
+#
+# If the sweep goes red: fix the finding at its source. Do not add its OID here to
+# make the build green. Rationale for each acceptance is recorded outside this
+# repository; this file deliberately carries object ids and nothing else.
+
+# --- Accepted object ids ------------------------------------------------------
+6ddbc15e36f9a0e0bfc817dbeda979c41ad519f3
+74d1ad7b799455fccbae0126fc6a60d1088dde29
+9ed9b076f7e5fbb1786b421bfb5859ec1523cfa4
+e798931f5858a9bb62aea45d28a625f24588f7f6
+0f6eba19f501605f758b55a4d84eafeb27aa1f39
+246708cd155a17652cb17ba4bbb115f22b0e908d
+2eb0ce068ced4f91a3bf14a42bc02e3662fc799d
+4b2e553cabf70c0edd21d69394abe67fbda69ce1
+4e53f317ed9676e77e106380aa5fe4192f1223c8
+5152cabb5a653986677910befa3e05f592c35a49
+5ef7be8a8f47b2ceec35b5df060dd757ff1503b4
+6d4a438cc609b1cccfd6ab2345474f2fdce6aeb0
+94af7947fa75f4d85bb249bc2b34268dd997e6e3
+a1d78ac3abe969290a0049c9c9f70d7fde2edd05
+a42eb9188360ad0512abbb93c2e2f8f7c2f99a51
+b061267cf9019b12b8d00b0135baacaad73bcca7
+b08adc260b8bc21c306cd3cebcd224f222da89f7
+c731a4914c50dd2f4241d0767d16f72dc78f2cd0
+cdda0455ea0ce12b8529a43708028f6c0dc5a82e
+d00f2e67f93c63e75d71be24a02b97de0a024415
+dabeb638ad7f781dffe38a5339b23d755aa71e2c
+ea7a12bc6e239cd6ef557fa6b873342a6bf81c0e
+fd712ec0289ceab3c2f8f82b068fdf8492aa6f3b
+fdd197a1090be8744b5f213e724cf4d8e043e92f
