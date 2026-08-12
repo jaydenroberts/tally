@@ -11,15 +11,15 @@ Replaces the legacy file-based import endpoints (v1.3.x) with a wizard flow:
   GET    /api/imports              import history with rollback_available flag
 
 Security notes:
-  BASTION-3: MIME validation by parser result, not Content-Type header
-  BASTION-4: IMPORT_DRAFTS_ENABLED gate returns 404 (not 401) when off
-  BASTION-5: TOCTOU-safe transitions via UPDATE WHERE status=$expected + rowcount check
-  BASTION-8: Stuck 'committing' drafts recovered to 'preview_ready' on startup
-  BASTION-9: db.flush() before re-reading draft after TOCTOU UPDATE
-  BASTION-11: file.filename sanitised at ingest
-  MASON-2:   amount dedup uses round(float(x), 2) to avoid Decimal/Float IEEE 754 mismatch
-  MASON-3:   WRatio scorer acceptable; adjacent-day same-amount dedup is conservative by design
-  MASON-4:   column_mapping validated via ColumnMappingSchema at intake
+  SEC-3: MIME validation by parser result, not Content-Type header
+  SEC-4: IMPORT_DRAFTS_ENABLED gate returns 404 (not 401) when off
+  SEC-5: TOCTOU-safe transitions via UPDATE WHERE status=$expected + rowcount check
+  SEC-8: Stuck 'committing' drafts recovered to 'preview_ready' on startup
+  SEC-9: db.flush() before re-reading draft after TOCTOU UPDATE
+  SEC-11: file.filename sanitised at ingest
+  ENG-2:   amount dedup uses round(float(x), 2) to avoid Decimal/Float IEEE 754 mismatch
+  ENG-3:   WRatio scorer acceptable; adjacent-day same-amount dedup is conservative by design
+  ENG-4:   column_mapping validated via ColumnMappingSchema at intake
   Option B:  PDF dispatch via import_parsers.pdf_parser (worker-process, 30s wall-clock kill)
 """
 import os
@@ -104,13 +104,13 @@ def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 def _require_enabled():
-    # BASTION-4: 404 (not 401) when feature flag is off — reveals nothing to caller
+    # SEC-4: 404 (not 401) when feature flag is off — reveals nothing to caller
     if not IMPORT_DRAFTS_ENABLED:
         raise HTTPException(status_code=404, detail="Not found")
 
 
 def _sanitise_filename(raw: str) -> str:
-    # BASTION-11: strip unsafe chars, truncate to 255
+    # SEC-11: strip unsafe chars, truncate to 255
     safe = SAFE_FILENAME_RE.sub("_", raw or "upload")
     return safe[:255] or "upload"
 
@@ -378,9 +378,9 @@ def _dedup_row(
 ) -> tuple[Optional[int], Optional[float]]:
     """
     Find a matching committed transaction for dedup purposes.
-    Rules: same account, exact amount (rounded float — MASON-2), ±1 day, WRatio ≥ 0.85.
+    Rules: same account, exact amount (rounded float — ENG-2), ±1 day, WRatio ≥ 0.85.
     Returns (tx_id, score) or (None, None).
-    Adjacent-day same-amount same-description matches are conservative by design (MASON-3).
+    Adjacent-day same-amount same-description matches are conservative by design (ENG-3).
 
     FE-012: pristine manual estimates (source='manual', unverified, import_id NULL) are
     deliberately NOT dedup candidates — they are the reconciliation matcher's job. If
@@ -390,7 +390,7 @@ def _dedup_row(
     if row_date is None or row_amount is None or not row_desc:
         return None, None
 
-    # MASON-2: compare as rounded floats to avoid Decimal/Float IEEE 754 mismatch
+    # ENG-2: compare as rounded floats to avoid Decimal/Float IEEE 754 mismatch
     target_amount = round(float(row_amount), 2)
 
     candidates = (
@@ -660,7 +660,7 @@ def _build_preview_response(db: Session, draft: models.ImportDraft) -> schemas.I
     detected_last4 = meta.get("detected_account_last4")
 
     # Option B — surface PDF wizard fields when present. parsed_meta already
-    # stores the wire-safe candidate list (no header/rows) per MASON-2.
+    # stores the wire-safe candidate list (no header/rows) per ENG-2.
     candidates = meta.get("candidate_tables")
     candidate_schemas = (
         [schemas.CandidateTableSchema(**c) for c in candidates] if candidates else None
@@ -741,14 +741,14 @@ def create_import(
             detail=f"Format '{fmt}' not supported (CSV or PDF only)",
         )
 
-    # BASTION-3: content-based MIME validation via the parser.
+    # SEC-3: content-based MIME validation via the parser.
     # CSV parser ignores selected_table_index; PDF parser honours it.
     parser = pdf_parser if fmt == "pdf" else csv_parser
     parse_result = parser.parse(raw, selected_table_index=selected_table_index)
     header = parse_result.header
     data_rows = parse_result.rows
 
-    # BASTION-11: sanitise filename at ingest
+    # SEC-11: sanitise filename at ingest
     safe_filename = _sanitise_filename(file.filename or "")
 
     # Account ownership check
@@ -759,7 +759,7 @@ def create_import(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    # MASON-4: validate default column mapping — all indices must be within header bounds
+    # ENG-4: validate default column mapping — all indices must be within header bounds
     col_count = len(header)
     if col_count < 3:
         raise HTTPException(
@@ -773,7 +773,7 @@ def create_import(
         [",".join(header)] + [",".join(r) for r in data_rows[:4]]
     )
 
-    # Wire-safe candidate list — header/rows stripped per MASON-2.
+    # Wire-safe candidate list — header/rows stripped per ENG-2.
     candidate_wire = None
     if parse_result.candidate_tables:
         candidate_wire = [
@@ -869,7 +869,7 @@ def patch_draft(
 
     mapping_changed = False
     if payload.column_mapping is not None:
-        # MASON-4: ColumnMappingSchema already validated by Pydantic
+        # ENG-4: ColumnMappingSchema already validated by Pydantic
         draft.column_mapping = payload.column_mapping.model_dump()
         mapping_changed = True
 
@@ -934,10 +934,10 @@ def commit_draft(
 ):
     _require_enabled()
 
-    # BASTION-5: TOCTOU-safe transition — atomic UPDATE with WHERE on expected status.
+    # SEC-5: TOCTOU-safe transition — atomic UPDATE with WHERE on expected status.
     # The intermediate 'committing' state blocks a concurrent request from also matching
     # 'preview_ready'. A crash here leaves the draft in 'committing'; the startup recovery
-    # in run_startup_migrations() resets it to 'preview_ready' (BASTION-8).
+    # in run_startup_migrations() resets it to 'preview_ready' (SEC-8).
     # AUDIT-11: gate on expires_at inside the atomic UPDATE so a draft that crossed
     # its TTL while open in the wizard (stale dedup flags) can't be committed.
     now_utc = datetime.utcnow()
@@ -958,14 +958,14 @@ def commit_draft(
             raise HTTPException(status_code=409, detail="Draft has expired; please re-upload")
         raise HTTPException(status_code=409, detail="Draft is not in preview_ready state")
 
-    db.flush()   # BASTION-9: make write visible to subsequent ORM reads on this connection
+    db.flush()   # SEC-9: make write visible to subsequent ORM reads on this connection
 
     draft = db.query(models.ImportDraft).filter(models.ImportDraft.id == draft_id).first()
 
     def _reject_and_reset(detail):
         # AUDIT-04/AUDIT-11: we already flipped the draft to 'committing' (TOCTOU gate).
         # A validation rejection must return the draft to 'preview_ready' immediately so
-        # the user can fix rows and retry without waiting for the BASTION-8 boot recovery.
+        # the user can fix rows and retry without waiting for the SEC-8 boot recovery.
         db.execute(
             text("UPDATE import_drafts SET status = 'preview_ready', committed_at = NULL "
                  "WHERE id = :id AND status = 'committing'"),
@@ -1032,7 +1032,7 @@ def commit_draft(
 
     # FE-012 — reconciliation matcher. All mutations below (match-revisions, inserts,
     # and the committing→committed flip) share the single db.commit() at the end so
-    # they land in ONE unit of work on the same connection as the BASTION-5 TOCTOU
+    # they land in ONE unit of work on the same connection as the SEC-5 TOCTOU
     # UPDATE (A3). A failure anywhere in the loop leaves zero rows mutated.
     created = 0
     auto_matched = 0
@@ -1242,7 +1242,7 @@ def rollback_import(
             ),
         )
 
-    # BASTION-5: TOCTOU-safe transition for rollback
+    # SEC-5: TOCTOU-safe transition for rollback
     result = db.execute(
         text("UPDATE import_drafts SET status = 'rolled_back' WHERE id = :id AND status = 'committed'"),
         {"id": draft_id},

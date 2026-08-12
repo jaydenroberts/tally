@@ -4,7 +4,7 @@ Shared dataclasses for parser results.
 ParseResult.candidate_tables / selected_table_index / extraction_strategy are
 PDF-specific and remain ``None`` for the CSV path. CandidateTable.header and
 CandidateTable.rows are server-side only — they MUST NOT be serialised over
-the wire (see schemas.CandidateTableSchema). LOCKED (MASON-2).
+the wire (see schemas.CandidateTableSchema). LOCKED (ENG-2).
 """
 from __future__ import annotations
 
