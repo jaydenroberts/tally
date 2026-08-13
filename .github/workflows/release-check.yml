@@ -1,0 +1,87 @@
+name: release-check
+
+on:
+  pull_request:
+    branches: [main]
+
+# Least privilege: nothing by default, granted per-job.
+permissions: {}
+
+jobs:
+  release-check:
+    name: release-check
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (full history to diff the base ref)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Enforce changelog on version bump
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          extract_version() {
+            # Reads the single-source app version from backend/app/main.py:
+            #   the line  version="X.Y.Z"  inside the FastAPI() constructor.
+            grep -oE 'version="[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?"' "$1" \
+              | head -n1 | sed -E 's/^version="//; s/"$//'
+          }
+
+          MAIN_PY="backend/app/main.py"
+
+          # Head (this PR) version.
+          HEAD_VERSION="$(extract_version "$MAIN_PY" || true)"
+          if [ -z "${HEAD_VERSION}" ]; then
+            echo "✗ could not read version=\"...\" from ${MAIN_PY}"
+            exit 1
+          fi
+
+          # Base ref version (the target branch as it exists now).
+          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          BASE_MAIN_PY="$(git show "origin/${BASE_REF}:${MAIN_PY}" 2>/dev/null || true)"
+          if [ -z "${BASE_MAIN_PY}" ]; then
+            BASE_VERSION=""
+          else
+            BASE_VERSION="$(printf '%s\n' "${BASE_MAIN_PY}" \
+              | grep -oE 'version="[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?"' \
+              | head -n1 | sed -E 's/^version="//; s/"$//' || true)"
+          fi
+
+          echo "base version:  ${BASE_VERSION:-<none>}"
+          echo "head version:  ${HEAD_VERSION}"
+
+          if [ "${HEAD_VERSION}" = "${BASE_VERSION}" ]; then
+            echo "✓ no version change, skipping changelog enforcement"
+            exit 0
+          fi
+
+          echo "version constant changed — enforcing release standard"
+          FAIL=0
+
+          # Check 1: valid semver (X.Y.Z or X.Y.Z.N).
+          if printf '%s' "${HEAD_VERSION}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+            echo "✓ version '${HEAD_VERSION}' is valid (X.Y.Z or X.Y.Z.N)"
+          else
+            echo "✗ version '${HEAD_VERSION}' is not valid semver (expected X.Y.Z or X.Y.Z.N)"
+            FAIL=1
+          fi
+
+          # Check 2: matching CHANGELOG entry.
+          ESCAPED="$(printf '%s' "${HEAD_VERSION}" | sed 's/\./\\./g')"
+          if grep -qE "^## \[${ESCAPED}\]" CHANGELOG.md; then
+            echo "✓ CHANGELOG.md has an entry for '${HEAD_VERSION}'"
+          else
+            echo "✗ CHANGELOG.md is missing a '## [${HEAD_VERSION}]' entry"
+            FAIL=1
+          fi
+
+          if [ "${FAIL}" -ne 0 ]; then
+            echo "release-check failed: version bumped to '${HEAD_VERSION}' without a compliant release standard"
+            exit 1
+          fi
+          echo "release-check passed"
