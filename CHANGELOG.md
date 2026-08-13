@@ -18,6 +18,26 @@ Security-patch hotfix — dependency version bumps that close known vulnerabilit
 
 ---
 
+## [1.4.4] - 2026-07-21
+
+Chat session persistence — your AI conversations are now saved and reload when you return.
+
+### Added
+
+- **Conversations persist across visits.** Each chat is stored and reloads when you come back to the Chat page — refreshing or navigating away no longer loses the conversation.
+- **Session sidebar.** A list of your past conversations sits beside the chat; click one to reopen it, or use **+ New** to start fresh.
+- **Delete a conversation** from the sidebar when you no longer need it — this removes it and all of its messages.
+- **Automatic titles.** Each conversation is named from its first message so the list stays scannable.
+- **`CHAT_HISTORY_TURNS`** environment variable controls how many prior turns are replayed as context (provider-aware defaults: 30 for hosted APIs, 10 for local Ollama).
+
+### Notes
+
+- **Provider lock per conversation.** A conversation is pinned to the AI provider it started on; switching providers starts a new conversation rather than mixing histories, so replies stay coherent.
+- **Single-tenant by design** (unchanged): each conversation belongs to its persona and user, and is only ever loaded for them.
+- Upgrade is safe and in-place — new tables are created automatically on first start; no manual migration, and no existing data is touched.
+
+---
+
 ## [1.4.3] - 2026-07-11
 
 Import feature release — debt-payment reconciliation, smarter matching for reference-only statement lines, and scheduled recurring generation.
