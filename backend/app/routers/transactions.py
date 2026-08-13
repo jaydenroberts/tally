@@ -1,6 +1,9 @@
+import csv
+import io
 from typing import List, Optional
 from datetime import date as date_type
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -284,6 +287,98 @@ def transaction_summary(
         "net": income - expenses,
         "unverified_count": unverified_count,
     }
+
+
+# ---------------------------------------------------------------------------
+# CSV export (RM-04a)
+# ---------------------------------------------------------------------------
+# Registered above GET /{tx_id} on purpose: FastAPI matches routes in
+# declaration order, and "export" would otherwise be swallowed as a tx_id.
+
+CSV_COLUMNS = (
+    "id", "date", "description", "amount", "transaction_type",
+    "category", "account", "source", "is_verified", "notes",
+)
+
+# Leading characters a spreadsheet treats as the start of a formula. Text
+# fields beginning with one are prefixed with an apostrophe so a description
+# typed by a user (or arriving from a bank statement) cannot execute when the
+# export is opened in Excel or LibreOffice. Numeric and date columns are
+# produced by Tally, never user-typed, so they are written through unchanged.
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_text(value) -> str:
+    """Render a free-text column safely for a spreadsheet."""
+    if value is None:
+        return ""
+    text_value = str(value)
+    if text_value.startswith(_FORMULA_PREFIXES):
+        return "'" + text_value
+    return text_value
+
+
+@router.get("/export")
+def export_transactions(
+    format: str = Query("csv", description="Export format. Only 'csv' is supported today."),
+    account_id: Optional[int] = Query(None),
+    category_id: Optional[int] = Query(None),
+    is_verified: Optional[bool] = Query(None),
+    source: Optional[str] = Query(None, description="'manual' or 'import'"),
+    transaction_type: Optional[str] = Query(None, description="expense | income | transfer | debt_payment"),
+    amount_sign: Optional[str] = Query(None, description="'positive' or 'negative'"),
+    exclude_transfers: bool = Query(False),
+    date_from: Optional[date_type] = Query(None),
+    date_to: Optional[date_type] = Query(None),
+    db: Session = Depends(get_db),
+    _: models.User = Depends(get_current_user),
+):
+    """Export transactions as CSV, honouring the same filters as the list endpoint.
+
+    The filter arguments are passed straight to ``_apply_tx_filters`` — the one
+    place transaction predicates are defined — so this endpoint gains any filter
+    added there without being touched. With no arguments it exports everything.
+    """
+    if format != "csv":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported export format. Only 'csv' is available.",
+        )
+
+    q = _apply_tx_filters(
+        db.query(models.Transaction).options(
+            joinedload(models.Transaction.category),
+            joinedload(models.Transaction.account),
+        ),
+        account_id=account_id, category_id=category_id, is_verified=is_verified,
+        source=source, transaction_type=transaction_type, amount_sign=amount_sign,
+        exclude_transfers=exclude_transfers, date_from=date_from, date_to=date_to,
+    ).order_by(models.Transaction.date.asc(), models.Transaction.id.asc())
+
+    buffer = io.StringIO()
+    # QUOTE_MINIMAL with \r\n line endings is what RFC 4180 readers expect.
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    writer.writerow(CSV_COLUMNS)
+    for tx in q.yield_per(500):
+        writer.writerow([
+            tx.id,
+            tx.date.isoformat() if tx.date else "",
+            _csv_text(tx.description),
+            f"{tx.amount:.2f}",
+            tx.transaction_type or "",
+            _csv_text(tx.category.name if tx.category else ""),
+            _csv_text(tx.account.name if tx.account else ""),
+            tx.source or "",
+            "true" if tx.is_verified else "false",
+            _csv_text(tx.notes),
+        ])
+
+    filename = f"tally-transactions-{date_type.today().isoformat()}.csv"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("", response_model=schemas.TransactionResponse, status_code=status.HTTP_201_CREATED)

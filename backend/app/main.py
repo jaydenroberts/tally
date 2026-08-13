@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from .database import engine, SessionLocal, Base
 from . import backup, models
 from .auth import hash_password
-from .routers import auth, users, accounts, transactions, categories, budgets, savings, debt, imports, recurring, chat, chat_sessions, dashboard
+from .routers import auth, users, accounts, transactions, categories, budgets, savings, debt, imports, recurring, chat, chat_sessions, dashboard, data
 
 
 # ---------------------------------------------------------------------------
@@ -562,6 +562,7 @@ app.include_router(recurring.router)
 app.include_router(chat_sessions.router)
 app.include_router(chat.router)
 app.include_router(dashboard.router)
+app.include_router(data.router)
 
 
 @app.get("/api/health")
