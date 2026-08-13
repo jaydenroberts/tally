@@ -270,7 +270,9 @@ class Transaction(Base):
     savings_goal_id = Column(Integer, ForeignKey("savings_goals.id"), nullable=True, index=True)
     debt_id = Column(Integer, ForeignKey("debts.id"), nullable=True, index=True)
     # Classifies the transaction's role — used for budget exclusion and import matching.
-    # Values: expense (default), income, transfer, debt_payment
+    # Values: expense (default), income, transfer, savings_transfer, debt_payment.
+    # app/money.py is the single source of truth for which of these count as
+    # money flow; add any new type there or the aggregates will exclude it.
     transaction_type = Column(String(20), default="expense", nullable=False, index=True)
     # Groups a transfer pair: both debit and credit transactions share the same value
     # (set to the debit transaction's id). Plain integer — not a FK.
