@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .database import engine, SessionLocal, Base
-from . import models
+from . import backup, models
 from .auth import hash_password
 from .routers import auth, users, accounts, transactions, categories, budgets, savings, debt, imports, recurring, chat, chat_sessions, dashboard
 
@@ -476,6 +476,18 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_database(db)
+
+        # [RM-04e] Snapshot the database before any migration touches it.
+        # This is a gate, not a courtesy: if a backup was required and could not
+        # be produced and verified, BackupError propagates, the lifespan fails,
+        # and the app does not start. Migrating real money data with no way back
+        # is the outcome this exists to prevent, and a container that refuses to
+        # start is recoverable in a way that lost financial history is not.
+        # The call is a deliberate no-op when there is nothing to protect (empty
+        # database, in-memory database, snapshot for this version already taken),
+        # so an ordinary restart never fails here.
+        backup.pre_migration_backup(engine, db, app.version)
+
         run_startup_migrations(db)
         # Generate any overdue recurring transactions on startup
         count = recurring.run_due_recurring(db)
