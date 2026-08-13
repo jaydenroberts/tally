@@ -47,10 +47,7 @@ jobs:
           # SECRET_KEY, and its default DB path only exists inside the container.
           export SECRET_KEY="$(openssl rand -hex 32)"
           export DATABASE_URL="sqlite:///${RUNNER_TEMP}/tally-test.db"
-          # 'thread_race' tests are quarantined in CI (flaky under parallel
-          # load — see the marker registration in tests/conftest.py). Run the
-          # full suite locally with plain `pytest`.
-          python -m pytest tests/ -q -m "not thread_race"
+          python -m pytest tests/ -q
 
   frontend-build:
     name: frontend-build
