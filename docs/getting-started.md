@@ -111,13 +111,26 @@ Recommended first steps:
 
 All Tally data is stored in the `/data` volume. This includes:
 - `tally.db` — the SQLite database containing all your financial data
+- `backups/` — automatic snapshots taken before an upgrade changes the database
 
-Back up this directory regularly. Tally does not include built-in backup tooling.
+Tally includes built-in backup tooling:
+
+- **Automatic** — before any upgrade alters the database, Tally saves a snapshot to
+  `/data/backups`. If that snapshot cannot be written and verified, Tally refuses to
+  start rather than upgrading without a way back.
+- **On demand** — **Settings → Data** offers a one-click database backup, a full JSON
+  export, and a transactions CSV export.
+
+Both live on the same disk as the database, so still copy this directory somewhere
+else regularly — that is what protects you from a failed drive.
+
+See [Backup & Restore](backup-restore.md) for the restore procedure.
 
 ---
 
 ## Related
 
 - [Configuration](configuration.md) — full environment variable reference
+- [Backup & Restore](backup-restore.md) — automatic snapshots, exports, and restoring
 - [Accounts](accounts.md) — adding your first accounts
 - [Import](import.md) — importing bank statements

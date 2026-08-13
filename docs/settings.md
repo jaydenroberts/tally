@@ -88,6 +88,44 @@ Click the delete icon on a custom persona and confirm. When a persona is deleted
 
 ---
 
+## Data Tab
+
+The Data tab is where you take a copy of everything Tally holds. It is visible to owner
+accounts only, because these files contain the whole household's financial data.
+
+Each file is generated on your server and downloaded straight to the device you are
+using. Nothing is uploaded anywhere.
+
+### Download backup
+
+Downloads the entire Tally database as a single `.db` file. This is the file you
+restore from, and the only one you can restore from.
+
+It is safe to do this while Tally is in use — the copy reflects a single consistent
+point in time.
+
+### Export all data (JSON)
+
+Downloads every table as one JSON file, for reading or transforming in another tool.
+
+Password hashes are deliberately left out, so this file cannot be used to restore an
+install — use the backup above for that.
+
+### Export transactions (CSV)
+
+Downloads every transaction as a spreadsheet-friendly CSV, one row per transaction,
+including its category and account.
+
+Text that begins with `=`, `+`, `-` or `@` is written with a leading apostrophe so a
+spreadsheet treats it as text rather than a formula.
+
+### Automatic backups
+
+The same tab explains where Tally's automatic pre-upgrade snapshots are kept. See
+[Backup & Restore](backup-restore.md) for the full detail and the restore procedure.
+
+---
+
 ## General Tab
 
 The General tab controls app-wide preferences that apply to all users.
@@ -138,4 +176,5 @@ The recovery endpoint resets the password of the owner account with the lowest I
 
 - [AI Coach](ai-coach.md) — how personas affect the AI coaching interface
 - [Getting Started](getting-started.md) — first-run setup and owner account creation
+- [Backup & Restore](backup-restore.md) — automatic snapshots and the restore procedure
 - [Configuration](configuration.md) — environment variables for first-run account creation and recovery
