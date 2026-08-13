@@ -252,10 +252,9 @@ async def stream_chat(
     if AI_PROVIDER in ("openai", "ollama"):
         # Handles OpenAI, Ollama, LM Studio, and other OpenAI-compatible endpoints.
         # Multi-turn tool use is supported (tool_calls + tool_call_id format).
-        # NOTE: This branch is the seam where the planned AIClient abstraction will sit
-        # (see agents/projects/tally-local-sage.md § Locked Decisions row 2 and
-        # BACKLOG-001). Any third provider added here is a signal that the refactor
-        # is overdue.
+        # NOTE: This branch is the seam where the planned AIClient abstraction will
+        # sit. Any third provider added here is a signal that the refactor is
+        # overdue.
         async for chunk in _stream_openai(messages, tools, system):
             yield chunk
     else:

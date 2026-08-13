@@ -9,7 +9,7 @@ import { parseServerDate } from '../utils/dateFormat'
 // Option B — STEPS is now a function. When the PDF parser surfaces multiple
 // candidate tables, an extra "Pick table" step is injected between Upload
 // and Match columns. Step keys stay stable strings; the displayed step
-// number is the index + 1 (no "Step 2.5" hack). LOCKED (IRIS-1).
+// number is the index + 1 (no "Step 2.5" hack). LOCKED (UX-1).
 function buildSteps(hasMultipleCandidates, hasReviewSuggestions) {
   const steps = [
     { key: 'account', title: 'Choose account',   hint: 'Where these transactions land.' },
@@ -293,7 +293,7 @@ function StepUpload({ account, onBack, onUploaded }) {
   )
 }
 
-// ─── Step (conditional): Pick table — LOCKED IRIS-2..6 ───────────────────────
+// ─── Step (conditional): Pick table — LOCKED UX-2..6 ───────────────────────
 function StepPickTable({ candidates, strategy, onBack, onConfirm, busy }) {
   const [selected, setSelected] = useState(null)
   return (
@@ -303,7 +303,7 @@ function StepPickTable({ candidates, strategy, onBack, onConfirm, busy }) {
           <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--text)' }}>
             We found {candidates.length} tables in this PDF — which one are your transactions?
           </h2>
-          {/* IRIS-6: faint caption surfaces the parser strategy without being interactive. */}
+          {/* UX-6: faint caption surfaces the parser strategy without being interactive. */}
           {strategy && (
             <div style={{
               fontSize: 11, color: 'var(--text-faint)', marginTop: 6,
@@ -334,7 +334,7 @@ function StepPickTable({ candidates, strategy, onBack, onConfirm, busy }) {
                     {' '}· {c.row_count} rows · {c.column_count} columns
                   </span>
                 </div>
-                {/* IRIS-3: horizontally-scrolling monospace preview strip, per-cell 160px cap */}
+                {/* UX-3: horizontally-scrolling monospace preview strip, per-cell 160px cap */}
                 <div style={{
                   display: 'flex', gap: 6, overflowX: 'auto',
                   fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
@@ -1049,7 +1049,7 @@ export default function ImportWizard() {
     setStep(uploadIdx + 2)   // +1 to convert idx→step number, +1 to move forward
   }
 
-  // LOCKED (MASON Q2): table re-pick is DELETE + re-upload with ?selected_table_index=N.
+  // LOCKED (ENG Q2): table re-pick is DELETE + re-upload with ?selected_table_index=N.
   const onPickTable = async (index) => {
     if (index === null || !uploadFile) return
     setPickBusy(true)

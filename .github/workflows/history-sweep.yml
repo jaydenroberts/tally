@@ -1,0 +1,67 @@
+name: history sweep
+
+# Periodic backstop. The PR gate sees what a change ADDS and the tag gate sees
+# what an artifact CONTAINS; neither ever revisits what is already in history.
+# Everything found in the 2026-08-04 exposure review predated the gate entirely,
+# so no amount of forward scanning would have surfaced it. This sweep reads every
+# blob reachable from every ref and compares against .ci/history-baseline.txt,
+# which records the findings already assessed and accepted as residual.
+#
+# A red run means something NOT on that baseline is in history. The fix is to
+# remediate it, never to append it to the baseline to make the build green.
+
+on:
+  schedule:
+    # 04:17 UTC on Mondays. Deliberately not on the hour: scheduled workflows are
+    # queued at peak times and can be dropped entirely under load.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  history-sweep:
+    name: history-sweep
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out full history, all refs
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      # checkout fetches tags but leaves remote branches as remote-tracking refs
+      # only. The sweep enumerates from --all, so anything not present as a local
+      # ref is simply never examined — the silent-zero-bytes failure mode again,
+      # just at a different layer. Assert we actually have refs before scanning.
+      - name: Verify ref coverage
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          n_refs=$(git for-each-ref --format='%(refname)' | wc -l)
+          echo "refs available to the sweep: $n_refs"
+          if [ "$n_refs" -lt 2 ]; then
+            echo "::error::Only $n_refs ref(s) present — the sweep would examine almost nothing." >&2
+            exit 2
+          fi
+
+      - name: Set up scan patterns
+        id: patterns
+        uses: ./.github/actions/scan-patterns
+        with:
+          patterns-b64: ${{ secrets.SCAN_PATTERNS_B64 }}
+
+      - name: Sweep every blob in history
+        env:
+          PATTERN_DIR: ${{ steps.patterns.outputs.pattern-dir }}
+        run: |
+          set -euo pipefail
+          ci/scanner.sh --ci --history
+
+      - name: Explain a failure
+        if: failure()
+        run: |
+          echo "::notice::A finding here is a blob in history that is not on"
+          echo "::notice::.ci/history-baseline.txt. Read that file's header before"
+          echo "::notice::acting. Do not add the OID to the baseline to go green."

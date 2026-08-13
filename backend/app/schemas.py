@@ -699,7 +699,7 @@ class RecurringTransactionResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ColumnMappingSchema(BaseModel):
-    """Validated column-index mapping for CSV import (MASON-4).
+    """Validated column-index mapping for CSV import (ENG-4).
 
     Amount can be supplied either as a single signed ``amount`` column, or as a
     split ``credit`` / ``debit`` pair (FE-001 — separate money-in/out columns). At least one
@@ -752,7 +752,7 @@ class CandidateTableSchema(BaseModel):
     NOTE: ``header`` and ``rows`` from the server-side ``CandidateTable``
     dataclass are deliberately NOT included here — the only preview surface
     leaving the server is ``first_row_preview`` (≤5 cells, each ≤80 chars).
-    LOCKED (MASON-2 + BASTION-4 + IRIS-3).
+    LOCKED (ENG-2 + SEC-4 + UX-3).
     """
     index: int
     row_count: int

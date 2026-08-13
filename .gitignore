@@ -46,3 +46,11 @@ backend/app/static/
 # Data
 data/
 .githooks/
+
+# Scan-gate pattern files. ci/scanner.sh falls back to .ci/patterns when no
+# install config is present, so this directory is where a local pattern set
+# lands. Those files ARE the personal-data wordlist the gate exists to protect,
+# and the gate cannot reliably detect them in itself: a pattern written \bName\b
+# is preceded by the alnum 'b' of its own \b, so the word-boundary form cannot
+# match itself. Never commit them.
+.ci/patterns/

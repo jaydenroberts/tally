@@ -260,7 +260,7 @@ def run_startup_migrations(db: Session) -> None:
     # [M-009] Add import_id column to transactions (staged-import wizard — v1.4.0).
     # New tables (import_drafts, import_draft_rows) are created by Base.metadata.create_all()
     # in lifespan — this migration only handles the ALTER on the existing transactions table.
-    # MASON-1: guard with PRAGMA table_info(import_drafts) to ensure the FK target exists first.
+    # ENG-1: guard with PRAGMA table_info(import_drafts) to ensure the FK target exists first.
     id_tbl = [row[1] for row in db.execute(text("PRAGMA table_info(import_drafts)")).fetchall()]
     if id_tbl:  # import_drafts table exists — safe to add FK column
         tx_cols_m009 = [row[1] for row in db.execute(text("PRAGMA table_info(transactions)")).fetchall()]
@@ -307,7 +307,7 @@ def run_startup_migrations(db: Session) -> None:
         ))
         db.commit()
 
-    # [M-009b] Auto-cancel expired import drafts (runs every boot — no scheduler needed for homelab).
+    # [M-009b] Auto-cancel expired import drafts (runs every boot — no scheduler needed at this scale).
     result = db.execute(text(
         "UPDATE import_drafts SET status = 'cancelled' "
         "WHERE status = 'preview_ready' AND expires_at < datetime('now')"
@@ -316,14 +316,14 @@ def run_startup_migrations(db: Session) -> None:
         db.commit()
         log.info("[M-009b] Cancelled %d expired draft(s)", result.rowcount)
 
-    # [BASTION-8] Recover drafts stuck in 'committing' from a prior crash mid-commit.
+    # [SEC-8] Recover drafts stuck in 'committing' from a prior crash mid-commit.
     # 'committing' is never a stable resting state — reset to 'preview_ready' so user can retry.
     result = db.execute(text(
         "UPDATE import_drafts SET status = 'preview_ready' WHERE status = 'committing'"
     ))
     if result.rowcount:
         db.commit()
-        log.info("[BASTION-8] Recovered %d draft(s) from stuck 'committing' state", result.rowcount)
+        log.info("[SEC-8] Recovered %d draft(s) from stuck 'committing' state", result.rowcount)
 
     # [M-003] Remove duplicate imported transactions created by re-importing the same file.
     # Introduced in v1.1.5 alongside duplicate detection. This one-time cleanup removes

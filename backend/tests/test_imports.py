@@ -326,7 +326,7 @@ def test_pdf_multiple_tables_surfaces_candidates(client, auth_headers, test_acco
     for c in candidates:
         assert set(c.keys()) == {"index", "row_count", "column_count", "first_row_preview"}
         assert len(c["first_row_preview"]) <= 5
-        # 80-char cap per cell (BASTION-4 / IRIS-3 wire boundary).
+        # 80-char cap per cell (SEC-4 / UX-3 wire boundary).
         assert all(len(cell) <= 80 for cell in c["first_row_preview"])
 
     # Default = largest, which is the 4-row "Table B" in the fixture.
@@ -348,7 +348,7 @@ def test_pdf_no_tables_rejected(client, auth_headers, test_account):
     assert after == before
 
 
-# 6. PDF re-pick table — full DELETE + re-upload flow [MASON-5] ---------------
+# 6. PDF re-pick table — full DELETE + re-upload flow [ENG-5] ---------------
 
 def test_pdf_re_pick_table(client, auth_headers, test_account):
     pdf_bytes = multi_candidate_pdf()
@@ -414,7 +414,7 @@ def test_pdf_different_headers_stay_separate(client, auth_headers, test_account)
     assert candidates is not None and len(candidates) == 2
 
 
-# 7. PDF oversized page count rejected [MASON-5] ------------------------------
+# 7. PDF oversized page count rejected [ENG-5] ------------------------------
 
 def test_pdf_oversized_page_count_rejected(client, auth_headers, test_account):
     # Bypass the 200-page cap by 1 page — the parser must reject before

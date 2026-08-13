@@ -5,14 +5,14 @@ Ports the v1.3.2 ``_extract_pdf_dataframe`` (commit ``4451b97``) into a
 self-contained module that:
 
 * runs pdfplumber in a child process with a 30s wall-clock kill
-  (BASTION Q1 worker-process boundary);
-* enforces page / row / table caps (BASTION-2);
+  (SEC Q1 worker-process boundary);
+* enforces page / row / table caps (SEC-2);
 * generalises the institution-shaped two-date text fallback to a 3-pattern
-  regex set tried in order (MASON Q7);
+  regex set tried in order (ENG Q7);
 * surfaces every multi-row candidate table to the caller so the wizard can
   let the user pick when N > 1;
 * returns generic client errors and logs only the exception class name in
-  normal mode (BASTION-3 sanitisation);
+  normal mode (SEC-3 sanitisation);
 * drops the pandas dependency — emits list[list[str]] directly.
 
 LOCKED in Option B spec § 3 + § 4.2 + § 7.2 + § 7.3 + § 7.5.
@@ -34,7 +34,7 @@ from .types import CandidateTable, ParseResult
 
 log = logging.getLogger(__name__)
 
-# ─── Caps (BASTION-2) ────────────────────────────────────────────────────────
+# ─── Caps (SEC-2) ────────────────────────────────────────────────────────
 MAX_PDF_PAGES = 200
 MAX_PDF_ROWS = 50_000
 MAX_TABLES_PER_PAGE = 50
@@ -48,7 +48,7 @@ PREVIEW_CELL_CHAR_CAP = 80
 _GENERIC_PARSE_ERROR = "PDF could not be opened"
 
 
-# ─── Three-pattern text-fallback regex set (MASON Q7) ────────────────────────
+# ─── Three-pattern text-fallback regex set (ENG Q7) ────────────────────────
 # Tried in order; first pattern whose row count meets the "more rows than table
 # extraction" gate is used. Adding a fourth pattern is a one-line append.
 _TX_PATTERNS = [
@@ -321,7 +321,7 @@ def _extract_with_pattern_set(page_texts: List[str]) -> List[List[str]]:
 def _clip_preview(cells: List[str]) -> List[str]:
     """Wire-safety clamp: first PREVIEW_MAX_CELLS cells, each truncated to
     PREVIEW_CELL_CHAR_CAP chars. CSS does the visual layout separately
-    (LOCKED IRIS-3 — visual cap is 160px ellipsis in StepPickTable).
+    (LOCKED UX-3 — visual cap is 160px ellipsis in StepPickTable).
     """
     return [
         (str(c) if c is not None else "")[:PREVIEW_CELL_CHAR_CAP]

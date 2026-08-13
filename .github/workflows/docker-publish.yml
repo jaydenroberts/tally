@@ -60,9 +60,42 @@ jobs:
           fi
           echo "validate passed: '${TAG}' is in spec"
 
+  # Publish-time gate. This job exists because the tag path had no scan of any
+  # kind: the PR scan runs on `pull_request`, so a tag push reached a published
+  # image without a single byte being examined. That is not theoretical — tag
+  # v1.1.1 published a full personal profile in April 2026 and no gate could see
+  # it, because a diff scan structurally cannot: the content did not change in the
+  # commit the tag points at, it was simply present in the tree.
+  #
+  # So this scans the TREE at the tag, which is the only thing that answers "what
+  # is actually inside the artifact we are about to publish". It gates the build
+  # via `needs`, so a finding means no image is ever pushed.
+  scan-tag-tree:
+    name: scan-tag-tree
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up scan patterns
+        id: patterns
+        uses: ./.github/actions/scan-patterns
+        with:
+          patterns-b64: ${{ secrets.SCAN_PATTERNS_B64 }}
+
+      - name: Personal-data scan — full tree at tag
+        env:
+          PATTERN_DIR: ${{ steps.patterns.outputs.pattern-dir }}
+        run: |
+          set -euo pipefail
+          echo "Scanning every blob in the tree at ${GITHUB_REF_NAME}"
+          ci/scanner.sh --ci --tree HEAD
+
   build-and-push:
     name: build-and-push
-    needs: validate
+    needs: [scan-tag-tree, validate]
     runs-on: ubuntu-24.04
     permissions:
       contents: read        # checkout

@@ -8,7 +8,7 @@ pipeline (preview / patch / commit) is parser-agnostic and operates on the
 
 Sub-modules are named ``csv_parser`` / ``pdf_parser`` (NOT ``csv`` / ``pdf``)
 to avoid shadowing the stdlib ``csv`` module that ``csv_parser`` still uses
-internally for ``csv.reader``. — LOCKED (MASON-1).
+internally for ``csv.reader``. — LOCKED (ENG-1).
 """
 from .types import CandidateTable, ParseResult
 from . import csv_parser, pdf_parser

@@ -486,7 +486,7 @@ class ImportDraft(Base):
     id             = Column(Integer, primary_key=True, index=True)
     user_id        = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     account_id     = Column(Integer, ForeignKey("accounts.id"), nullable=False)
-    filename       = Column(String(255), nullable=False)     # sanitised at ingest (BASTION-11)
+    filename       = Column(String(255), nullable=False)     # sanitised at ingest (SEC-11)
     format         = Column(String(10), nullable=False)      # 'csv' | 'ofx' | 'qif'
     parsed_meta    = Column(JSON, nullable=True)             # row_count, header, detected_account_last4
     column_mapping = Column(JSON, nullable=True)             # {"date": 0, "description": 1, "amount": 2}

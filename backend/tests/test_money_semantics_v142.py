@@ -1,5 +1,5 @@
 """
-Money-semantics regression tests for v1.4.2 (MASON-owned routers).
+Money-semantics regression tests for v1.4.2 (ENG-owned routers).
 
 Covers AUDIT-06/07/08/22/23 + LOWs. The conftest in-memory engine does not
 register PRAGMA foreign_keys=ON, so the AUDIT-08 tests would pass vacuously; we
