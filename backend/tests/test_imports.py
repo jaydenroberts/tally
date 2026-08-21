@@ -19,6 +19,7 @@ Option B — PDF path (§ 6 of the locked spec):
  13. PDF oversized page count → 413 + kind: parse_error
 """
 import io
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
@@ -172,42 +173,98 @@ def test_duplicate_flagging(client, auth_headers, test_account, db):
 # 6. TOCTOU concurrency — two concurrent commits, only one succeeds
 # ---------------------------------------------------------------------------
 
-# QUARANTINED IN CI (2026-07-14; deselected via -m "not thread_race").
-# Failed once under full-suite load on 2026-07-11, then passed 3x3 in
-# isolation. Root cause is the test harness, not the endpoint: the `db`
-# fixture yields ONE SQLAlchemy Session (not thread-safe) and `client`
-# overrides get_db so BOTH racing requests drive that same Session from
-# different threadpool threads. Most interleavings are benign, but under
-# load the loser's post-UPDATE SELECT can interleave with the winner's
-# mid-request commit inside unsynchronized Session state, surfacing a
-# spurious error instead of the expected [200, 409]. Production is
-# unaffected (get_db issues a fresh Session per request; the TOCTOU guard
-# is the atomic UPDATE at the DB level). Proper fix: a dedicated fixture
-# stack with per-request sessions over a shared file-backed SQLite.
-# Deterministic state-machine coverage stays in CI via
-# test_second_commit_sequential_conflicts below.
-@pytest.mark.thread_race
-def test_toctou_concurrent_commit(client, auth_headers, test_account):
-    resp = client.post(
-        f"/api/imports?account_id={test_account.id}",
-        headers=auth_headers,
+def test_toctou_concurrent_commit(race_client, race_auth_headers, race_account, race_engine):
+    """Two genuinely concurrent commits of the same draft: one wins, one 409s.
+
+    BACKLOG-050. This test used to be quarantined because it raced two requests
+    through the one shared Session the default fixtures hand out, which is not
+    thread-safe — so a failure meant "the harness lost a coin toss", not "the
+    endpoint is broken". It now runs on the ``race_*`` fixture stack, which
+    gives every request its own Session over a file-backed database exactly as
+    production does.
+
+    Determinism comes from constraining the schedule rather than hoping for a
+    good one:
+
+      * a Barrier releases both threads into the request at the same moment, so
+        the two commits genuinely overlap instead of relying on thread start-up
+        timing to interleave;
+      * the transition is a single atomic UPDATE guarded on
+        ``status = 'preview_ready'``, and SQLite serialises the two writers, so
+        exactly one UPDATE can match;
+      * the busy timeout makes the second writer wait for the lock rather than
+        fail, removing the one remaining source of nondeterminism.
+
+    Both possible orderings therefore produce the same result, which is what
+    makes a red run mean a real regression.
+    """
+    resp = race_client.post(
+        f"/api/imports?account_id={race_account}",
+        headers=race_auth_headers,
         files={"file": ("stmt.csv", io.BytesIO(SAMPLE_CSV), "text/csv")},
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 201, resp.text
     draft_id = resp.json()["id"]
 
-    results = []
+    start = threading.Barrier(2, timeout=30)
 
     def do_commit():
-        return client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers)
+        start.wait()
+        return race_client.post(
+            f"/api/imports/{draft_id}/commit", headers=race_auth_headers
+        )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(do_commit), pool.submit(do_commit)]
-        for f in as_completed(futures):
-            results.append(f.result().status_code)
+        results = [f.result(timeout=60).status_code for f in as_completed(futures)]
 
-    # Exactly one 200 and one 409
     assert sorted(results) == [200, 409], f"Expected [200, 409], got {sorted(results)}"
+
+    # The loser must not have written anything: the sample CSV has two rows, so
+    # a second successful commit would show up here as four transactions.
+    session = race_engine.connect()
+    try:
+        tx_count = session.exec_driver_sql("SELECT COUNT(*) FROM transactions").scalar()
+        status_value = session.exec_driver_sql(
+            "SELECT status FROM import_drafts WHERE id = ?", (draft_id,)
+        ).scalar()
+    finally:
+        session.close()
+    assert tx_count == 2, f"Expected 2 transactions, got {tx_count}"
+    assert status_value == "committed"
+
+
+def test_toctou_committing_window_rejected(race_client, race_auth_headers, race_account, race_engine):
+    """The exact TOCTOU window is closed: a draft mid-commit rejects a second commit.
+
+    Thread-free companion to the race test above. ``'committing'`` is the
+    intermediate state the atomic UPDATE writes before any transaction rows are
+    created — the window a concurrent request would land in. Setting it directly
+    reproduces that window with no scheduling involved at all, so this assertion
+    holds on every run regardless of machine load.
+    """
+    resp = race_client.post(
+        f"/api/imports?account_id={race_account}",
+        headers=race_auth_headers,
+        files={"file": ("stmt.csv", io.BytesIO(SAMPLE_CSV), "text/csv")},
+    )
+    assert resp.status_code == 201, resp.text
+    draft_id = resp.json()["id"]
+
+    with race_engine.begin() as conn:
+        conn.exec_driver_sql(
+            "UPDATE import_drafts SET status = 'committing' WHERE id = ?", (draft_id,)
+        )
+
+    blocked = race_client.post(
+        f"/api/imports/{draft_id}/commit", headers=race_auth_headers
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["detail"] == "Draft is not in preview_ready state"
+
+    with race_engine.connect() as conn:
+        tx_count = conn.exec_driver_sql("SELECT COUNT(*) FROM transactions").scalar()
+    assert tx_count == 0, "a rejected commit must not write transactions"
 
 
 def test_second_commit_sequential_conflicts(client, auth_headers, test_account):

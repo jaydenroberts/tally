@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
 from ..auth import get_current_user
+from ..money import flow_filter, spend_filter
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -48,11 +49,13 @@ def get_dashboard_summary(
     net_worth_mixed_currency = len(_currencies) > 1
 
     # ── Monthly income / spend ───────────────────────────────────────────────
-    # Canonical exclusion invariant (matches budgets.py + transactions.py):
-    #   income/expense aggregates exclude transfer + savings_transfer legs, and
-    #   debt_payment is excluded from the expense (spend) side (it reduces a
-    #   liability, not a spending category).
-    _EXCLUDED_TYPES = ("transfer", "savings_transfer")
+    # Canonical flow whitelist (app/money.py), shared with budgets.py and
+    # transactions.py: only expense and income rows are money flow. Transfer
+    # legs, savings-transfer legs and debt payments are balance-sheet movements
+    # between the household's own accounts, so they are excluded here — and so
+    # is any transaction type added in future until it is added to the
+    # whitelist. The old filter listed the types to exclude, which meant a new
+    # type counted as ordinary spend or income until every site was updated.
     month_txs = (
         db.query(models.Transaction)
         .join(models.Account)
@@ -60,18 +63,17 @@ def get_dashboard_summary(
             models.Account.is_active == True,
             models.Transaction.date >= month_start,
             models.Transaction.date <= today,
-            models.Transaction.transaction_type.notin_(_EXCLUDED_TYPES),
+            flow_filter(models.Transaction.transaction_type),
         )
         .all()
     )
+    # NOTE (BACKLOG-052): income/spend are split by sign, not by
+    # transaction_type, so a refund reads as income rather than reducing spend.
+    # It cannot be split by type until imports.py stamps a type on the rows it
+    # creates — today every imported row lands as 'expense' regardless of sign,
+    # so trusting the type here would reclassify imported income as spend.
     month_income = sum(t.amount for t in month_txs if t.amount > 0)
-    month_spent = abs(
-        sum(
-            t.amount
-            for t in month_txs
-            if t.amount < 0 and t.transaction_type != "debt_payment"
-        )
-    )
+    month_spent = abs(sum(t.amount for t in month_txs if t.amount < 0))
 
     # Net worth change = this month's net (income minus expenses)
     net_worth_change = month_income - month_spent
@@ -80,6 +82,10 @@ def get_dashboard_summary(
     # Use real calendar-month arithmetic (relativedelta) anchored on the first
     # of the current month. Fixed-width 28-day steps drift and double-count a
     # month when a reference lands on day 29–31 (AUDIT-19).
+    # The series uses the same flow whitelist as month_income/month_spent above,
+    # so each point equals that month's income minus spend. Previously it kept
+    # debt_payment rows that the monthly figures dropped, which made the chart
+    # disagree with the headline numbers for any month containing a debt payment.
     this_month_first = date(today.year, today.month, 1)
     history = []
     for i in range(11, -1, -1):
@@ -92,7 +98,7 @@ def get_dashboard_summary(
                 models.Account.is_active == True,
                 models.Transaction.date >= ref_start,
                 models.Transaction.date <= ref_end,
-                models.Transaction.transaction_type.notin_(_EXCLUDED_TYPES),
+                flow_filter(models.Transaction.transaction_type),
             )
             .scalar()
         )
@@ -121,7 +127,7 @@ def get_dashboard_summary(
                 models.Transaction.date >= month_start,
                 models.Transaction.date <= today,
                 models.Transaction.amount < 0,
-                models.Transaction.transaction_type == "expense",
+                spend_filter(models.Transaction.transaction_type),
             )
             .scalar()
         )

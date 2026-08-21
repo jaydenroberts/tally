@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
 from .. import models, schemas
 from ..auth import get_current_user
+from ..money import spend_filter
 from ..providers import stream_chat, AI_PROVIDER, AI_BASE_URL
 from .chat_sessions import get_owned_session
 
@@ -397,10 +398,7 @@ def _execute_tool(
                     models.Transaction.date >= first_day,
                     models.Transaction.date <= last_day,
                     models.Transaction.is_verified == True,
-                    or_(
-                        models.Transaction.transaction_type == "expense",
-                        models.Transaction.transaction_type == None,
-                    ),
+                    spend_filter(models.Transaction.transaction_type),
                 )
                 .scalar()
             ) or 0.0
@@ -413,10 +411,7 @@ def _execute_tool(
                     models.Transaction.date >= first_day,
                     models.Transaction.date <= last_day,
                     models.Transaction.is_verified == False,
-                    or_(
-                        models.Transaction.transaction_type == "expense",
-                        models.Transaction.transaction_type == None,
-                    ),
+                    spend_filter(models.Transaction.transaction_type),
                 )
                 .scalar()
             ) or 0.0
@@ -653,10 +648,7 @@ def _inject_budget_table(
                 models.Transaction.date >= first_day,
                 models.Transaction.date <= last_day,
                 models.Transaction.is_verified == True,
-                or_(
-                    models.Transaction.transaction_type == "expense",
-                    models.Transaction.transaction_type == None,
-                ),
+                spend_filter(models.Transaction.transaction_type),
             )
             .scalar()
         ) or 0.0
@@ -671,10 +663,7 @@ def _inject_budget_table(
                 models.Transaction.date >= first_day,
                 models.Transaction.date <= last_day,
                 models.Transaction.is_verified == False,
-                or_(
-                    models.Transaction.transaction_type == "expense",
-                    models.Transaction.transaction_type == None,
-                ),
+                spend_filter(models.Transaction.transaction_type),
             )
             .scalar()
         ) or 0.0

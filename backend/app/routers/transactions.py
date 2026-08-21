@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
 from .. import models, schemas
 from ..auth import get_current_user, require_owner
+from ..money import TRANSFER_LEG_TYPES, flow_filter
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
@@ -21,15 +22,26 @@ def _apply_tx_filters(
     transaction_type=None,
     amount_sign=None,
     exclude_transfers=False,
+    flow_only=False,
     date_from=None,
     date_to=None,
 ):
     """Apply the shared transaction filter set (FE-011).
 
     ``amount_sign`` is 'positive' | 'negative' — drives the Income/Expenses
-    segments, which are sign-based rather than a stored column. ``exclude_transfers``
-    keeps transfer pairs out of Income/Expenses/Unverified segments so server-side
-    counts and stats match the page's prior client-side semantics.
+    segments, which are sign-based rather than a stored column.
+
+    Two type filters exist because they answer different questions:
+
+    ``flow_only`` is the money filter. It whitelists the flow types from
+    ``app.money`` so an unrecognised transaction type can never be counted as
+    spend or income. Use it for every aggregate that produces a number.
+
+    ``exclude_transfers`` is the display filter for the Transactions page
+    segments. It hides transfer pair legs and nothing else, deliberately: a row
+    the aggregates do not understand should still be visible in the list — and
+    still counted as needing review — rather than silently disappearing from
+    the user's review queue.
     """
     if account_id is not None:
         q = q.filter(models.Transaction.account_id == account_id)
@@ -46,13 +58,9 @@ def _apply_tx_filters(
     elif amount_sign == "negative":
         q = q.filter(models.Transaction.amount < 0)
     if exclude_transfers:
-        # Canonical exclusion set (mirrored in dashboard.py / budgets.py):
-        # both transfer legs are excluded from income AND expense aggregates.
-        # debt_payment is handled separately (excluded from expenses only) by
-        # the summary aggregate, not here.
-        q = q.filter(
-            models.Transaction.transaction_type.notin_(("transfer", "savings_transfer"))
-        )
+        q = q.filter(models.Transaction.transaction_type.notin_(TRANSFER_LEG_TYPES))
+    if flow_only:
+        q = q.filter(flow_filter(models.Transaction.transaction_type))
     if date_from is not None:
         q = q.filter(models.Transaction.date >= date_from)
     if date_to is not None:
@@ -254,22 +262,21 @@ def transaction_summary(
     over ALL time (matches the page's prior whole-dataset semantic), independent of the
     date window used for the MTD money figures.
     """
+    # Money figures use the flow whitelist (app/money.py), so transfer legs,
+    # savings-transfer legs, debt payments — and any type added later — are
+    # excluded from both sides by construction rather than by a list of
+    # exceptions that has to be kept in sync at every call site.
     money_q = _apply_tx_filters(
         db.query(models.Transaction),
-        account_id=account_id, exclude_transfers=True,
+        account_id=account_id, flow_only=True,
         date_from=date_from, date_to=date_to,
     )
     income = money_q.with_entities(
         func.coalesce(func.sum(models.Transaction.amount), 0.0)
     ).filter(models.Transaction.amount > 0).scalar() or 0.0
-    # debt_payment legs are excluded from the expense aggregate to match budgets.py
-    # (a debt payment is a balance-sheet transfer, not discretionary spend).
     expenses = money_q.with_entities(
         func.coalesce(func.sum(models.Transaction.amount), 0.0)
-    ).filter(
-        models.Transaction.amount < 0,
-        models.Transaction.transaction_type != "debt_payment",
-    ).scalar() or 0.0
+    ).filter(models.Transaction.amount < 0).scalar() or 0.0
 
     unverified_count = _apply_tx_filters(
         db.query(models.Transaction),
