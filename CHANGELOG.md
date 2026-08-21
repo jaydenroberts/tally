@@ -4,6 +4,31 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.4.5] - 2026-08-21
+
+Backup and export, plus corrections to how spending and income are counted. This release puts a verified safety net under your data before the next upgrade changes the database structure.
+
+### Added
+
+- **Export your data from Settings.** Download a backup of the database, export everything, or export your transactions to CSV.
+- **Automatic snapshot before an upgrade.** Whenever a new version needs to change the database structure, Tally first takes a snapshot and verifies it can be read back. If that snapshot cannot be produced and verified, Tally refuses to start rather than change your data unprotected.
+- **Snapshots are rotated automatically** so the backup folder cannot grow without bound, and any partial file left behind by an interrupted run is cleaned up on the next start.
+- **Backup and restore guide** in the documentation, covering how to restore a snapshot by hand.
+
+### Fixed
+
+- **The twelve-month trend chart no longer disagrees with the headline spend figure.** For any month containing a debt payment, the chart and the number printed above it were counting different things.
+- **Spending and income are now worked out from an explicit list of what counts**, rather than a list of what to leave out. The old approach meant a newly added transaction type would silently be counted as ordinary spending or income until every calculation was updated by hand.
+- **The concurrent-import test is no longer unreliable** and has been returned to the test suite, so a red run once again means a real problem.
+
+### Notes
+
+- **Your trend chart will change if you record debt payments.** Those months will read higher than before. The previous figures were too low, because a payment against a debt was being counted as spending. Headline income and spend figures are unchanged.
+- **Known limitation.** Income and spending are still separated by whether an amount is positive or negative rather than by its type, so a refund still reads as income instead of reducing spending. Fixing this properly requires the import pipeline to label the rows it creates first, and is tracked for a later release.
+- Upgrade is safe and in-place. No manual steps, and the new snapshot runs automatically.
+
+---
+
 ## [1.4.4.1] - 2026-07-21
 
 Security-patch hotfix — dependency version bumps that close known vulnerabilities in third-party libraries. No application behaviour changes.
