@@ -16,6 +16,7 @@ This documentation covers Tally v1.4.3.
 - Tracks debts with payment logging, payoff projections, and interest-free period warnings
 - Provides an AI financial coaching interface powered by configurable personas
 - Supports multiple users with owner and viewer roles
+- Backs itself up automatically before an upgrade, and exports everything on demand
 
 ---
 
@@ -33,7 +34,8 @@ This documentation covers Tally v1.4.3.
 | [Savings](savings.md) | Savings goals, contributions, account allocation, withdrawals, projections |
 | [Debt](debt.md) | Debt tracker, payment logging, payment linkage, payoff projection |
 | [AI Coach](ai-coach.md) | AI chat feature, personas, data access levels |
-| [Settings](settings.md) | Profile, users, roles, personas, general preferences |
+| [Settings](settings.md) | Profile, users, roles, personas, data exports, general preferences |
+| [Backup & Restore](backup-restore.md) | Automatic pre-upgrade snapshots, exports, and the restore procedure |
 
 ---
 

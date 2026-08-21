@@ -19,6 +19,9 @@ Tally is configured through environment variables passed to the Docker container
 | `AUTH_RATE_LIMIT_WINDOW_SECONDS` | No | `60` | Length of the auth rate-limit window, in seconds. |
 | `MAX_UPLOAD_BYTES` | No | `10485760` | Maximum size (in bytes) of a statement file uploaded through the import wizard. Larger uploads are rejected. |
 | `RECOVERY_TOKEN` | No | — | When set, activates the password recovery endpoint (`POST /api/auth/recover`). Remove after use. See [Account Recovery](settings.md#account-recovery). |
+| `BACKUP_DIR` | No | `backups` beside the database | Where automatic pre-upgrade snapshots are written. With the shipped defaults this is `/data/backups`. |
+| `BACKUP_KEEP` | No | `5` | How many automatic snapshots to keep. Older ones are deleted after a new one is written. Minimum 1. |
+| `PRE_MIGRATION_BACKUP` | No | `on` | Set to `off` to skip the automatic snapshot taken before an upgrade changes the database. See [Backup & Restore](backup-restore.md). |
 
 **Warning:** If you change `SECRET_KEY` after users have logged in, all existing sessions will be invalidated. Users will need to log in again.
 
@@ -28,7 +31,7 @@ Tally is configured through environment variables passed to the Docker container
 
 | Container path | Purpose | Recommended host path |
 |----------------|---------|----------------------|
-| `/data` | Persistent storage for the SQLite database | `/mnt/user/appdata/tally` |
+| `/data` | Persistent storage for the SQLite database and automatic backups | `/mnt/user/appdata/tally` |
 | `/financial-data` | Read-only directory of bank statement files for import | `/mnt/user/financial-data` |
 
 The `/financial-data` volume is optional. If you do not mount it, file-picker import will be unavailable, but you can still import by uploading files directly in the import UI.
@@ -75,6 +78,8 @@ Tally uses SQLite with WAL mode and foreign key enforcement enabled. The databas
 
 Do not modify the database file directly while the container is running. Always stop the container before performing manual database operations.
 
+Before an upgrade applies any change to the database, Tally writes a verified snapshot to `BACKUP_DIR`. If that snapshot cannot be created, Tally does not start — see [Backup & Restore](backup-restore.md).
+
 ---
 
 ## Persistent Data
@@ -89,3 +94,4 @@ To migrate Tally to a new server: stop the container, copy the `/data` directory
 
 - [Getting Started](getting-started.md) — Docker install and first login
 - [Settings](settings.md) — in-app preferences and user management
+- [Backup & Restore](backup-restore.md) — automatic snapshots, exports, and restoring

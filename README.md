@@ -36,6 +36,7 @@ A self-hosted personal finance web application for households. Track accounts, t
 - **Closed account lifecycle** — mark accounts as closed rather than deleting them
 - **CSV/PDF import** from your existing financial files (read-only access)
 - **AI chat interface** — ask questions about your finances in plain language; powered by Anthropic, OpenAI, or any OpenAI-compatible endpoint (e.g. Ollama); persona system controls data access and write permissions
+- **Backup & export** — automatic verified snapshot before every upgrade; one-click database backup, full JSON export, and transactions CSV from Settings → Data
 - **Mobile navigation** — slide-in drawer on small screens
 - **Dracula-inspired UI** with custom logo and favicon
 - Single Docker container — easy self-hosting
@@ -191,7 +192,8 @@ Full documentation is available in the [`docs/`](docs/) directory:
 | [Debt Tracker](docs/debt.md) | Debt tracking, payment logging, paydown strategies |
 | [CSV & PDF Import](docs/import.md) | Importing bank statements, column mapping, reconciliation |
 | [AI Coach](docs/ai-coach.md) | Chat interface, personas, data access levels |
-| [Settings](docs/settings.md) | User management, personas, preferences |
+| [Settings](docs/settings.md) | User management, personas, data exports, preferences |
+| [Backup & Restore](docs/backup-restore.md) | Automatic snapshots, exports, and the restore procedure |
 
 ---
 
