@@ -737,9 +737,9 @@ run_selftest() {
     # another document by name. All MUST be clean. Built at runtime so no literal
     # itself becomes a scannable slug in this source.
     local _sl1 _sl2 _sl3
-    _sl1="2026-07-29-scanner-merge-""blindspot-P1"
-    _sl2="2026-07-30-""SECURITY-merge-scan-fix"
-    _sl3="2026-07-27-""scan-gate-FP-standing-decision"
+    _sl1="2026-09-14-vault-sync-drift-""P2"
+    _sl2="2026-09-15-""GATEWAY-audit-merge-note"
+    _sl3="2026-09-16-relay-timeout-""FP-review"
     _st "See ${_sl1}.md for detail." clean 'FP document slug with P1 tag'
     _st "See ${_sl2}.md for detail." clean 'FP document slug with all-caps word'
     _st "See ${_sl3}.md for detail." clean 'FP document slug with FP tag'

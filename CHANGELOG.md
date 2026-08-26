@@ -4,7 +4,7 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
-## [1.4.5] - 2026-08-21
+## [1.4.5] - 2026-08-26
 
 Backup and export, plus corrections to how spending and income are counted. This release puts a verified safety net under your data before the next upgrade changes the database structure.
 
