@@ -68,6 +68,42 @@
 #   is a ROOT EDIT OF THE CONFIG — never an edit of this file.
 #
 # Logs: <resolved-log-dir>/YYYYMMDDTHHMMSSZ-scanner.log
+#
+# Fail-closed discipline — "absent" and "unreadable" are DIFFERENT answers:
+#   Every step that decides whether content gets examined must capture the exit
+#   code SEPARATELY from the output, and fail closed on the code. Inferring
+#   success from the shape of the output ("empty, so there was nothing to do")
+#   silently merges "nothing to scan" with "I could not look", and the second one
+#   is a complete bypass wearing the first one's clothes.
+#
+#   This is written here rather than only at the fix site because it is a CLASS,
+#   not an instance: the same defect has been found three separate times in the
+#   tooling around this gate. The most recent and most serious was in
+#   run_prereceive below, where a `git rev-list` FAILURE was funnelled by
+#   `2>/dev/null || echo ""` into the same empty string a legitimately empty
+#   enumeration produces. The ref was skipped, "no new commits" was logged, and
+#   the gate returned 0 having examined nothing. Where `--prereceive` is the only
+#   server-side gate — no second scan, no full-tree backstop — that one line was a
+#   total bypass. The rest of run_prereceive was already meticulously fail-closed
+#   (cat-file -e type assertion, explicit diff-tree rc check). The defect was at
+#   the one place upstream of all of it.
+#
+#   The tree/history modes carry the same discipline in their own shape: a
+#   ZERO-BLOB enumeration is treated as an error, never as a clean result.
+#
+# NUL bytes in content reads (blob, --file, --tree and --history):
+#   Command substitution DISCARDS NUL bytes and a bash variable cannot hold one at
+#   all, so raw NULs vanished between the read and scan_text — bash only warned
+#   "ignored null byte in input" on stderr, which nobody reads. Stripping is not
+#   neutral: it JOINS the bytes either side, so a word-bounded pattern (\bName\b)
+#   that matched while the NUL supplied its word boundary stopped matching once the
+#   NUL was gone. Binary blobs could therefore under-detect.
+#   Every content read now passes through `tr '\0' '\n'` BEFORE the bytes reach
+#   bash, so the byte that supplied a boundary still supplies one. For text
+#   content this is a no-op (no NULs to convert), so detection semantics for text
+#   are unchanged; for binary it can only restore a boundary, never remove one.
+#   Deliberately NOT done: flagging or rejecting a NUL-bearing blob outright. See
+#   the rationale at the read site in scan_diff_record.
 
 set -uo pipefail
 
@@ -672,8 +708,38 @@ scan_diff_record() {
     # working tree), and it returns rc=0 while printing a directory listing when
     # the path is a TREE. Both are wrong for a gate. cat-file returns raw blob
     # bytes or a non-zero rc, period.
-    content=$(git cat-file blob "${commit}:${filepath}" 2>/dev/null) \
-        || _err_exit "cannot read blob ${filepath} in ${commit:0:8} — failing closed"
+    #
+    # NUL SAFETY (see the header). `tr` maps every NUL to a NEWLINE before the
+    # bytes reach bash, because bash cannot hold a NUL in a variable and command
+    # substitution silently DROPS them — which JOINS the bytes either side and
+    # dissolves the word boundary a `\b`-anchored pattern was matching on. A blob
+    # carrying <NUL>Name<NUL> matched before the strip and not after it.
+    #
+    # WHY newline and not deletion-with-a-flag: newline is what the NUL already
+    # was for matching purposes — a non-word, non-alnum separator — so for TEXT
+    # content (no NULs present) this is a byte-for-byte no-op and detection
+    # semantics are untouched, while for binary it can only RESTORE a boundary,
+    # never remove one. It cannot add a spurious match across the gap either; that
+    # was the old stripping behaviour, which is what joined the two sides.
+    #
+    # WHY NOT flag/reject a NUL-bearing blob, which was the considered
+    # alternative: where this hook is the only server-side gate, and the repo
+    # legitimately carries binary (images, PDFs), rejecting every binary blob
+    # would block ordinary pushes, and a gate that blocks ordinary work gets
+    # routed around — an availability failure of THIS gate is a security failure.
+    # The residual is stated plainly instead: content that is COMPRESSED or
+    # ENCODED (PDF streams, PNG, gzip, office formats) is unreadable to a regex
+    # scanner no matter how it is read, and no NUL handling changes that. What is
+    # fixed here is the narrower, real defect — plain text sitting next to a NUL
+    # inside an otherwise binary container.
+    #
+    # `set -o pipefail` is on (top of file) and is inherited by this substitution's
+    # subshell, so a `git cat-file` failure still reaches the `if` and fails
+    # closed; tr's rc=0 cannot mask it (verified). tr reads to EOF, so unlike the
+    # `grep -q` form documented at the top of this file no SIGPIPE race exists.
+    if ! content=$(git cat-file blob "${commit}:${filepath}" 2>/dev/null | LC_ALL=C tr '\0' '\n'); then
+        _err_exit "cannot read blob ${filepath} in ${commit:0:8} — failing closed"
+    fi
     scan_text "${filepath}@${commit:0:8}" "${content}"
     return 0
 }
@@ -737,7 +803,7 @@ run_selftest() {
     # another document by name. All MUST be clean. Built at runtime so no literal
     # itself becomes a scannable slug in this source.
     local _sl1 _sl2 _sl3
-    _sl1="2026-09-14-vault-sync-drift-""P2"
+    _sl1="2026-09-14-config-sync-drift-""P2"
     _sl2="2026-09-15-""GATEWAY-audit-merge-note"
     _sl3="2026-09-16-relay-timeout-""FP-review"
     _st "See ${_sl1}.md for detail." clean 'FP document slug with P1 tag'
@@ -1193,6 +1259,167 @@ EOF
     _match "${out}" 'selftest child: reached' \
         || { echo "SELFTEST FAIL (r4): selftest child did not reach dispatch under a wrong pin" >&2; fails=$((fails+1)); }
 
+    # ---------- (s) REV-LIST FAIL-OPEN AT THE ENUMERATION STEP (HIGH) ---------
+    # run_prereceive's entry point used `2>/dev/null || echo ""`, so a rev-list
+    # FAILURE produced the same empty string a legitimate empty enumeration does:
+    # ref skipped, "no new commits" logged, rc=0, NOTHING examined. Where
+    # `--prereceive` is the only server-side gate that is a total bypass.
+    # (s3) is the load-bearing control: it proves the fix distinguishes FAILED from
+    # SUCCEEDED-EMPTY rather than just failing closed on empty, which would reject
+    # ordinary pushes.
+    local srepo="${tmproot}/srepo" s_out s_rc s_new
+    local s_absent="1234567890abcdef1234567890abcdef12345678"
+    local s_zero="0000000000000000000000000000000000000000"
+    mkdir -p "${srepo}"
+    (
+        cd "${srepo}" || exit 9
+        git init -q
+        git config user.email t@example.invalid; git config user.name tester
+        printf 'leak ACMEHOLDINGS_SENTINEL planted\n' > leak.txt
+        git add leak.txt; git commit -q -m base
+    ) || { echo "SELFTEST FAIL (s): repo setup" >&2; fails=$((fails+1)); }
+    s_new=$(cd "${srepo}" && git rev-parse HEAD)
+    # (s1) UNRESOLVABLE oldrev on an existing ref -> rev-list errors. Pre-fix: rc=0.
+    s_out=$(cd "${srepo}" && printf '%s %s %s\n' "${s_absent}" "${s_new}" "refs/heads/main" \
+             | env PATTERN_DIR="${ptmp}" "${self}" --ci --prereceive 2>&1); s_rc=$?
+    [[ ${s_rc} -eq 2 ]] || { echo "SELFTEST FAIL (s1): rev-list failure did not fail closed (rc=${s_rc}) — enumeration fail-open, ref skipped unexamined" >&2; fails=$((fails+1)); }
+    # (s2) NEW ref with an unresolvable newrev -> the preferred enumeration AND the
+    #      full-history fallback both fail. Failure of the LAST resort is fatal.
+    s_out=$(cd "${srepo}" && printf '%s %s %s\n' "${s_zero}" "${s_absent}" "refs/heads/new" \
+             | env PATTERN_DIR="${ptmp}" "${self}" --ci --prereceive 2>&1); s_rc=$?
+    [[ ${s_rc} -eq 2 ]] || { echo "SELFTEST FAIL (s2): unresolvable new ref did not fail closed (rc=${s_rc})" >&2; fails=$((fails+1)); }
+    # (s3) CONTROL — legitimately EMPTY enumeration must still ACCEPT. Every commit
+    #      on this "new" ref is already reachable from a branch, so
+    #      `--not --branches` succeeds with no output. rc must be 0: not 2 (would
+    #      mean empty was treated as failure) and not 1 (would mean the fallback
+    #      ran anyway and rescanned the planted leak — the fallback chain's intent
+    #      is prefer-then-recover, not always-run).
+    s_out=$(cd "${srepo}" && printf '%s %s %s\n' "${s_zero}" "${s_new}" "refs/heads/dup" \
+             | env PATTERN_DIR="${ptmp}" "${self}" --ci --prereceive 2>&1); s_rc=$?
+    [[ ${s_rc} -eq 0 ]] || { echo "SELFTEST FAIL (s3): legitimately empty enumeration no longer accepted (rc=${s_rc}) — over-correction, ordinary pushes would be rejected" >&2; fails=$((fails+1)); }
+    _match "${s_out}" 'no new commits' \
+        || { echo "SELFTEST FAIL (s3): empty enumeration not logged as such" >&2; fails=$((fails+1)); }
+
+    # ---------- (t) NUL BYTES IN CONTENT READS (LOW, pre-existing) ------------
+    # Command substitution drops NULs, which JOINS the bytes either side and
+    # dissolves the word boundary a `\b`-anchored pattern matched on. Driven
+    # through the (q) sentinel pattern dir because `\bZQX\b` is the discriminator:
+    # a substring pattern would match either way, only a word-BOUNDED one exposes
+    # the defect. Pre-fix these read as "abcZQXdef" and did not match.
+    local n_file="${tmproot}/nul-hit.bin" n_clean="${tmproot}/nul-clean.bin" n_rc n_out
+    printf 'abc\0ZQX\0def\n' > "${n_file}"
+    printf 'abc\0ordinary binary filler\0def\n' > "${n_clean}"
+    env PATTERN_DIR="${qp}" "${self}" --ci --file "${n_file}" >/dev/null 2>&1; n_rc=$?
+    [[ ${n_rc} -eq 1 ]] || { echo "SELFTEST FAIL (t1): NUL-adjacent match lost on the --file read (rc=${n_rc}) — NUL stripping under-detects" >&2; fails=$((fails+1)); }
+    # (t2) CONTROL — a NUL-bearing blob with nothing sensitive must stay CLEAN.
+    #      Binary is scanned, never rejected for being binary (see the read site).
+    env PATTERN_DIR="${qp}" "${self}" --ci --file "${n_clean}" >/dev/null 2>&1; n_rc=$?
+    [[ ${n_rc} -eq 0 ]] || { echo "SELFTEST FAIL (t2): clean NUL-bearing file flagged (rc=${n_rc}) — binary must be scanned, not rejected" >&2; fails=$((fails+1)); }
+    # (t3) The same read on the BLOB path (pre-receive), which is the one that
+    #      actually gates pushes.
+    local nrepo="${tmproot}/nrepo" nbase nnew
+    mkdir -p "${nrepo}"
+    (
+        cd "${nrepo}" || exit 9
+        git init -q
+        git config user.email t@example.invalid; git config user.name tester
+        printf 'base\n' > keep.txt
+        git add -A; git commit -q -m base
+        printf 'abc\0ZQX\0def\n' > bin.dat
+        git add bin.dat; git commit -q -m nul-blob
+    ) || { echo "SELFTEST FAIL (t3): repo setup" >&2; fails=$((fails+1)); }
+    nbase=$(cd "${nrepo}" && git rev-parse HEAD^)
+    nnew=$(cd "${nrepo}" && git rev-parse HEAD)
+    n_out=$(cd "${nrepo}" && printf '%s %s %s\n' "${nbase}" "${nnew}" "refs/heads/t" \
+             | env PATTERN_DIR="${qp}" "${self}" --ci --prereceive 2>&1); n_rc=$?
+    [[ ${n_rc} -eq 1 ]] || { echo "SELFTEST FAIL (t3): NUL-adjacent match lost on the blob read (rc=${n_rc}) — binary blobs under-detect at the push gate" >&2; fails=$((fails+1)); }
+    if _match "${n_out}" 'ignored null byte'; then
+        echo "SELFTEST FAIL (t3): bash still discarded NUL bytes — the read is not NUL-safe" >&2; fails=$((fails+1)); fi
+
+    # ---------- (u) TREE + HISTORY MODES -------------------------------------
+    # These two modes are what gate PUBLISHING (a tag carries a tree, not a diff),
+    # and until now nothing regression-tested them at all. The cases below are the
+    # minimum that keeps them honest: they must FIND, they must ACCEPT clean, they
+    # must fail closed rather than silently examine nothing, and the --history
+    # baseline must accept only the exact object id it names.
+    local urepo="${tmproot}/urepo" u_out u_rc u_leakoid u_base="${tmproot}/ubase.txt"
+    mkdir -p "${urepo}"
+    (
+        cd "${urepo}" || exit 9
+        git init -q
+        git config user.email t@example.invalid; git config user.name tester
+        printf 'clean baseline content\n' > keep.txt
+        git add -A; git commit -q -m base
+        git tag v0.0.1-clean
+        printf 'leak ACMEHOLDINGS_SENTINEL planted\n' > leak.txt
+        git add -A; git commit -q -m leaky
+        git tag v0.0.2-leaky
+    ) || { echo "SELFTEST FAIL (u): repo setup" >&2; fails=$((fails+1)); }
+    # (u1) A tree carrying a leak must be REJECTED at the tag, which is exactly the
+    #      path a diff-based gate cannot see.
+    u_out=$(cd "${urepo}" && env PATTERN_DIR="${ptmp}" "${self}" --ci --tree v0.0.2-leaky 2>&1); u_rc=$?
+    [[ ${u_rc} -eq 1 ]] || { echo "SELFTEST FAIL (u1): --tree did not reject a leaky tree (rc=${u_rc})" >&2; fails=$((fails+1)); }
+    # (u2) CONTROL — the earlier, clean tag must still be ACCEPTED, or the mode is
+    #      unusable as a release gate.
+    u_out=$(cd "${urepo}" && env PATTERN_DIR="${ptmp}" "${self}" --ci --tree v0.0.1-clean 2>&1); u_rc=$?
+    [[ ${u_rc} -eq 0 ]] || { echo "SELFTEST FAIL (u2): --tree rejected a clean tree (rc=${u_rc})" >&2; fails=$((fails+1)); }
+    # (u3) A ref that does not resolve must fail CLOSED (rc=2), never accept.
+    u_out=$(cd "${urepo}" && env PATTERN_DIR="${ptmp}" "${self}" --ci --tree no-such-ref 2>&1); u_rc=$?
+    [[ ${u_rc} -eq 2 ]] || { echo "SELFTEST FAIL (u3): --tree on an unresolvable ref did not fail closed (rc=${u_rc})" >&2; fails=$((fails+1)); }
+    # (u4) ZERO-BLOB tree must fail closed, not report clean. "Examined nothing"
+    #      and "found nothing" are different answers (see the header).
+    (
+        cd "${urepo}" || exit 9
+        git commit -q --allow-empty -m empty-tree-marker
+        git read-tree --empty
+        git commit -q -m emptied 2>/dev/null || true
+    ) >/dev/null 2>&1
+    local u_emptytree
+    u_emptytree=$(cd "${urepo}" && git hash-object -t tree /dev/null)
+    u_out=$(cd "${urepo}" && env PATTERN_DIR="${ptmp}" "${self}" --ci --tree "${u_emptytree}" 2>&1); u_rc=$?
+    [[ ${u_rc} -eq 2 ]] || { echo "SELFTEST FAIL (u4): --tree on a ZERO-BLOB tree did not fail closed (rc=${u_rc}) — examined-nothing reported as clean" >&2; fails=$((fails+1)); }
+    # (u5) --history must find the leak anywhere in history with no baseline.
+    u_out=$(cd "${urepo}" && env PATTERN_DIR="${ptmp}" SCANNER_HISTORY_BASELINE="${tmproot}/nonexistent-baseline.txt" \
+             "${self}" --ci --history 2>&1); u_rc=$?
+    [[ ${u_rc} -eq 1 ]] || { echo "SELFTEST FAIL (u5): --history missed a leak present in history (rc=${u_rc})" >&2; fails=$((fails+1)); }
+    _match "${u_out}" 'HISTORY-FINDING' \
+        || { echo "SELFTEST FAIL (u5): --history finding not reported with its object id" >&2; fails=$((fails+1)); }
+    # (u6) Baselining that exact object id accepts it — and ONLY it. This is the
+    #      property that makes the baseline reviewable rather than a mute button:
+    #      an object id IS its content, so a line can never whitelist anything new.
+    u_leakoid=$(printf '%s' "${u_out}" | sed -n 's/^HISTORY-FINDING \([0-9a-f]\{40\}\) .*/\1/p' | head -1)
+    if [[ -z "${u_leakoid}" ]]; then
+        echo "SELFTEST FAIL (u6): could not recover the finding's object id from --history output" >&2; fails=$((fails+1))
+    else
+        printf '# test baseline\n%s\n' "${u_leakoid}" > "${u_base}"
+        u_out=$(cd "${urepo}" && env PATTERN_DIR="${ptmp}" SCANNER_HISTORY_BASELINE="${u_base}" \
+                 "${self}" --ci --history 2>&1); u_rc=$?
+        [[ ${u_rc} -eq 0 ]] || { echo "SELFTEST FAIL (u6): baselined object id still failed the sweep (rc=${u_rc})" >&2; fails=$((fails+1)); }
+    fi
+    # (u7) A MALFORMED baseline entry must fail closed. A baseline that silently
+    #      ignores junk is a baseline that can be made to accept anything.
+    printf 'not-a-valid-object-id\n' > "${u_base}"
+    u_out=$(cd "${urepo}" && env PATTERN_DIR="${ptmp}" SCANNER_HISTORY_BASELINE="${u_base}" \
+             "${self}" --ci --history 2>&1); u_rc=$?
+    [[ ${u_rc} -eq 2 ]] || { echo "SELFTEST FAIL (u7): malformed baseline entry did not fail closed (rc=${u_rc})" >&2; fails=$((fails+1)); }
+    # (u8) The pattern-file PATH rule: pattern files are the personal-data wordlist
+    #      this gate protects and provably cannot detect in themselves, so the path
+    #      alone must be a finding.
+    local u_pf="${tmproot}/pf/.ci/patterns/patterns-x.txt"
+    mkdir -p "$(dirname "${u_pf}")"
+    printf 'harmless placeholder line\n' > "${u_pf}"
+    (cd "${tmproot}/pf" && env PATTERN_DIR="${ptmp}" "${self}" --ci --file ".ci/patterns/patterns-x.txt") >/dev/null 2>&1; u_rc=$?
+    [[ ${u_rc} -eq 1 ]] || { echo "SELFTEST FAIL (u8): a scan-gate pattern file path was not flagged (rc=${u_rc})" >&2; fails=$((fails+1)); }
+    # (u9) ZERO-BLOB history must fail closed for the same reason as (u4). Without
+    #      this the sweep reports CLEAN on a repo it could not enumerate, which is
+    #      the exact "examined nothing" shape the header warns about.
+    local uhrepo="${tmproot}/uhrepo"
+    mkdir -p "${uhrepo}"
+    (cd "${uhrepo}" && git init -q) || { echo "SELFTEST FAIL (u9): repo setup" >&2; fails=$((fails+1)); }
+    u_out=$(cd "${uhrepo}" && env PATTERN_DIR="${ptmp}" SCANNER_HISTORY_BASELINE="${tmproot}/nonexistent-baseline.txt" \
+             "${self}" --ci --history 2>&1); u_rc=$?
+    [[ ${u_rc} -eq 2 ]] || { echo "SELFTEST FAIL (u9): --history on a ZERO-BLOB repo did not fail closed (rc=${u_rc}) — examined-nothing reported as clean" >&2; fails=$((fails+1)); }
+
     if [[ ${fails} -eq 0 ]]; then echo "[scan-gate] selftest PASS"; return 0; fi
     echo "[scan-gate] selftest FAILED — ${fails} case(s)" >&2; return 1
 }
@@ -1202,13 +1429,48 @@ run_prereceive() {
     while read -r oldrev newrev refname; do
         _log "ref: ${refname}  old=${oldrev:0:8}  new=${newrev:0:8}"
         [[ "${newrev}" == "0000000000000000000000000000000000000000" ]] && _log "skip: deletion" && continue
+        # ENUMERATION. This is the single step that decides whether ANY content is
+        # examined, so it carries the same fail-closed discipline as every step
+        # below it (see "Fail-closed discipline" in the header).
+        #
+        # The previous form was
+        #     commits=$(git rev-list … 2>/dev/null || git rev-list … 2>/dev/null || echo "")
+        # which funnelled a rev-list FAILURE — unresolvable base sha, corrupt or
+        # missing object, an object the hook cannot reach — into the SAME empty
+        # string a legitimate empty enumeration produces. The line below then
+        # logged "no new commits", skipped the ref, and the function returned 0
+        # having examined nothing.
+        #
+        # THE SUBTLETY: empty is NOT an error here. `rev-list <new> --not
+        # --branches` is legitimately empty when every commit on the pushed ref is
+        # already reachable from another branch — a normal push that correctly
+        # needs no scanning. So the distinction that must be made is FAILED vs
+        # SUCCEEDED-WITH-NO-OUTPUT, and the only way to make it is to capture rc
+        # separately from stdout, exactly as the diff-tree call below does.
+        # Failing closed on empty instead would reject ordinary pushes and wedge
+        # the gate; selftest case (s3) is the control that keeps that honest.
+        #
+        # The new-ref arm keeps its deliberate FALLBACK CHAIN (prefer the
+        # --not --branches enumeration, fall back to full history) — only failure
+        # of the LAST resort is fatal. stderr is suppressed on the preferred
+        # attempt, whose failure is routine and recovered from, and left VISIBLE on
+        # the two fatal attempts: git's own "fatal: bad object …" is what tells the
+        # pusher why the gate closed, and rc=2 alone would not.
         local commits=""
         if [[ "${oldrev}" == "0000000000000000000000000000000000000000" ]]; then
-            commits=$(git rev-list "${newrev}" --not --branches 2>/dev/null || git rev-list "${newrev}" 2>/dev/null || echo "")
+            if ! commits=$(git rev-list "${newrev}" --not --branches 2>/dev/null); then
+                if ! commits=$(git rev-list "${newrev}"); then
+                    _err_exit "rev-list failed for new ref ${refname} (${newrev:0:8}) — failing closed"
+                fi
+            fi
         else
-            commits=$(git rev-list "${oldrev}..${newrev}" 2>/dev/null || echo "")
+            if ! commits=$(git rev-list "${oldrev}..${newrev}"); then
+                _err_exit "rev-list ${oldrev:0:8}..${newrev:0:8} failed for ${refname} — failing closed"
+            fi
         fi
-        [[ -z "${commits}" ]] && _log "no new commits" && continue
+        # Reached ONLY after a rev-list that exited 0, so empty here means the
+        # enumeration really is empty — not that it could not be performed.
+        [[ -z "${commits}" ]] && _log "no new commits (enumeration succeeded, empty)" && continue
         while IFS= read -r commit; do
             [[ -z "${commit}" ]] && continue
             _log "commit: ${commit:0:8}"
@@ -1274,7 +1536,11 @@ run_file() {
     _log "scanning file: ${TARGET_FILE}"
     scan_filename "${TARGET_FILE}"
     local content=""
-    content=$(cat "${TARGET_FILE}") || _err_exit "Cannot read file: ${TARGET_FILE}"
+    # NUL SAFETY — same defect and same reasoning as the blob read in
+    # scan_diff_record; see the block there and the header. A redirect rather than
+    # `cat |`: one fewer process, no pipeline at all, and tr's own rc is the
+    # substitution's rc, so an unreadable file still fails closed.
+    content=$(LC_ALL=C tr '\0' '\n' < "${TARGET_FILE}") || _err_exit "Cannot read file: ${TARGET_FILE}"
     scan_text "${TARGET_FILE}" "${content}"
     _log "scan complete — findings=${FINDINGS}"
     [[ ${FINDINGS} -gt 0 ]] && { echo "scan-gate: write blocked - ${FINDINGS} finding(s). See ${LOG_FILE:-stderr}" >&2; return 1; }
@@ -1316,8 +1582,13 @@ run_tree() {
             || _err_exit "unexpected object type ${otype} for ${path} — failing closed"
         nblob=$((nblob + 1))
         scan_filename "${path}"
-        content=$(git cat-file blob "${oid}" 2>/dev/null) \
-            || _err_exit "cannot read blob ${oid:0:8} (${path}) — failing closed"
+        # NUL-safe read — same reasoning as the blob read in scan_diff_record.
+        # A tree scan is the mode most likely to meet binary content, so it is
+        # the LAST place that should silently drop the byte supplying a word
+        # boundary.
+        if ! content=$(git cat-file blob "${oid}" 2>/dev/null | LC_ALL=C tr '\0' '\n'); then
+            _err_exit "cannot read blob ${oid:0:8} (${path}) — failing closed"
+        fi
         scan_text "${path}" "${content}"
     done < <(git ls-tree -r -z "${ref}")
     # A zero-blob enumeration means the scan examined nothing. That must never be
@@ -1376,8 +1647,10 @@ run_history() {
         # a finding is only actionable if you can name the object it is in.
         local label="${path:-<unnamed>}@${oid:0:8}"
         scan_filename "${path:-unnamed}"
-        content=$(git cat-file blob "${oid}" 2>/dev/null) \
-            || _err_exit "cannot read blob ${oid:0:8} — failing closed"
+        # NUL-safe read — see scan_diff_record.
+        if ! content=$(git cat-file blob "${oid}" 2>/dev/null | LC_ALL=C tr '\0' '\n'); then
+            _err_exit "cannot read blob ${oid:0:8} — failing closed"
+        fi
         before=${FINDINGS}
         scan_text "${label}" "${content}"
         (( FINDINGS > before )) && echo "HISTORY-FINDING ${oid} ${path:-<unnamed>}" >&2
