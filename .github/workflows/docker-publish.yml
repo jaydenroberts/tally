@@ -93,9 +93,22 @@ jobs:
           echo "Scanning every blob in the tree at ${GITHUB_REF_NAME}"
           ci/scanner.sh --ci --tree HEAD
 
+  # Same publish-time-gate reasoning as scan-tag-tree above, applied to known
+  # advisories instead of personal data. A dependency audit that ran against
+  # main days or weeks ago does not establish that the base images are still
+  # clean by the time this tag is built. This scans the actual artifact,
+  # immediately before it ships, and gates the push via `needs`.
+  scan-image:
+    name: scan-image
+    needs: [validate]
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/trivy-scan.yml
+
   build-and-push:
     name: build-and-push
-    needs: [scan-tag-tree, validate]
+    needs: [scan-tag-tree, validate, scan-image]
     runs-on: ubuntu-24.04
     permissions:
       contents: read        # checkout
