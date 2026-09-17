@@ -8,15 +8,23 @@ on:
       - "frontend/package.json"
       - "frontend/package-lock.json"
       - "Dockerfile"
+      - ".trivyignore.gate"
       - ".github/workflows/dependency-audit.yml"
       - ".github/workflows/trivy-scan.yml"
   push:
     branches: [main]
     paths:
+      # These must mirror the pull_request paths above. They did not: the two
+      # workflow files and the gate ignore file were missing here, so editing
+      # the scan configuration directly on main would not re-run the scan that
+      # the edit changed.
       - "backend/requirements*.txt"
       - "frontend/package.json"
       - "frontend/package-lock.json"
       - "Dockerfile"
+      - ".trivyignore.gate"
+      - ".github/workflows/dependency-audit.yml"
+      - ".github/workflows/trivy-scan.yml"
   schedule:
     # 04:37 UTC on Thursdays, offset from the Monday 04:17 history sweep so the
     # two scheduled security jobs do not queue at the same time. The schedule
@@ -114,8 +122,16 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # --ignore-scripts, because otherwise this job runs the threat it exists to
+      # detect. The August 2026 worm executed at install time through lifecycle
+      # scripts; a plain npm ci would run every one of those scripts on the
+      # runner before the audit that is supposed to catch them ever starts.
+      # npm audit resolves from the lockfile and needs nothing a lifecycle script
+      # builds. Verified 2026-09-17 on npm 10.8.2 against this lockfile: npm ci
+      # --ignore-scripts exits 0, leaves the lockfile byte-identical, and the
+      # audit below still resolves the full tree.
       - name: Install dependencies from the lockfile
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # High and critical only, development dependencies included. The August
       # 2026 worm arrived through install-time scripts in development and

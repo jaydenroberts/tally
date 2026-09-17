@@ -34,23 +34,78 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ignore-unfixed: an operating-system package advisory with no available
-      # fix would otherwise fail this job indefinitely, regardless of anything
-      # this project does. Those findings are still uploaded to the Security
-      # tab below so they stay visible; they just do not block. Anything at
-      # CRITICAL or HIGH that does have a fix available still blocks.
-      - name: Scan the built image for known advisories
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+      # ───────────────────────────────────────────────────────────────────────
+      # The scan runs TWICE, on purpose, and the two runs have different jobs.
+      #
+      # REPORT writes the record and can never fail this job. GATE decides
+      # whether the job passes and writes nothing.
+      #
+      # They are separate because a trivy ignore file applies to the whole
+      # invocation. With a single step, waiving one advisory to unblock a
+      # release would also delete it from the Security tab — the gate and the
+      # audit record would be the same object, and every unblock would silently
+      # shrink the record. Split, the ignore file attaches to GATE only and a
+      # waived advisory stays fully visible in REPORT.
+      #
+      # REPORT runs first, also on purpose. If GATE ran first, a failure would
+      # skip REPORT and nothing would reach the Security tab on exactly the runs
+      # where the record matters most.
+      # ───────────────────────────────────────────────────────────────────────
+
+      # REPORT — every severity, no ignore file, no exit code.
+      #
+      # ignore-unfixed is kept here: an advisory with no available fix is noise
+      # in a record meant to be read, and there are a lot of them. Note that
+      # this means unfixed advisories are NOT in the Security tab. An earlier
+      # version of this file claimed the opposite; it was wrong, because
+      # ignore-unfixed applies to the same invocation that writes the SARIF.
+      # If that promise should be made true, drop ignore-unfixed from THIS step
+      # only — never from GATE, which would then block on advisories this
+      # project cannot fix.
+      #
+      # limit-severities-for-sarif is set false explicitly. The action DISCARDS
+      # the severity input whenever the format is sarif unless this is the exact
+      # lowercase string "true", so a severity filter written here would be a
+      # comment that does not match behaviour. No severity input is set on this
+      # step, so there is nothing to discard — the false is a guard against
+      # someone adding one later and believing it.
+      - name: Report — record every finding to the Security tab
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: "tally:audit"
           format: "sarif"
           output: "trivy-results.sarif"
-          severity: "CRITICAL,HIGH"
           ignore-unfixed: true
-          exit-code: "1"
+          limit-severities-for-sarif: false
 
       - name: Upload results to the Security tab
         if: always()
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: "trivy-results.sarif"
+
+      # GATE — CRITICAL and HIGH with a fix available, and nothing else.
+      #
+      # format: table, not sarif. The action honours the severity input in table
+      # format, and the findings land in the job log where whoever is unblocking
+      # a build will actually read them.
+      #
+      # trivyignores points at .trivyignore.gate. The file is deliberately NOT
+      # named .trivyignore: that is trivy's default ignore-file name and would be
+      # picked up automatically by the REPORT step too, which is the exact
+      # property this split exists to prevent. Verified 2026-09-17 against trivy
+      # 0.70.0 — with the file present in the working directory, the REPORT
+      # invocation still records both suppressed advisories.
+      #
+      # If a build is blocked here, add a named, dated entry to
+      # .trivyignore.gate with an exit condition. Do not lower the severity
+      # threshold: that scopes nothing and weakens every future run.
+      - name: Gate — fail on fixable CRITICAL or HIGH
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: "tally:audit"
+          format: "table"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+          trivyignores: ".trivyignore.gate"
+          exit-code: "1"
