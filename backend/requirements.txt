@@ -1,20 +1,20 @@
-fastapi==0.121.0
+fastapi==0.141.1
 # Pinned explicitly rather than left to fastapi's range. fastapi allows
 # starlette <0.50.0 here; 0.49.1 is the last 0.x release and carries the fix
 # for the unauthenticated Range-header CPU exhaustion in FileResponse, which
 # is reachable on the static-file route before any login happens.
 starlette==0.49.1
-uvicorn[standard]==0.34.0
-sqlalchemy==2.0.36
-pydantic==2.10.4
-pydantic-settings==2.7.0
+uvicorn[standard]==0.53.0
+sqlalchemy==2.0.53
+pydantic==2.13.5
+pydantic-settings==2.15.0
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
 bcrypt==3.2.2
-python-multipart==0.0.31
+python-multipart==0.0.32
 aiofiles==25.1.0
 pandas==3.0.5
-pdfplumber==0.11.9
+pdfplumber==0.11.10
 pdfminer.six>=20251230,<20260601
 python-dateutil==2.9.0.post0
 httpx==0.28.1
@@ -34,6 +34,6 @@ httpx==0.28.1
 httpx2==2.13.0
 anthropic==1.5.0
 openai==2.37.0
-rapidfuzz==3.10.1
+rapidfuzz==3.14.6
 pytest==8.3.5
 pytest-asyncio==0.24.0
