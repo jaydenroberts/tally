@@ -10,6 +10,33 @@ pydantic==2.10.4
 pydantic-settings==2.7.0
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
+# HELD BELOW 5.0.0 ON PURPOSE. Read this before bumping it by hand; Dependabot
+# is configured not to propose 5.x, and the reason is not a CVE.
+#
+# passlib 1.7.4 probes its bcrypt backend when it loads it, in
+# _finalize_backend_mixin, using a fixed 255-byte secret passed to the raw
+# verify() rather than the wrapper that catches ValueError. bcrypt 5.0.0
+# changed a password longer than 72 bytes from silent truncation to a
+# ValueError, so that probe raises, the backend never finishes loading, and
+# every hash() and verify() call raises with it. Measured 2026-09-18 on the
+# proposed tree: the backend suite went from 203 passing to 2 failed, 82 passed
+# and 119 errors. In production that is a 500 on every login and every
+# registration.
+#
+# Stored hashes are NOT affected either way. The $2b$ format is unchanged and
+# bcrypt 5 verifies hashes written by bcrypt 3 correctly; this is a passlib
+# wrapper problem, not a hash-compatibility problem. No re-hash or migration
+# would ever be needed.
+#
+# passlib 1.7.4 (2020) is the last release that exists, so there is no upgrade
+# path on that side. The highest bcrypt that works with it is 4.3.0, verified
+# 2026-09-18 at 203 passing with old hashes still verifying. 4.x is deliberately
+# left un-ignored so Dependabot can still propose it.
+#
+# EXIT CONDITION: remove the ignore rule in .github/dependabot.yml and this
+# comment when app/auth.py stops using passlib and calls bcrypt directly. That
+# is application code on the authentication path and needs its own change, not
+# a dependency bump.
 bcrypt==3.2.2
 python-multipart==0.0.31
 aiofiles==25.1.0
