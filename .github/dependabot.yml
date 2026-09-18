@@ -6,9 +6,43 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 10
     groups:
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+        # react-dom peer-pins the exact react minor/major it ships with
+        # (react-dom 19.3.0 requires react ^19.3.0), and the @types/*
+        # packages follow the same pairing. This is what broke PR #29 and
+        # PR #30: react went to ^19.3.0 alone, react-dom went to ^19.3.0
+        # alone, in two separate pull requests, so npm ci hit a peer
+        # conflict on whichever one landed first. No update-types filter
+        # here on purpose - the split happened on a MAJOR bump, which the
+        # npm-minor-patch group below never covers, so this group has to
+        # catch majors too or the same failure just recurs next time react
+        # ships a new major. Defined before npm-minor-patch so these four
+        # packages are always claimed here first; see the docs note on
+        # that group for why.
+      vite:
+        patterns:
+          - "vite"
+          - "@vitejs/plugin-react"
+        # Same shape of bug as the react group above, confirmed against the
+        # npm registry: @vitejs/plugin-react 6.1.1 requires vite ^8.0.0
+        # exactly, but PR #31 bumped the plugin to ^6.1.1 while leaving vite
+        # at 6.4.3, and PR #33 bumped vite to 8.3.0 while leaving the plugin
+        # at ^4.3.4. Both are major bumps, so no update-types filter here
+        # either, for the same reason as the react group.
       npm-minor-patch:
         update-types: ["minor", "patch"]
         exclude-patterns: ["axios"]
+        # react, react-dom, and the vite/plugin-react pair are handled by
+        # their own groups above and are not repeated in this
+        # exclude-patterns list: Dependabot resolves a dependency into the
+        # first group it matches in file order, and those groups are
+        # defined earlier in this file, so they never fall through to here.
+        # This list is unchanged from before those groups existed.
     ignore:
       # axios is pinned exact and reviewed by hand on every bump. These two
       # versions were the subject of a supply-chain compromise and must never
@@ -25,6 +59,40 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 10
     groups:
+      fastapi:
+        patterns:
+          - "fastapi"
+          - "starlette"
+        # fastapi caps the starlette version it accepts (currently
+        # <0.50.0,>=0.40.0, read from fastapi's own package metadata), and
+        # backend/requirements.txt pins starlette to 0.49.1 - the top of
+        # that range - for a specific CVE fix (see the comment above the
+        # starlette line in that file). Right now a fastapi bump and a
+        # starlette bump land in the same PR
+        # anyway, because pip-minor-patch below groups every pip package's
+        # minor/patch updates together by default. That stops working the
+        # day fastapi ships a major version (it is still pre-1.0, so this
+        # hasn't happened yet): a major bump falls outside pip-minor-patch,
+        # so fastapi could jump alone while starlette's pin holds it back,
+        # breaking pip's resolver the same way the npm peer conflicts did.
+        # No update-types filter, so this group already covers that case
+        # when it arrives, and it keeps today's starlette bump visible
+        # next to the fastapi change that drives it either way.
+      pdfplumber:
+        patterns:
+          - "pdfplumber"
+          - "pdfminer.six"
+        # pdfplumber 0.11.9 hard-requires pdfminer.six==20251230 exactly
+        # (it reaches into pdfminer's internals, not just its public API),
+        # while the pdfminer.six line below is a range, not a pin. Verified
+        # against PyPI: pdfminer.six 20260107 already exists and satisfies
+        # that range, so Dependabot can propose it as a standalone bump
+        # today, and pip would refuse to install it because pdfplumber
+        # still demands 20251230 exactly - the same class of failure as
+        # the four broken npm PRs, just on the pip side. pdfminer.six's
+        # versions are dates, not semver, so major/minor/patch
+        # classification isn't reliable for it; no update-types filter
+        # avoids relying on that classification at all.
       pip-minor-patch:
         update-types: ["minor", "patch"]
 
