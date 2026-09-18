@@ -5,4 +5,4 @@
 # reportlab is used solely by the test fixture generator
 # (backend/tests/test_imports.py) to produce procedural PDF samples.
 # Dev-only by design — kept out of the runtime image.
-reportlab==4.5.0
+reportlab==5.0.1
