@@ -1,0 +1,154 @@
+name: dependency-audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "backend/requirements*.txt"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "Dockerfile"
+      - ".trivyignore.gate"
+      - ".github/workflows/dependency-audit.yml"
+      - ".github/workflows/trivy-scan.yml"
+  push:
+    branches: [main]
+    paths:
+      # These must mirror the pull_request paths above. They did not: the two
+      # workflow files and the gate ignore file were missing here, so editing
+      # the scan configuration directly on main would not re-run the scan that
+      # the edit changed.
+      - "backend/requirements*.txt"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "Dockerfile"
+      - ".trivyignore.gate"
+      - ".github/workflows/dependency-audit.yml"
+      - ".github/workflows/trivy-scan.yml"
+  schedule:
+    # 04:37 UTC on Thursdays, offset from the Monday 04:17 history sweep so the
+    # two scheduled security jobs do not queue at the same time. The schedule
+    # matters more than the pull-request triggers: a dependency does not have
+    # to change for it to become vulnerable. Most advisories land against code
+    # that has sat untouched for months.
+    - cron: "37 4 * * 4"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  python-deps:
+    name: python-deps
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Python 3.11 (matches the runtime image)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned backend dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      # Audits the environment installed above, so it sees the fully resolved
+      # dependency tree rather than only the names pinned in requirements.txt.
+      #
+      # ADVISORY, NOT BLOCKING, and deliberately so. Unlike npm, the advisory
+      # data behind this tool carries no consistent severity score, so there is
+      # no reliable "high and above" line to draw. Every match would fail the
+      # build, including matches that cannot be fixed and matches that cannot
+      # be reached.
+      #
+      # Both of those are present today. The elliptic-curve library reached
+      # through the token library has an open timing-attack advisory with no
+      # upstream fix and no prospect of one, and it is never executed here
+      # because tokens are HS256, which is plain HMAC. Several advisories
+      # against the web layer need request.url, a form-urlencoded endpoint, or
+      # Windows, none of which exist in this application. A blocking gate would
+      # therefore be permanently red on day one, and a permanently red check is
+      # one that gets ignored and then muted.
+      #
+      # The alternative to advisory mode is a list of individually waived
+      # advisory identifiers. That keeps the gate sharp for anything new, at
+      # the cost of a list that has to be re-justified as the tree moves.
+      # Advisory mode was chosen as the starting point; escalating to a
+      # blocking gate with a reasoned waiver list is a deliberate follow-up
+      # decision, not something to drift into.
+      #
+      # Findings remain visible in the job log, and Dependabot alerts remain
+      # the source of truth for the backend.
+      - name: Audit installed Python dependencies
+        id: pipaudit
+        continue-on-error: true
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+
+      - name: Report audit outcome
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.pipaudit.outcome }}" = "success" ]; then
+            echo "::notice::No known advisories in the resolved Python dependency tree."
+          else
+            echo "::warning::Known advisories found in the Python dependency tree. \
+          This check is advisory and does not block. Read the audit step above, \
+          and see the Security tab for Dependabot alerts."
+          fi
+
+  npm-deps:
+    name: npm-deps
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Node 20 (matches the image build stage)
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # --ignore-scripts, because otherwise this job runs the threat it exists to
+      # detect. The August 2026 worm executed at install time through lifecycle
+      # scripts; a plain npm ci would run every one of those scripts on the
+      # runner before the audit that is supposed to catch them ever starts.
+      # npm audit resolves from the lockfile and needs nothing a lifecycle script
+      # builds. Verified 2026-09-17 on npm 10.8.2 against this lockfile: npm ci
+      # --ignore-scripts exits 0, leaves the lockfile byte-identical, and the
+      # audit below still resolves the full tree.
+      - name: Install dependencies from the lockfile
+        run: npm ci --ignore-scripts
+
+      # High and critical only, development dependencies included. The August
+      # 2026 worm arrived through install-time scripts in development and
+      # transitive tooling rather than through runtime dependencies, so
+      # development packages are in scope here even though they never reach the
+      # built image. Moderate and low findings stay visible through Dependabot
+      # alerts but do not block: gating on every transitive moderate finding is
+      # how a check earns a reputation for crying wolf and stops being read.
+      #
+      # This one does block, because npm's advisory data carries a consistent
+      # severity rating, so the line drawn here is meaningful.
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+  image-scan:
+    name: image-scan
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/trivy-scan.yml

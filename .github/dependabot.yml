@@ -1,0 +1,41 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+        exclude-patterns: ["axios"]
+    ignore:
+      # axios is pinned exact and reviewed by hand on every bump. These two
+      # versions were the subject of a supply-chain compromise and must never
+      # be reintroduced. Dependabot only ever proposes upgrades, never
+      # downgrades, so this is defence in depth rather than the primary
+      # control. The primary control is that every axios pull request here
+      # needs a person to read it and click merge.
+      - dependency-name: "axios"
+        versions: ["1.14.1", "0.30.4"]
+
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      pip-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

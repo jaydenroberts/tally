@@ -1,0 +1,48 @@
+# Scoped, dated exceptions for the image-scan gate.
+#
+# This file is read by the GATE step of .github/workflows/trivy-scan.yml only,
+# via that step's trivyignores input. The report step that feeds the GitHub
+# Security tab does NOT read it, so every advisory listed here stays fully
+# visible in the Security tab and in the SARIF record. Suppressing a finding here
+# removes it from what blocks a build; it does not remove it from what is on the
+# record.
+#
+# The name matters. Trivy reads a file called .trivyignore from the working
+# directory automatically, which would apply it to the report step as well and
+# destroy the property above. Do not rename this file to .trivyignore or
+# .trivyignore.yaml.
+#
+# Never widen the gate's severity threshold to get a build through. Add a named,
+# dated entry here with an exit condition instead, and remove it when the exit
+# condition is met.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Added 2026-09-17 — starlette, blocked on a FastAPI major-version move
+#
+# Installed starlette is 0.49.1. The fixes are in starlette 1.1.0 and 1.3.1,
+# which cannot be installed today: fastapi 0.121.0 constrains starlette <0.50.0.
+# The first fastapi release that lifts that cap is 0.133.0, and every fastapi
+# release from 0.122.0 onward changes the security classes to return 401 instead
+# of 403 when credentials are missing, so there is no version of fastapi that
+# permits starlette 1.x and leaves current behaviour unchanged.
+#
+# Measured 2026-09-17: fastapi 0.141.1 + starlette 1.6.0 resolves and builds
+# cleanly, and takes the backend suite from 203 passing to 202 passing — a real
+# behaviour change on an authentication path, not a flaky test.
+#
+# EXIT CONDITION: remove both entries below when the fastapi upgrade lands
+# (fastapi >= 0.133.0 with starlette >= 1.3.1). That upgrade needs the 401-vs-403
+# change decided and the frontend's 401 redirect interceptor re-verified in a
+# browser; it is planned work, not a scanner problem.
+#
+# Exposure in the meantime: this deployment model assumes a private network or
+# VPN/tunnel, per SECURITY.md, and is not exposed to the public internet.
+
+# starlette: SSRF and NTLM credential theft via UNC paths in StaticFiles.
+# Fixed in starlette 1.1.0.
+CVE-2026-48818
+
+# starlette: request.form() limits silently ignored for
+# application/x-www-form-urlencoded, enabling denial of service.
+# Fixed in starlette 1.3.1.
+CVE-2026-54283
