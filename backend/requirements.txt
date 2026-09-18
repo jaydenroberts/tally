@@ -13,7 +13,7 @@ passlib[bcrypt]==1.7.4
 bcrypt==3.2.2
 python-multipart==0.0.31
 aiofiles==25.1.0
-pandas==2.2.3
+pandas==3.0.5
 pdfplumber==0.11.9
 pdfminer.six>=20251230,<20260601
 python-dateutil==2.9.0.post0
