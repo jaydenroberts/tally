@@ -373,7 +373,15 @@ def _csv_lines(response):
 
 
 def test_csv_export_requires_authentication(client):
-    assert client.get("/api/transactions/export").status_code == 403
+    # 401, not 403. FastAPI's HTTPBearer answered a MISSING Authorization
+    # header with 403 up to 0.121.0; 0.122.0 corrected that to 401 plus a
+    # WWW-Authenticate challenge, which is what RFC 9110 asks for when no
+    # credentials were presented at all. 403 remains the code for
+    # "authenticated but not permitted" and is still what require_owner
+    # returns — see test_json_export_requires_owner below, which is
+    # unchanged. The frontend redirects to /login on 401 only, so this makes
+    # the no-token case redirect where it previously surfaced a raw error.
+    assert client.get("/api/transactions/export").status_code == 401
 
 
 def test_csv_export_returns_every_transaction(client, auth_headers, db, test_account):
