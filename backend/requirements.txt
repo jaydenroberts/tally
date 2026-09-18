@@ -18,7 +18,7 @@ pdfplumber==0.11.9
 pdfminer.six>=20251230,<20260601
 python-dateutil==2.9.0.post0
 httpx==0.28.1
-anthropic==0.49.0
+anthropic==1.5.0
 openai==2.37.0
 rapidfuzz==3.10.1
 pytest==8.3.5
