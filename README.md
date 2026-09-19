@@ -200,8 +200,8 @@ Full documentation is available in the [`docs/`](docs/) directory:
 ## Development
 
 ### Prerequisites
-- Python 3.11+
-- Node.js 20+
+- Python 3.14 — the version the runtime image and CI use; older versions are untested
+- Node.js 26 — the version the image build and CI use; older versions are untested
 
 ### Backend
 
