@@ -48,7 +48,7 @@ passlib[bcrypt]==1.7.4
 # comment when app/auth.py stops using passlib and calls bcrypt directly. That
 # is application code on the authentication path and needs its own change, not
 # a dependency bump.
-bcrypt==3.2.2
+bcrypt==4.3.0
 python-multipart==0.0.32
 aiofiles==25.1.0
 pandas==3.0.5
