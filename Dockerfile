@@ -22,7 +22,7 @@ WORKDIR /app
 # Install Python dependencies. gcc is only needed to build any wheels at pip time;
 # install it, build, then purge it in the SAME layer so it never ships in the image.
 #
-# apt-get upgrade: the python:3.11-slim tag usually trails the Debian archive by a
+# apt-get upgrade: the python slim tags usually trail the Debian archive by a
 # point release, so the base layer ships packages with published fixes already
 # available. Without this the image scan fails on base-image findings that nothing
 # in this project causes and nothing in this project can otherwise fix.
@@ -47,9 +47,13 @@ WORKDIR /app
 # 2026-09-19 with trivy 0.70.0 at the gate's own settings: 2 fixable HIGH with
 # pip present, 0 with it removed, and the backend suite is 203 passing either way.
 #
-# Worth knowing: there is no pip inside the running container, so installing a
-# package with docker exec will not work. Add it to backend/requirements.txt and
-# rebuild, which is the intended path regardless.
+# Two caveats. There is no pip inside the running container, so installing a
+# package with docker exec will not work; add it to backend/requirements.txt and
+# rebuild, which is the intended path regardless. And this removes pip from the
+# import path, not from the image: python still ships ensurepip/_bundled/pip-*.whl,
+# so python -m ensurepip restores pip and its vendored copies along with it. The
+# scanner does not read inside wheels, which is why the gate is clean. Do not
+# treat "no pip" as a hardened boundary.
 COPY backend/requirements.txt .
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends gcc \
