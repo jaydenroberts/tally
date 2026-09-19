@@ -104,10 +104,13 @@ jobs:
       # vanish from the Security tab as well as from the gate. Verified
       # 2026-09-17 against trivy 0.70.0 - with the .gate name, the REPORT
       # invocation still records suppressed advisories in full. And add the file
-      # and the trivyignores input below in the same commit: trivy-action's
-      # entrypoint hard-errors ("cannot find ignorefile") and exits 1 when a file
-      # named in trivyignores is missing, so either half alone turns every run
-      # red.
+      # and the trivyignores input below in the same commit, then check both
+      # halves landed. They fail differently. An input naming a file that is not
+      # there turns every run red: trivy-action's entrypoint hard-errors
+      # ("cannot find ignorefile") and exits 1, verified 2026-09-19 against the
+      # pinned action SHA. A file with no input pointing at it is worse, because
+      # it looks fine: .trivyignore.gate is not a name trivy reads by default, so
+      # the run stays green and waives nothing.
       #
       - name: Gate — fail on fixable CRITICAL or HIGH
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
