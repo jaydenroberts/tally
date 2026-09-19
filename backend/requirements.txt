@@ -16,7 +16,7 @@ fastapi==0.141.1
 # at all. Do not pin back to 0.x without reinstating the waiver.
 starlette==1.6.0
 uvicorn[standard]==0.53.0
-sqlalchemy==2.0.53
+sqlalchemy==2.0.54
 pydantic==2.13.5
 pydantic-settings==2.15.0
 python-jose[cryptography]==3.5.0
@@ -70,7 +70,7 @@ httpx==0.28.1
 # coexist safely as separate modules. Do not call httpx2's alias_httpx(), which
 # would reroute openai's traffic through httpx2 process-wide.
 httpx2==2.13.0
-anthropic==1.5.0
+anthropic==1.6.0
 openai==2.37.0
 rapidfuzz==3.14.6
 pytest==8.3.5
