@@ -93,6 +93,21 @@ updates:
         # versions are dates, not semver, so major/minor/patch
         # classification isn't reliable for it; no update-types filter
         # avoids relying on that classification at all.
+      pytest:
+        patterns:
+          - "pytest"
+          - "pytest-asyncio"
+        # pytest-asyncio pins its own compatible pytest range hard, in both
+        # directions: pytest-asyncio 0.24.0 requires pytest<9,>=8.2, and
+        # pytest-asyncio 1.4.0 requires pytest<10,>=8.4. Verified 2026-09-19 by
+        # resolving each bump alone against backend/requirements.txt: pytest
+        # 9.1.1 alone gives pip ResolutionImpossible against pytest-asyncio
+        # 0.24.0, and pytest-asyncio 1.4.0 alone gives the same error against
+        # pytest==8.3.5. Neither installs, so neither can be merged on its own -
+        # the same class of failure as the four broken npm PRs and the
+        # fastapi/pdfplumber split-pair groups above. No update-types filter,
+        # for the same reason pdfminer.six has none: a major bump on either side
+        # has to stay caught here too, and both of these were majors.
       pip-minor-patch:
         update-types: ["minor", "patch"]
     ignore:
