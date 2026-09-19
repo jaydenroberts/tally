@@ -8,7 +8,6 @@ on:
       - "frontend/package.json"
       - "frontend/package-lock.json"
       - "Dockerfile"
-      - ".trivyignore.gate"
       - ".github/workflows/dependency-audit.yml"
       - ".github/workflows/trivy-scan.yml"
   push:
@@ -22,7 +21,6 @@ on:
       - "frontend/package.json"
       - "frontend/package-lock.json"
       - "Dockerfile"
-      - ".trivyignore.gate"
       - ".github/workflows/dependency-audit.yml"
       - ".github/workflows/trivy-scan.yml"
   schedule:
