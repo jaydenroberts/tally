@@ -95,6 +95,34 @@ updates:
         # avoids relying on that classification at all.
       pip-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # bcrypt 5.x is held back because passlib cannot work with it, not
+      # because of any advisory. passlib 1.7.4 probes its bcrypt backend at
+      # import time with a secret longer than 72 bytes; bcrypt 5.0.0 turned
+      # that case from silent truncation into a ValueError, so the backend
+      # never loads and every password hash and verify raises. Measured
+      # 2026-09-18: the backend suite went from 203 passing to 119 errors,
+      # which in production is a 500 on every login and every registration
+      # (PR #39, closed).
+      #
+      # passlib 1.7.4 (2020) is its own last release, so this cannot be fixed
+      # by upgrading passlib. Only 5.x and above is ignored: 4.x still works
+      # with passlib and is still proposed normally, and 4.3.0 in particular
+      # was verified at 203 passing on 2026-09-18.
+      #
+      # An ignore rule suppresses security-update pull requests as well as
+      # version-update ones, so the one thing this hides is a bcrypt 4.x
+      # advisory whose only fix ships in 5.x. That case is still caught: the
+      # Gate step in .github/workflows/trivy-scan.yml fails the build on any
+      # fixable CRITICAL or HIGH in the image, bcrypt included, and
+      # .trivyignore.gate waives nothing for bcrypt. Dependabot is not the only
+      # detector here.
+      #
+      # The full reasoning, including why stored hashes are unaffected, sits
+      # above the bcrypt pin in backend/requirements.txt. Remove this rule
+      # when app/auth.py stops using passlib and calls bcrypt directly.
+      - dependency-name: "bcrypt"
+        versions: [">=5.0.0"]
 
   - package-ecosystem: "docker"
     directory: "/"
