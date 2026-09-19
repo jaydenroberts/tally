@@ -90,16 +90,28 @@ jobs:
       # format, and the findings land in the job log where whoever is unblocking
       # a build will actually read them.
       #
-      # trivyignores points at .trivyignore.gate. The file is deliberately NOT
-      # named .trivyignore: that is trivy's default ignore-file name and would be
-      # picked up automatically by the REPORT step too, which is the exact
-      # property this split exists to prevent. Verified 2026-09-17 against trivy
-      # 0.70.0 — with the file present in the working directory, the REPORT
-      # invocation still records both suppressed advisories.
+      # There is no ignore file. .trivyignore.gate was deleted on 2026-09-19:
+      # starlette 1.6.0 (PR #40) fixed the only two advisories it ever waived,
+      # and the built image now scans clean with no suppressions at all.
       #
-      # If a build is blocked here, add a named, dated entry to
-      # .trivyignore.gate with an exit condition. Do not lower the severity
-      # threshold: that scopes nothing and weakens every future run.
+      # If a build is blocked here, do not lower the severity threshold: that
+      # scopes nothing and weakens every future run. Reinstate a scoped waiver
+      # instead, as a named and dated entry carrying an exit condition. Two
+      # things matter when you do. Recreate the file as .trivyignore.gate and
+      # nothing else: .trivyignore is trivy's default ignore-file name and would
+      # be picked up automatically by the REPORT step above, which is the exact
+      # property this split exists to prevent, so every waived advisory would
+      # vanish from the Security tab as well as from the gate. Verified
+      # 2026-09-17 against trivy 0.70.0 - with the .gate name, the REPORT
+      # invocation still records suppressed advisories in full. And add the file
+      # and the trivyignores input below in the same commit, then check both
+      # halves landed. They fail differently. An input naming a file that is not
+      # there turns every run red: trivy-action's entrypoint hard-errors
+      # ("cannot find ignorefile") and exits 1, verified 2026-09-19 against the
+      # pinned action SHA. A file with no input pointing at it is worse, because
+      # it looks fine: .trivyignore.gate is not a name trivy reads by default, so
+      # the run stays green and waives nothing.
+      #
       - name: Gate — fail on fixable CRITICAL or HIGH
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -107,5 +119,4 @@ jobs:
           format: "table"
           severity: "CRITICAL,HIGH"
           ignore-unfixed: true
-          trivyignores: ".trivyignore.gate"
           exit-code: "1"
