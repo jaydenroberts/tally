@@ -55,23 +55,30 @@ pandas==3.0.5
 pdfplumber==0.11.10
 pdfminer.six>=20251230,<20260601
 python-dateutil==2.9.0.post0
-httpx==0.28.1
-# anthropic 1.x replaced httpx with httpx2, Pydantic's maintained fork of httpx.
-# Pinned explicitly rather than left transitive: anthropic asks only for
-# httpx2>=2.0.0,<3, which permits 2.9.0 - affected by CVE-2026-84381 (wss over
-# SOCKS sent without TLS, CVSS 8.1) and CVE-2026-84382 (decompression
-# amplification, CVSS 7.5). Both fixed by 2.12.0. Pinned here so Dependabot
-# can see it and propose bumps; left transitive it gets neither.
+# anthropic 1.x and openai 3.x both replaced httpx with httpx2, Pydantic's
+# maintained fork of httpx. Pinned explicitly rather than left transitive:
+# anthropic 1.6.0 asks for httpx2>=2.0.0,<3 and openai 3.14.1 asks for
+# httpx2>=2.7.0,<3,
+# both satisfied by the pin below. Their ranges permit 2.9.0, which is affected by
+# CVE-2026-84381 (wss over SOCKS sent without TLS, CVSS 8.1) and CVE-2026-84382
+# (decompression amplification, CVSS 7.5). Both fixed by 2.12.0. Pinned here so
+# Dependabot can see it and propose bumps; left transitive it gets neither.
 #
 # httpcore2 is deliberately NOT pinned alongside it: httpx2 already constrains
 # it to ==2.13.0, and a second pin would recreate the split-pair resolver break
-# that the fastapi/starlette and pdfplumber groups in dependabot.yml exist to
-# prevent. httpx above stays because openai requires httpx<1; the two clients
-# coexist safely as separate modules. Do not call httpx2's alias_httpx(), which
-# would reroute openai's traffic through httpx2 process-wide.
+# that the fastapi and pdfplumber groups in dependabot.yml exist to prevent.
+#
+# The plain httpx package used to be pinned here and has been removed. It was
+# kept only because openai required httpx<1, and openai 3.x dropped it for
+# httpx2. Nothing else needs it: fastapi and starlette reach it only through
+# their unused "standard" and "full" extras, and no module under backend/app/
+# imports it. Verified 2026-09-19 by resolving the tree without the pin - plain
+# httpx is then not installed at all, and httpx2 reports anthropic and openai as
+# its only dependents. Because there is no separate httpx module left, the old
+# warning against calling httpx2's alias_httpx() no longer applies.
 httpx2==2.13.0
 anthropic==1.6.0
-openai==2.37.0
+openai==3.14.1
 rapidfuzz==3.14.6
 pytest==9.1.1
 pytest-asyncio==1.4.0
