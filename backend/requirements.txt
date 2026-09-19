@@ -26,7 +26,7 @@ python-multipart==0.0.32
 aiofiles==25.1.0
 pandas==3.0.5
 pdfplumber==0.11.10
-pdfminer.six>=20251230,<20260601
+pdfminer.six>=20260107,<20260601
 python-dateutil==2.9.0.post0
 httpx==0.28.1
 # anthropic 1.x replaced httpx with httpx2, Pydantic's maintained fork of httpx.
