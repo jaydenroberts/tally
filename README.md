@@ -34,7 +34,7 @@ A self-hosted personal finance web application for households. Track accounts, t
 - **Savings goals** — allocate income across goals in one step; link withdrawals back to the goal
 - **Debt tracking** — interest rate, minimum payment, paydown strategy badges; link expense transactions directly to a debt
 - **Closed account lifecycle** — mark accounts as closed rather than deleting them
-- **CSV/PDF import** from your existing financial files (read-only access)
+- **CSV/PDF import** — upload your bank statement files directly through the import wizard
 - **AI chat interface** — ask questions about your finances in plain language; powered by Anthropic, OpenAI, or any OpenAI-compatible endpoint (e.g. Ollama); persona system controls data access and write permissions
 - **Backup & export** — automatic verified snapshot before every upgrade; one-click database backup, full JSON export, and transactions CSV from Settings → Data
 - **Mobile navigation** — slide-in drawer on small screens
@@ -62,7 +62,6 @@ docker run -d \
   --restart unless-stopped \
   -p 8092:8091 \
   -v /path/to/your/data:/data \
-  -v /path/to/your/financial-files:/financial-data:ro \
   -e SECRET_KEY=$SECRET_KEY \
   -e FIRST_RUN_OWNER_USERNAME=admin \
   -e FIRST_RUN_OWNER_PASSWORD=changeme \
@@ -85,7 +84,6 @@ services:
       - "8092:8091"
     volumes:
       - ./data:/data
-      - ./financial-data:/financial-data:ro
     environment:
       - SECRET_KEY=${SECRET_KEY}
       - ACCESS_TOKEN_EXPIRE_DAYS=30
@@ -120,10 +118,9 @@ docker compose up -d
 1. Go to the **Docker** tab in Unraid and click **Add Container**.
 2. Set the repository to `jaydenroberts/tally:latest`.
 3. Add a path: Container path `/data` → Host path `/mnt/user/appdata/tally/data` (Read/Write).
-4. Add a path (optional): Container path `/financial-data` → Host path of your bank statement files (Read Only).
-5. Add a variable: `SECRET_KEY` = your generated key.
-6. Set port: Host `8092` → Container `8091`.
-7. Click **Apply**.
+4. Add a variable: `SECRET_KEY` = your generated key.
+5. Set port: Host `8092` → Container `8091`.
+6. Click **Apply**.
 
 ---
 
@@ -138,7 +135,6 @@ All configuration is via environment variables:
 | `FIRST_RUN_OWNER_USERNAME` | No | — | Auto-creates the first owner account on startup. Leave blank to use the setup page instead. |
 | `FIRST_RUN_OWNER_PASSWORD` | No | — | Required if `FIRST_RUN_OWNER_USERNAME` is set. |
 | `DATABASE_URL` | No | `sqlite:////data/tally.db` | SQLite database path. Change only if you know what you're doing. |
-| `FINANCIAL_DATA_PATH` | No | `/financial-data` | Container path where bank statement files are mounted. |
 | `AI_PROVIDER` | No | — | AI provider for the chat feature: `anthropic` (default when unset), `openai`, or `ollama` (any OpenAI-compatible endpoint). To keep the feature inactive, set no API key (see `AI_API_KEY`). |
 | `AI_API_KEY` | No | — | API key for the selected provider. If unset, falls back to `ANTHROPIC_API_KEY` when present in the container environment — unset both to keep the chat feature inactive. Not required for local Ollama. |
 | `AI_MODEL` | No | — | Model name to use (e.g. `claude-sonnet-4-6`, `gpt-4o`, `llama3`). |
@@ -235,9 +231,7 @@ docker run -p 8091:8091 -v $(pwd)/data:/data tally
 
 ## Financial File Import
 
-Tally mounts your existing financial files **read-only**. It never modifies originals — it only reads them and imports transactions into its own SQLite database.
-
-Mount your files at `/financial-data` (or configure `FINANCIAL_DATA_PATH`).
+Tally imports transactions from bank statement files you upload directly through the import wizard. Uploads are parsed locally and never leave your machine.
 
 Supported formats: CSV (auto-detected column mapping), PDF bank statements (text extraction).
 
@@ -245,7 +239,7 @@ Supported formats: CSV (auto-detected column mapping), PDF bank statements (text
 
 ## Privacy
 
-Tally is fully self-hosted. Tally's application code collects no data, contains no telemetry or analytics, and makes no network requests on your behalf. All your financial data stays in your own SQLite database, on your own hardware. Mounted financial statement files are read-only and are only parsed locally for import (see [Financial File Import](#financial-file-import)).
+Tally is fully self-hosted. Tally's application code collects no data, contains no telemetry or analytics, and makes no network requests on your behalf. All your financial data stays in your own SQLite database, on your own hardware. Uploaded financial statement files are only parsed locally for import (see [Financial File Import](#financial-file-import)).
 
 The **AI chat** feature (see [AI Coach](docs/ai-coach.md)) is optional, but it is not disabled by default: the provider defaults to `anthropic`, and the feature will make requests whenever an API key is available — from `AI_API_KEY`, or falling back to an `ANTHROPIC_API_KEY` present in the container environment. If you want the feature off, ensure neither variable is set; with no key available, no request is ever made and no data leaves your machine. When a key is configured, your chat messages and the financial context your persona settings permit are sent only to the AI provider you configure with your own API key — Anthropic, OpenAI, or a local OpenAI-compatible endpoint such as Ollama — under that provider's terms. Running a local model via Ollama keeps even that traffic on your own network.
 

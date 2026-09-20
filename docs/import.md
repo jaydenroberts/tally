@@ -15,11 +15,9 @@ Tally can import bank statements directly from CSV and PDF files. Imported trans
 
 ---
 
-## Where to Place Files
+## Uploading Your File
 
-Place your bank statement files in the directory you mounted as `/financial-data` when deploying Tally. Tally reads this directory as read-only — it never modifies or deletes your original files.
-
-Alternatively, you can upload a file directly in the import wizard without using the `/financial-data` directory. Uploaded files must be `.csv` or `.pdf` and are size-capped (default 10 MB, set by `MAX_UPLOAD_BYTES`); larger files are rejected.
+Upload a `.csv` or `.pdf` file directly in the import wizard. Files are size-capped (default 10 MB, set by `MAX_UPLOAD_BYTES`); larger files are rejected.
 
 ---
 
@@ -43,7 +41,7 @@ Click **Continue** to proceed.
 
 ## Step 2 — Upload File
 
-Choose a file from the list of files in your `/financial-data` directory, or upload a file directly.
+Upload a `.csv` or `.pdf` bank statement file.
 
 Click **Continue** to proceed.
 
