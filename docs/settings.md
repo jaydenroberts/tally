@@ -1,8 +1,8 @@
 # Settings
 
-The Settings page is where you manage your profile, users, AI personas, and general app preferences. It is divided into four tabs: **Profile**, **Users**, **Personas**, and **General**.
+The Settings page is where you manage your profile, users, AI personas, categories, and general app preferences. Owners see six tabs: **Profile**, **Users**, **Personas**, **Categories**, **Data**, and **General**. Viewers see only **Profile**.
 
-Only owners can access the Users and Personas tabs. Viewer accounts can only access Profile.
+Only owners can access the Users, Personas, Categories, Data, and General tabs.
 
 ---
 
@@ -85,6 +85,30 @@ Click the edit icon on a persona to update any of its fields. Changes take effec
 ### Deleting a Persona
 
 Click the delete icon on a custom persona and confirm. When a persona is deleted, it is unassigned from any users who had it — those users will have no persona assigned until you assign them a new one. System personas cannot be deleted.
+
+---
+
+## Categories Tab
+
+The Categories tab is owner-only. It lists every category available in your Tally instance — the built-in system categories and any custom ones you've added.
+
+### System Categories
+
+Tally ships with a set of built-in categories shared across all users. They're shown for reference and cannot be renamed or deleted.
+
+### Adding a Category
+
+1. Go to **Settings → Categories**
+2. Enter a name under **Add Category**
+3. Click **Add**
+
+### Renaming a Category
+
+Click the rename icon next to a custom category, edit the name, then press **Enter** or click **Save**. Press **Escape** or click **Cancel** to discard the change. System categories cannot be renamed.
+
+### Deleting a Category
+
+Click the delete icon next to a custom category and confirm. Deleting a category does not delete anything it was applied to — any transactions, budgets, or recurring entries using that category become uncategorised instead. Your transaction history is preserved.
 
 ---
 

@@ -60,7 +60,7 @@ SECRET_KEY=$(openssl rand -hex 32)
 docker run -d \
   --name tally \
   --restart unless-stopped \
-  -p 8091:8091 \
+  -p 8092:8091 \
   -v /path/to/your/data:/data \
   -v /path/to/your/financial-files:/financial-data:ro \
   -e SECRET_KEY=$SECRET_KEY \
@@ -69,7 +69,7 @@ docker run -d \
   jaydenroberts/tally:latest
 ```
 
-Open `http://localhost:8091` — your owner account will be created automatically on first run.
+Open `http://localhost:8092` — your owner account will be created automatically on first run.
 
 ### Option 2 — Docker Compose
 
@@ -82,7 +82,7 @@ services:
     container_name: tally
     restart: unless-stopped
     ports:
-      - "8091:8091"
+      - "8092:8091"
     volumes:
       - ./data:/data
       - ./financial-data:/financial-data:ro
@@ -113,7 +113,7 @@ docker compose up -d
 2. Search for **Tally**.
 3. Click **Install** and fill in the required fields (SECRET_KEY is mandatory — generate one with `openssl rand -hex 32`).
 4. Click **Apply** and wait for the container to start.
-5. Open `http://[your-unraid-ip]:8091`.
+5. Open `http://[your-unraid-ip]:8092`.
 
 **Manual install via Docker tab (without CA):**
 
@@ -122,7 +122,7 @@ docker compose up -d
 3. Add a path: Container path `/data` → Host path `/mnt/user/appdata/tally/data` (Read/Write).
 4. Add a path (optional): Container path `/financial-data` → Host path of your bank statement files (Read Only).
 5. Add a variable: `SECRET_KEY` = your generated key.
-6. Set port: Host `8091` → Container `8091`.
+6. Set port: Host `8092` → Container `8091`.
 7. Click **Apply**.
 
 ---
@@ -148,6 +148,9 @@ All configuration is via environment variables:
 | `AUTH_RATE_LIMIT_WINDOW_SECONDS` | No | `60` | Length of the auth rate-limit window, in seconds. |
 | `MAX_UPLOAD_BYTES` | No | `10485760` | Maximum size (in bytes) of a statement file uploaded through the import wizard. Uploads over this limit are rejected. |
 | `RECOVERY_TOKEN` | No | — | Enables the `POST /api/auth/recover` endpoint for owner password recovery. Use a token of at least 32 random characters (`openssl rand -hex 32`). Remove after use. |
+| `BACKUP_DIR` | No | `backups` beside the database | Where automatic pre-upgrade snapshots are written. With the shipped defaults this is `/data/backups`. |
+| `BACKUP_KEEP` | No | `5` | How many automatic snapshots to keep. Older ones are deleted after a new one is written. Minimum 1. |
+| `PRE_MIGRATION_BACKUP` | No | `on` | Set to `off` to skip the automatic snapshot taken before an upgrade changes the database. See [Backup & Restore](docs/backup-restore.md). |
 
 ---
 
@@ -157,7 +160,7 @@ On first start, Tally checks whether any users exist. If none do, it enters setu
 
 **Automatic setup (via env vars):** If `FIRST_RUN_OWNER_USERNAME` and `FIRST_RUN_OWNER_PASSWORD` are set, the owner account is created silently at startup. No setup page is shown.
 
-**Manual setup (via browser):** If those vars are not set, navigate to `http://[host]:8091` — you will be redirected to a setup page where you can create the first owner account. This endpoint is disabled once any user exists.
+**Manual setup (via browser):** If those vars are not set, navigate to `http://[host]:8092` — you will be redirected to a setup page where you can create the first owner account. This endpoint is disabled once any user exists.
 
 After setup, log in with your owner credentials. You can add viewer accounts, configure roles, and invite household members from the **Settings** page.
 

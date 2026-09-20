@@ -14,6 +14,12 @@ Tally is configured through environment variables passed to the Docker container
 | `FINANCIAL_DATA_PATH` | No | `/financial-data` | Path inside the container where Tally looks for importable bank statement files. Should match your read-only volume mount. |
 | `FIRST_RUN_OWNER_USERNAME` | No | — | If set, Tally auto-creates an owner account with this username on first startup. Has no effect if users already exist. |
 | `FIRST_RUN_OWNER_PASSWORD` | No | — | Required if `FIRST_RUN_OWNER_USERNAME` is set. |
+| `AI_PROVIDER` | No | — | AI provider for the chat feature: `anthropic` (default when unset), `openai`, or `ollama` (any OpenAI-compatible endpoint). To keep the feature inactive, set no API key (see `AI_API_KEY`). |
+| `AI_API_KEY` | No | — | API key for the selected provider. If unset, falls back to `ANTHROPIC_API_KEY` when present in the container environment — unset both to keep the chat feature inactive. Not required for local Ollama. |
+| `AI_MODEL` | No | — | Model name to use (e.g. `claude-sonnet-4-6`, `gpt-4o`, `llama3`). |
+| `AI_BASE_URL` | No | — | Base URL override for OpenAI-compatible endpoints (e.g. `http://ollama:11434/v1`). Required for Ollama; not needed for Anthropic or OpenAI. |
+| `CHAT_HISTORY_TURNS` | No | `30` hosted / `10` Ollama | How many prior chat turns are replayed as context in the AI Coach. Does not limit what's stored — the full conversation is always kept in the database. |
+| `TALLY_LOCAL_PROVIDER_WRITE_TOOLS` | No | `deny` | Only applies when `AI_PROVIDER=ollama`. Set to `allow` to let a local model use write tools; the default strips them. |
 | `ALLOWED_ORIGINS` | No | local origin | Comma-separated allow-list of browser origins permitted to call the API (CORS). Defaults to the local origin; add your LAN or tunnel URL if you reach Tally from another hostname. |
 | `AUTH_RATE_LIMIT_MAX` | No | `5` | Maximum login/password-recovery attempts per IP within the rate-limit window. |
 | `AUTH_RATE_LIMIT_WINDOW_SECONDS` | No | `60` | Length of the auth rate-limit window, in seconds. |

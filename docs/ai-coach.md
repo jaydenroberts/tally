@@ -1,6 +1,6 @@
 # AI Coach
 
-The AI Coach is a financial coaching chat interface built into Tally. It connects to the Claude API and gives you a conversational way to ask questions about your finances, get coaching on spending habits, and (depending on configuration) make changes to your data.
+The AI Coach is a financial coaching chat interface built into Tally. It is entirely optional: if you don't configure a provider, the rest of Tally works exactly the same, and no AI-related network request is ever made. When you do configure one — Anthropic (Claude), OpenAI, or a local OpenAI-compatible endpoint such as Ollama — it gives you a conversational way to ask questions about your finances, get coaching on spending habits, and (depending on configuration) make changes to your data.
 
 The AI Coach's behaviour is controlled by **personas** — configurable profiles that determine the AI's tone, what financial data it can see, and whether it can modify your data.
 
@@ -85,11 +85,33 @@ See [Settings](settings.md) for instructions on creating and managing personas.
 
 ---
 
-## Privacy Note
+## Privacy and Data Storage
 
-The AI Coach sends your financial data (filtered by the persona's data access level) to the Claude API (Anthropic) as part of each conversation. This data leaves your server. If you are concerned about privacy, use a persona with a lower data access level or the readonly level.
+Two separate questions apply here: where your conversation is **sent** while it's happening, and where it's **stored** afterwards. They have different answers.
 
-The AI does not store your conversation history between sessions.
+### Where Your Data Is Sent
+
+The AI Coach sends your financial data (filtered by the persona's data access level) to whichever provider you've configured with `AI_PROVIDER`:
+
+| Provider | Where your data goes |
+|----------|----------------------|
+| Anthropic (Claude) | Sent to Anthropic's API as part of each conversation, under Anthropic's terms |
+| OpenAI | Sent to OpenAI's API as part of each conversation, under OpenAI's terms |
+| Ollama (or another local OpenAI-compatible endpoint) | Stays on your own network — nothing leaves your server |
+
+If neither `AI_PROVIDER` nor an API key is set, no AI request is ever made — see below for what that looks like in the app.
+
+If you're concerned about privacy but still want AI coaching, use a persona with a lower data access level (**Summary** or **Readonly**), or point `AI_PROVIDER` at a local Ollama instance so nothing leaves your server.
+
+### Where Your Conversations Are Stored
+
+This is a separate question from where your data is sent, and the answer doesn't depend on which provider you use. Every AI Coach conversation — including with Ollama — is saved in Tally's own SQLite database, on your own server. Conversations reload automatically when you return: use the session sidebar to resume a past conversation, start a new one, or delete one you no longer want.
+
+There is no automatic expiry or cleanup — a conversation is kept until you delete it yourself. `CHAT_HISTORY_TURNS` doesn't change this: it only controls how many recent turns are replayed to the AI as context on each request, not what's kept in the database.
+
+### If You Haven't Configured a Provider
+
+**AI Coach** always appears in the sidebar, whether or not you've set `AI_PROVIDER` or an API key — Tally doesn't hide it based on configuration. If you open it and send a message with no provider configured, you'll get a generic error saying the assistant couldn't finish responding. That's expected: it means no provider is set up, not that something is broken. If you've deliberately left AI turned off, you can ignore it — the rest of Tally is unaffected.
 
 ---
 
