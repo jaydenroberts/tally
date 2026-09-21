@@ -523,7 +523,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.4.5",
+    version="1.4.6",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -567,7 +567,7 @@ app.include_router(data.router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "app": "tally"}
+    return {"status": "ok", "app": "tally", "version": app.version}
 
 
 # ---------------------------------------------------------------------------

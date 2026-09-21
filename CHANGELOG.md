@@ -4,6 +4,40 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.4.6] - 2026-09-21
+
+A dependency and platform release: every layer underneath Tally moves to a current version, and no first-party application code changed. The value of a release like this is that any bug reported afterwards has exactly one place it can have come from.
+
+### Added
+
+- **The container now reports its own version.** `/api/health` includes the running version alongside its existing fields, and the Docker image itself now carries a `HEALTHCHECK` that calls it. Because the same `latest` tag gets republished on every release, there was previously no way to tell which build a running container was actually on — this gives a bug report a starting point.
+
+### Changed
+
+- **The interpreter moves from Python 3.11 to Python 3.14**, and the frontend build stage moves from Node 20 to Node 26.
+- **The web interface is rebuilt on React 19** (up from 18), with the router moving from version 6 to 7 and the build tool from Vite 6 to Vite 8.
+- FastAPI, Starlette, Pydantic, SQLAlchemy, bcrypt, pytest, and both the OpenAI and Anthropic SDKs all move to current pinned releases.
+- Two documentation corrections land alongside this release: the AI Coach page now describes what is stored and what is sent to which provider as the separate questions they are, and the settings and import pages match the actual tab and step numbering.
+
+### Security
+
+- **The plain `httpx` package is gone.** Both AI SDKs now use `httpx2`, closing two published advisories that affected the old client.
+- **`pip` no longer ships inside the running container**, removing the vulnerability findings that came from packages bundled inside pip rather than from anything Tally depends on.
+- **Every previously-recorded scanner exception has been removed.** The published image now scans with no fixable critical or high findings and no waivers of any kind.
+
+### Migration
+
+- **`pip` is no longer inside the container.** `docker exec <container> pip install ...` will not work any more. To add a Python package, add it to `backend/requirements.txt` and rebuild the image — that was already the supported way to do it.
+- **The interpreter is now Python 3.14.** If you run anything of your own inside the container alongside Tally, check it against 3.14 first.
+- **The web interface is now built on React 19.** Any local customisation to the frontend needs to be compatible with the React 19 API.
+
+### Notes
+
+- No first-party application code changed in this release — the backend and frontend source trees are identical to v1.4.5. The backend test suite (203 tests) passes on the new image.
+- Upgrade is safe and in-place. Nothing above requires action unless you use `docker exec ... pip install` or run custom code inside the container.
+
+---
+
 ## [1.4.5] - 2026-08-26
 
 Backup and export, plus corrections to how spending and income are counted. This release puts a verified safety net under your data before the next upgrade changes the database structure.
