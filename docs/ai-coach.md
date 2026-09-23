@@ -99,7 +99,7 @@ The AI Coach sends your financial data (filtered by the persona's data access le
 | OpenAI | Sent to OpenAI's API as part of each conversation, under OpenAI's terms |
 | Ollama (or another local OpenAI-compatible endpoint) | Stays on your own network — nothing leaves your server |
 
-If neither `AI_PROVIDER` nor an API key is set, no AI request is ever made — see below for what that looks like in the app.
+If no API key is available — neither `AI_API_KEY` nor `ANTHROPIC_API_KEY` — no AI request is ever made and nothing leaves your machine. Note that this is governed by the key alone: `AI_PROVIDER` defaults to `anthropic`, so leaving it unset does **not** disable the feature. See below for what that looks like in the app.
 
 If you're concerned about privacy but still want AI coaching, use a persona with a lower data access level (**Summary** or **Readonly**), or point `AI_PROVIDER` at a local Ollama instance so nothing leaves your server.
 

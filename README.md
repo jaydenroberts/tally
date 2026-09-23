@@ -147,6 +147,8 @@ All configuration is via environment variables:
 | `BACKUP_DIR` | No | `backups` beside the database | Where automatic pre-upgrade snapshots are written. With the shipped defaults this is `/data/backups`. |
 | `BACKUP_KEEP` | No | `5` | How many automatic snapshots to keep. Older ones are deleted after a new one is written. Minimum 1. |
 | `PRE_MIGRATION_BACKUP` | No | `on` | Set to `off` to skip the automatic snapshot taken before an upgrade changes the database. See [Backup & Restore](docs/backup-restore.md). |
+| `CHAT_HISTORY_TURNS` | No | `30` hosted / `10` Ollama | How many prior chat turns are replayed as context in the AI Coach. Does not limit what is stored — the full conversation is always kept in the database. |
+| `TALLY_LOCAL_PROVIDER_WRITE_TOOLS` | No | `deny` | Only applies when `AI_PROVIDER=ollama`. Set to `allow` to let a local model use write tools; the default strips them. |
 
 ---
 
@@ -191,7 +193,7 @@ Full documentation is available in the [`docs/`](docs/) directory:
 | [Debt Tracker](docs/debt.md) | Debt tracking, payment logging, paydown strategies |
 | [CSV & PDF Import](docs/import.md) | Importing bank statements, column mapping, reconciliation |
 | [AI Coach](docs/ai-coach.md) | Chat interface, personas, data access levels |
-| [Settings](docs/settings.md) | User management, personas, data exports, preferences |
+| [Settings](docs/settings.md) | User management, categories, personas, data exports, preferences |
 | [Backup & Restore](docs/backup-restore.md) | Automatic snapshots, exports, and the restore procedure |
 
 ---
@@ -224,7 +226,7 @@ npm run dev   # proxies /api to port 8091
 
 ```bash
 docker build -t tally .
-docker run -p 8091:8091 -v $(pwd)/data:/data tally
+docker run -p 8092:8091 -v $(pwd)/data:/data tally
 ```
 
 ---

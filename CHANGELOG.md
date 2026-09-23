@@ -6,7 +6,7 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ## [1.4.6] - 2026-09-21
 
-A dependency and platform release: every layer underneath Tally moves to a current version, and no first-party application code changed. The value of a release like this is that any bug reported afterwards has exactly one place it can have come from.
+A dependency and platform release: every layer underneath Tally moves to a current version, and no application logic changed. The value of a release like this is that any bug reported afterwards has exactly one place it can have come from.
 
 ### Added
 
@@ -16,12 +16,13 @@ A dependency and platform release: every layer underneath Tally moves to a curre
 
 - **The interpreter moves from Python 3.11 to Python 3.14**, and the frontend build stage moves from Node 20 to Node 26.
 - **The web interface is rebuilt on React 19** (up from 18), with the router moving from version 6 to 7 and the build tool from Vite 6 to Vite 8.
-- FastAPI, Starlette, Pydantic, SQLAlchemy, bcrypt, pytest, and both the OpenAI and Anthropic SDKs all move to current pinned releases.
-- Two documentation corrections land alongside this release: the AI Coach page now describes what is stored and what is sent to which provider as the separate questions they are, and the settings and import pages match the actual tab and step numbering.
+- FastAPI, Starlette, Pydantic, SQLAlchemy, bcrypt, pandas, axios, pytest, and both the OpenAI and Anthropic SDKs all move to current pinned releases.
+- **A request with no login token now returns 401 instead of 403.** This comes from the FastAPI upgrade and applies to every authenticated API endpoint. The web interface is unaffected — it already sent you to the login page on a 401.
+- The documentation has been brought back in line with the application. The AI Coach page now treats what is *stored* and what is *sent*, and to whom, as the separate questions they are; the settings and import pages match the actual tab and step numbering; and the documentation no longer describes the `/financial-data` mount or the file-picker import. That path was removed from the application in an earlier release and the docs had not caught up — import is upload-only, and the mount can be dropped from your run command.
 
 ### Security
 
-- **The plain `httpx` package is gone.** Both AI SDKs now use `httpx2`, closing two published advisories that affected the old client.
+- **The HTTP client behind the AI SDKs has changed.** Both SDKs dropped plain `httpx` for `httpx2`, which is pinned at 2.13.0 — above the versions affected by CVE-2026-84381 (WebSocket-over-SOCKS sent without TLS) and CVE-2026-84382 (decompression amplification), both fixed in 2.12.0. Plain `httpx` is no longer installed at all.
 - **`pip` no longer ships inside the running container**, removing the vulnerability findings that came from packages bundled inside pip rather than from anything Tally depends on.
 - **Every previously-recorded scanner exception has been removed.** The published image now scans with no fixable critical or high findings and no waivers of any kind.
 
@@ -30,11 +31,12 @@ A dependency and platform release: every layer underneath Tally moves to a curre
 - **`pip` is no longer inside the container.** `docker exec <container> pip install ...` will not work any more. To add a Python package, add it to `backend/requirements.txt` and rebuild the image — that was already the supported way to do it.
 - **The interpreter is now Python 3.14.** If you run anything of your own inside the container alongside Tally, check it against 3.14 first.
 - **The web interface is now built on React 19.** Any local customisation to the frontend needs to be compatible with the React 19 API.
+- **If you have scripts or monitoring that check for a 403 on an unauthenticated API call, change them to expect 401.** Nothing inside the app needs changing.
 
 ### Notes
 
-- No first-party application code changed in this release — the backend and frontend source trees are identical to v1.4.5. The backend test suite (203 tests) passes on the new image.
-- Upgrade is safe and in-place. Nothing above requires action unless you use `docker exec ... pip install` or run custom code inside the container.
+- No application logic changed in this release. The only first-party edits are the version constant in `backend/app/main.py`, the version field in `frontend/package.json`, the extra `version` key on `/api/health`, and one test assertion updated for the new status code described above. Everything else is dependency and platform. The backend test suite (203 tests) passes in CI on Python 3.14.
+- Upgrade is safe and in-place. On first start Tally writes one automatic snapshot of your database to `/data/backups/pre-1.4.6.db` — roughly the size of your database — and will not start if it cannot, so make sure the data volume has room. Nothing else requires action unless you use `docker exec ... pip install` or run custom code inside the container.
 
 ---
 

@@ -34,7 +34,7 @@ This documentation covers Tally v1.4.6.
 | [Savings](savings.md) | Savings goals, contributions, account allocation, withdrawals, projections |
 | [Debt](debt.md) | Debt tracker, payment logging, payment linkage, payoff projection |
 | [AI Coach](ai-coach.md) | AI chat feature, personas, data access levels |
-| [Settings](settings.md) | Profile, users, roles, personas, data exports, general preferences |
+| [Settings](settings.md) | Profile, users, roles, categories, personas, data exports, general preferences |
 | [Backup & Restore](backup-restore.md) | Automatic pre-upgrade snapshots, exports, and the restore procedure |
 
 ---
