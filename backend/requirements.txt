@@ -51,7 +51,7 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.3.0
 python-multipart==0.0.32
 aiofiles==25.1.0
-pandas==3.0.5
+pandas==3.0.6
 pdfplumber==0.11.10
 pdfminer.six>=20251230,<20260601
 python-dateutil==2.9.0.post0
@@ -77,8 +77,8 @@ python-dateutil==2.9.0.post0
 # its only dependents. Because there is no separate httpx module left, the old
 # warning against calling httpx2's alias_httpx() no longer applies.
 httpx2==2.13.0
-anthropic==1.6.0
-openai==3.14.1
+anthropic==1.7.0
+openai==3.17.0
 rapidfuzz==3.14.6
 pytest==9.1.1
 pytest-asyncio==1.4.0
