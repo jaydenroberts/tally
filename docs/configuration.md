@@ -11,9 +11,14 @@ Tally is configured through environment variables passed to the Docker container
 | `SECRET_KEY` | **Yes** | — | JWT signing key. Generate with `openssl rand -hex 32`. Required for authentication to work. |
 | `ACCESS_TOKEN_EXPIRE_DAYS` | No | `30` | How long login sessions remain valid, in days. After expiry, users must log in again. |
 | `DATABASE_URL` | No | `sqlite:////data/tally.db` | Full SQLite connection string. Only change this if you have a specific reason to move the database file. |
-| `FINANCIAL_DATA_PATH` | No | `/financial-data` | Path inside the container where Tally looks for importable bank statement files. Should match your read-only volume mount. |
 | `FIRST_RUN_OWNER_USERNAME` | No | — | If set, Tally auto-creates an owner account with this username on first startup. Has no effect if users already exist. |
 | `FIRST_RUN_OWNER_PASSWORD` | No | — | Required if `FIRST_RUN_OWNER_USERNAME` is set. |
+| `AI_PROVIDER` | No | — | AI provider for the chat feature: `anthropic` (default when unset), `openai`, or `ollama` (any OpenAI-compatible endpoint). To keep the feature inactive, set no API key (see `AI_API_KEY`). |
+| `AI_API_KEY` | No | — | API key for the selected provider. If unset, falls back to `ANTHROPIC_API_KEY` when present in the container environment — unset both to keep the chat feature inactive. Not required for local Ollama. |
+| `AI_MODEL` | No | — | Model name to use (e.g. `claude-sonnet-4-6`, `gpt-4o`, `llama3`). |
+| `AI_BASE_URL` | No | — | Base URL override for OpenAI-compatible endpoints (e.g. `http://ollama:11434/v1`). Required for Ollama; not needed for Anthropic or OpenAI. |
+| `CHAT_HISTORY_TURNS` | No | `30` hosted / `10` Ollama | How many prior chat turns are replayed as context in the AI Coach. Does not limit what's stored — the full conversation is always kept in the database. |
+| `TALLY_LOCAL_PROVIDER_WRITE_TOOLS` | No | `deny` | Only applies when `AI_PROVIDER=ollama`. Set to `allow` to let a local model use write tools; the default strips them. |
 | `ALLOWED_ORIGINS` | No | local origin | Comma-separated allow-list of browser origins permitted to call the API (CORS). Defaults to the local origin; add your LAN or tunnel URL if you reach Tally from another hostname. |
 | `AUTH_RATE_LIMIT_MAX` | No | `5` | Maximum login/password-recovery attempts per IP within the rate-limit window. |
 | `AUTH_RATE_LIMIT_WINDOW_SECONDS` | No | `60` | Length of the auth rate-limit window, in seconds. |
@@ -32,11 +37,6 @@ Tally is configured through environment variables passed to the Docker container
 | Container path | Purpose | Recommended host path |
 |----------------|---------|----------------------|
 | `/data` | Persistent storage for the SQLite database and automatic backups | `/mnt/user/appdata/tally` |
-| `/financial-data` | Read-only directory of bank statement files for import | `/mnt/user/financial-data` |
-
-The `/financial-data` volume is optional. If you do not mount it, file-picker import will be unavailable, but you can still import by uploading files directly in the import UI.
-
-**Note:** Mount `/financial-data` as read-only (`:ro`) — Tally never writes to this directory.
 
 **Warning:** Tally runs as a **non-root** user inside the container. The host directory you mount at `/data` must be writable by that user, or Tally cannot create or open its database and the container will fail to start. On Unraid, `/mnt/user/appdata/` paths are writable by default; on a plain Linux host, make the data directory writable by the container user before starting.
 

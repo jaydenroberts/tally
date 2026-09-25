@@ -79,6 +79,17 @@ USER tally
 
 EXPOSE 8091
 
+# No curl/wget in this image (slim base, pip removed above) — python's stdlib
+# urllib needs no new package. start-period covers first-boot work (owner
+# bootstrap, the v1.4.5 pre-migration snapshot-and-verify, the recurring-timer
+# task startup) before failures start counting. interval/timeout/retries are
+# sized for a small single-writer SQLite app: a 3s stall answering a
+# no-auth, no-DB-write endpoint is already a real signal, and 3 consecutive
+# misses (90s) avoids flapping on a momentary GC pause rather than papering
+# over a genuine hang.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/api/health', timeout=2)"
+
 ENV DATABASE_URL="sqlite:////data/tally.db"
 ENV FINANCIAL_DATA_PATH="/financial-data"
 ENV PYTHONUNBUFFERED=1

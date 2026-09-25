@@ -2,7 +2,7 @@
 
 Tally is a self-hosted personal finance web application for households. It runs as a single Docker container and gives you full control of your financial data — no third-party services, no subscriptions, no data leaving your server.
 
-This documentation covers Tally v1.4.5.
+This documentation covers Tally v1.4.6.
 
 ---
 
@@ -34,7 +34,7 @@ This documentation covers Tally v1.4.5.
 | [Savings](savings.md) | Savings goals, contributions, account allocation, withdrawals, projections |
 | [Debt](debt.md) | Debt tracker, payment logging, payment linkage, payoff projection |
 | [AI Coach](ai-coach.md) | AI chat feature, personas, data access levels |
-| [Settings](settings.md) | Profile, users, roles, personas, data exports, general preferences |
+| [Settings](settings.md) | Profile, users, roles, categories, personas, data exports, general preferences |
 | [Backup & Restore](backup-restore.md) | Automatic pre-upgrade snapshots, exports, and the restore procedure |
 
 ---
@@ -50,4 +50,4 @@ This documentation covers Tally v1.4.5.
 
 ## Version
 
-This documentation covers **Tally v1.4.5**. Tally follows semantic versioning. Breaking changes will be noted in each document section where applicable.
+This documentation covers **Tally v1.4.6**. Tally follows semantic versioning. Breaking changes will be noted in each document section where applicable.

@@ -15,11 +15,9 @@ Tally can import bank statements directly from CSV and PDF files. Imported trans
 
 ---
 
-## Where to Place Files
+## Uploading Your File
 
-Place your bank statement files in the directory you mounted as `/financial-data` when deploying Tally. Tally reads this directory as read-only — it never modifies or deletes your original files.
-
-Alternatively, you can upload a file directly in the import wizard without using the `/financial-data` directory. Uploaded files must be `.csv` or `.pdf` and are size-capped (default 10 MB, set by `MAX_UPLOAD_BYTES`); larger files are rejected.
+Upload a `.csv` or `.pdf` file directly in the import wizard. Files are size-capped (default 10 MB, set by `MAX_UPLOAD_BYTES`); larger files are rejected.
 
 ---
 
@@ -29,18 +27,27 @@ Alternatively, you can upload a file directly in the import wizard without using
 2. Click the **Import** button
 3. The import wizard opens as a guided flow: **choose account → upload → match columns → review → confirm**
 
----
-
-## Step 1 — Select File and Account
-
-- Choose a file from the list of files in your `/financial-data` directory, or upload a file directly
-- Select which **account** these transactions belong to
-
-Click **Next** to proceed.
+**Note:** Tally sometimes inserts an extra step. If a PDF has more than one detected table, a **Pick a table** step appears after upload; if the reconciliation matcher flags anything for your attention, a **Quick check** step appears after review. Either one shifts the step numbers below by one — nothing has been skipped.
 
 ---
 
-## Step 2 — Map Columns
+## Step 1 — Choose Account
+
+Select which **account** these transactions belong to. The account you pick is locked for the rest of the import.
+
+Click **Continue** to proceed.
+
+---
+
+## Step 2 — Upload File
+
+Upload a `.csv` or `.pdf` bank statement file.
+
+Click **Continue** to proceed.
+
+---
+
+## Step 3 — Map Columns
 
 Tally needs to know which columns in your file correspond to date, description, and amount.
 
@@ -66,7 +73,7 @@ For PDF files, Tally previews the detected columns from the largest table in the
 - Description
 - Amount (or Credit and Debit if split)
 
-Click **Import** to run the import.
+Click **Continue** to proceed to the review step.
 
 ---
 

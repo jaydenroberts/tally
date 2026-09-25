@@ -10,7 +10,7 @@ This guide walks you through deploying Tally for the first time — from pulling
 - A terminal or Unraid Docker UI access
 - Port 8092 available on your host (or a port of your choosing)
 - A directory on your host for persistent data (e.g. `/mnt/user/appdata/tally`), **writable by the container's non-root user** (see the note under Installation)
-- Optionally: a directory containing your bank statement files (CSV or PDF)
+- Optionally: your bank statement files (CSV or PDF) ready to upload once Tally is running
 
 ---
 
@@ -31,7 +31,6 @@ docker run -d \
   --name tally \
   -p 8092:8091 \
   -v /mnt/user/appdata/tally:/data \
-  -v /mnt/user/financial-data:/financial-data:ro \
   -e SECRET_KEY=$(openssl rand -hex 32) \
   -e FIRST_RUN_OWNER_USERNAME=admin \
   -e FIRST_RUN_OWNER_PASSWORD=changeme \
@@ -54,7 +53,6 @@ services:
       - "8092:8091"
     volumes:
       - /mnt/user/appdata/tally:/data
-      - /mnt/user/financial-data:/financial-data:ro
     environment:
       - SECRET_KEY=your-secret-key-here
       - FIRST_RUN_OWNER_USERNAME=admin
