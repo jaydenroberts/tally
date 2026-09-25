@@ -4,7 +4,7 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
-## [1.4.6] - 2026-09-21
+## [1.4.6] - 2026-09-25
 
 A dependency and platform release: every layer underneath Tally moves to a current version, and no application logic changed. The value of a release like this is that any bug reported afterwards has exactly one place it can have come from.
 
