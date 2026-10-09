@@ -1,4 +1,4 @@
-fastapi==0.141.1
+fastapi==0.142.2
 # Pinned explicitly rather than left to fastapi's range, so the version that
 # ships is the version that was tested. fastapi 0.141.1 requires only
 # starlette>=0.46.0 (read from its package metadata, 2026-09-18), so this line
@@ -14,9 +14,9 @@ fastapi==0.141.1
 # image scan to zero fixable CRITICAL or HIGH, so that waiver file has been
 # deleted. Verified 2026-09-19 by scanning the built image with no ignore file
 # at all. Do not pin back to 0.x without reinstating the waiver.
-starlette==1.6.0
-uvicorn[standard]==0.53.0
-sqlalchemy==2.0.54
+starlette==1.7.0
+uvicorn[standard]==0.54.0
+sqlalchemy==2.1.3
 pydantic==2.13.5
 pydantic-settings==2.15.0
 python-jose[cryptography]==3.5.0
@@ -51,7 +51,7 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.3.0
 python-multipart==0.0.32
 aiofiles==25.1.0
-pandas==3.0.5
+pandas==3.0.6
 pdfplumber==0.11.10
 pdfminer.six>=20251230,<20260601
 python-dateutil==2.9.0.post0
@@ -76,9 +76,9 @@ python-dateutil==2.9.0.post0
 # httpx is then not installed at all, and httpx2 reports anthropic and openai as
 # its only dependents. Because there is no separate httpx module left, the old
 # warning against calling httpx2's alias_httpx() no longer applies.
-httpx2==2.13.0
-anthropic==1.6.0
-openai==3.14.1
+httpx2==2.13.1
+anthropic==1.11.0
+openai==3.24.0
 rapidfuzz==3.14.6
 pytest==9.1.1
 pytest-asyncio==1.4.0
