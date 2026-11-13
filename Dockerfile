@@ -15,7 +15,7 @@ RUN npx vite build --outDir /frontend-dist --emptyOutDir
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2: Python backend + bundled frontend
 # ─────────────────────────────────────────────────────────────────────────────
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 WORKDIR /app
 
