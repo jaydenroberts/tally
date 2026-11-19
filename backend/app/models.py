@@ -290,6 +290,34 @@ class Transaction(Base):
     debt = relationship("Debt", backref="payment_transactions")
 
 
+class TransactionTypeChange(Base):
+    """Append-only log of every change to a transaction's income/expense type
+    that was not simply the type it was created with.
+
+    Added in v1.4.7, additive only: no existing table or column is altered, and
+    the table can be dropped without affecting anything else. It exists so the
+    v1.4.7 repair migration (M-012) is reversible row by row, and so a person's
+    deliberate re-type (reason ``user``) can be told apart from a defect.
+
+    Reasons:
+      ``M-012/import``     an imported credit re-typed from expense to income
+      ``M-012/recurring``  a generated recurring credit re-typed likewise
+      ``M-012/other``      any other unlinked credit re-typed likewise
+      ``user``             a person used the Income/Expense toggle
+
+    ``transaction_id`` is deliberately NOT a foreign key: the log must survive the
+    transaction being deleted, and must never block that delete.
+    """
+    __tablename__ = "transaction_type_changes"
+
+    id = Column(Integer, primary_key=True)
+    transaction_id = Column(Integer, nullable=False, index=True)
+    from_type = Column(String(20), nullable=False)
+    to_type = Column(String(20), nullable=False)
+    reason = Column(String(40), nullable=False, index=True)
+    changed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 # ---------------------------------------------------------------------------
 # Budgets
 # ---------------------------------------------------------------------------
