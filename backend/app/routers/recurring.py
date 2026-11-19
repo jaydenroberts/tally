@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
-from .. import models, schemas
+from .. import models, money, schemas
 from ..auth import get_current_user, require_owner
 
 router = APIRouter(prefix="/api/recurring", tags=["recurring"])
@@ -98,6 +98,9 @@ def run_due_recurring(db: Session) -> int:
                 source="manual",     # recurring entries start as unverified estimates
                 is_verified=False,
                 notes=f"Auto-generated from recurring: {rec.description}",
+                # Set by sign, never left to the column default: a recurring salary
+                # would otherwise be generated as spend (v1.4.7 condition 7).
+                transaction_type=money.type_for_amount(rec.amount),
             )
             db.add(tx)
             generated += 1

@@ -251,7 +251,8 @@ class TransactionCreate(BaseModel):
     amount: float
     category_id: Optional[int] = None
     notes: Optional[str] = None
-    transaction_type: Literal['expense', 'income'] = 'expense'
+    # Omitted → set by the sign of the amount (see create_transaction).
+    transaction_type: Optional[Literal['expense', 'income']] = None
     # source and is_verified are set by the backend; not accepted from clients
 
     _validate_amount = field_validator("amount", mode="before")(_check_finite)

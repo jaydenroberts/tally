@@ -33,7 +33,7 @@ from rapidfuzz import fuzz
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import models, money, schemas
 from ..auth import require_owner
 from ..database import get_db
 from ..import_parsers import csv_parser, pdf_parser
@@ -1168,6 +1168,10 @@ def commit_draft(
                 source="import",
                 is_verified=not is_near_dup,
                 import_id=draft.id,
+                # BACKLOG-052: stamp the type by sign. A statement only tells us the
+                # sign, so a credit is filed as income and a debit as spend. Leaving
+                # this to the column default filed every credit as spend.
+                transaction_type=money.type_for_amount(row_amount),
             ))
             created += 1
 

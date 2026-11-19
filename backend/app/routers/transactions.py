@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
 from .. import models, schemas
 from ..auth import get_current_user, require_owner
+from .. import money
 from ..money import TRANSFER_LEG_TYPES, flow_filter
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
@@ -173,7 +174,7 @@ def _reset_transfer_pair_sibling(tx: models.Transaction, db: Session) -> None:
         models.Transaction.id != tx.id,
     ).all()
     for sib in siblings:
-        sib.transaction_type = "income" if sib.amount > 0 else "expense"
+        sib.transaction_type = money.type_for_amount(sib.amount)
         sib.transfer_pair_id = None
 
 
@@ -397,11 +398,16 @@ def create_transaction(
     account = db.query(models.Account).filter(models.Account.id == payload.account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    # transaction_type comes from the payload ('expense' or 'income').
-    # We pass it explicitly via model_dump() rather than relying on the SQLAlchemy
-    # column default, which is not applied to rows on ALTER-added columns.
+    # transaction_type comes from the payload ('expense' or 'income') when the
+    # client sends one; the web form always does. When it is omitted it is set by
+    # sign rather than left to the column default, which used to file every
+    # positive API-created row as spend (v1.4.7 condition 7). An explicit
+    # positive 'expense' is honoured: that is how a refund is recorded.
+    data = payload.model_dump()
+    if data.get("transaction_type") is None:
+        data["transaction_type"] = money.type_for_amount(data["amount"])
     tx = models.Transaction(
-        **payload.model_dump(),
+        **data,
         source="manual",   # manual entries are always estimates
         is_verified=False,
     )
@@ -440,7 +446,7 @@ def bulk_delete_transactions(
             for sib in siblings:
                 if sib.id in delete_id_set:
                     continue  # sibling is also being deleted; no need to reset it
-                sib.transaction_type = "income" if sib.amount > 0 else "expense"
+                sib.transaction_type = money.type_for_amount(sib.amount)
                 sib.transfer_pair_id = None
     db.query(models.ImportDraftRow).filter(models.ImportDraftRow.duplicate_of.in_(ids)).update(
         {"duplicate_of": None}, synchronize_session=False
@@ -602,7 +608,9 @@ def unlink_transfer_pair(
 ):
     """
     Unlink both sides of a transfer pair.
-    Both transactions are reset to 'expense' type and their transfer_pair_id is cleared.
+    Each leg returns to a plain row typed by its sign (money in → income, money
+    out → expense) and its transfer_pair_id is cleared. Before v1.4.7 both legs
+    were reset to 'expense', which filed the incoming leg as spend.
     """
     tx = db.query(models.Transaction).filter(models.Transaction.id == tx_id).first()
     if not tx:
@@ -618,12 +626,12 @@ def unlink_transfer_pair(
     ).first()
 
     # Reset this transaction
-    tx.transaction_type = "expense"
+    tx.transaction_type = money.type_for_amount(tx.amount)
     tx.transfer_pair_id = None
 
     # Reset the paired transaction if it exists
     if pair_tx:
-        pair_tx.transaction_type = "expense"
+        pair_tx.transaction_type = money.type_for_amount(pair_tx.amount)
         pair_tx.transfer_pair_id = None
 
     db.commit()
@@ -718,7 +726,7 @@ def unlink_savings_withdrawal(
         goal.is_completed = False  # reversal means goal is no longer complete
 
     db.delete(contribution)
-    tx.transaction_type = "expense"
+    tx.transaction_type = money.type_for_amount(tx.amount)
 
     db.commit()
 
@@ -871,7 +879,7 @@ def batch_update_allocations(
         tx.debt_id = None
 
     # Reset transaction type to a neutral baseline; phase 3 may upgrade it
-    tx.transaction_type = "income" if tx.amount > 0 else "expense"
+    tx.transaction_type = money.type_for_amount(tx.amount)
 
     # ── PHASE 3: apply the new allocations ─────────────────────────────────────
     is_withdrawal = tx.amount < 0  # debit transactions allocate to goals as withdrawals
@@ -1154,6 +1162,6 @@ def unlink_transaction_from_debt(
     db.delete(payment)
 
     tx.debt_id = None
-    tx.transaction_type = "expense"
+    tx.transaction_type = money.type_for_amount(tx.amount)
 
     db.commit()
