@@ -31,6 +31,21 @@ AI_MODEL    = os.getenv("AI_MODEL", "")
 AI_BASE_URL = os.getenv("AI_BASE_URL", "")
 
 
+def is_configured() -> bool:
+    """BACKLOG-054: is there enough configuration to reach *any* provider?
+
+    anthropic / openai need a key; ollama (and other OpenAI-compatible local
+    endpoints) need a base URL and no key. Anything else is not a provider
+    Tally knows how to drive. Reads the module globals at call time so tests
+    (and a future runtime reload) can change them without re-importing.
+    """
+    if AI_PROVIDER in ("anthropic", "openai"):
+        return bool(AI_API_KEY)
+    if AI_PROVIDER == "ollama":
+        return bool(AI_BASE_URL)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Shared type aliases
 # ---------------------------------------------------------------------------

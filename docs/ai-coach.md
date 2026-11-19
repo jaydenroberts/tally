@@ -111,7 +111,9 @@ There is no automatic expiry or cleanup — a conversation is kept until you del
 
 ### If You Haven't Configured a Provider
 
-**AI Coach** always appears in the sidebar, whether or not you've set `AI_PROVIDER` or an API key — Tally doesn't hide it based on configuration. If you open it and send a message with no provider configured, you'll get a generic error saying the assistant couldn't finish responding. That's expected: it means no provider is set up, not that something is broken. If you've deliberately left AI turned off, you can ignore it — the rest of Tally is unaffected.
+**AI Coach** always appears in the sidebar, whether or not you've set `AI_PROVIDER` or an API key — Tally doesn't hide it based on configuration. If you open it and send a message with no provider configured, Tally replies that the AI Coach is not set up yet and names the settings it needs: `AI_PROVIDER=anthropic` or `AI_PROVIDER=openai` together with `AI_API_KEY`, or `AI_PROVIDER=ollama` together with `AI_BASE_URL`. Set them on the container and restart it — environment variables are read at startup. Nothing is saved when this happens: no conversation is created and your message is not stored. If you've deliberately left AI turned off, you can ignore it — the rest of Tally is unaffected.
+
+A different message — "The assistant hit an error and couldn't finish responding", with a reference code — means a provider *is* configured but the request to it failed (a wrong key, an unreachable Ollama address, a provider outage). The reference code matches a line in the container log that says what went wrong.
 
 ---
 
