@@ -9,20 +9,32 @@ This guide walks you through deploying Tally for the first time — from pulling
 - A host running Docker (Unraid, TrueNAS, a Linux server, or any machine with Docker installed)
 - A terminal or Unraid Docker UI access
 - Port 8092 available on your host (or a port of your choosing)
-- A directory on your host for persistent data (e.g. `/mnt/user/appdata/tally`), **writable by the container's non-root user** (see the note under Installation)
+- A directory on your host for persistent data (e.g. `/mnt/user/appdata/tally`), **owned by ID 999, the container's non-root user** (see the note under Installation)
 - Optionally: your bank statement files (CSV or PDF) ready to upload once Tally is running
 
 ---
 
 ## Installation
 
-> **Warning:** Tally runs as a **non-root** user inside the container. The host
-> directory you mount at `/data` must be writable by that user, or Tally cannot
-> create its database and the container will fail to start on first run — the most
-> common new-install problem. On Unraid, paths under `/mnt/user/appdata/` are
-> writable by default. On a plain Linux host, create the directory and make it
-> writable by the container user before starting (check the user's UID with
-> `docker run --rm --entrypoint id <image>` and `chown` the directory to it).
+> **Warning:** Tally runs as a **non-root** user (ID `999`) inside the container.
+> The host directory you mount at `/data` must be writable by that user, or Tally
+> cannot create its database and the container stops on first start — the most
+> common new-install problem. This is **not** automatic, including on Unraid: when
+> the folder does not exist yet, Docker creates it owned by `root`, and ID 999
+> cannot write to it. Before the first start, run these on the **host** (on Unraid,
+> in the web UI's terminal):
+>
+> ```bash
+> sudo mkdir -p <your data folder>
+> sudo chown -R 999:999 <your data folder>
+> ```
+>
+> Replace `<your data folder>` with the host path you mount at `/data` (the Unraid
+> template's default is `/mnt/user/appdata/tally/data`). On Unraid you are already
+> root, so `sudo` can be left off. If the folder is not writable, Tally exits at
+> startup with one message naming the folder, its current owner and the exact
+> `chown` command, instead of a database error. To confirm the user's ID for the
+> image you run: `docker run --rm --entrypoint id <image>`.
 
 ### Option 1 — Docker Run
 

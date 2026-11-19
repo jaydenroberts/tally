@@ -38,7 +38,7 @@ Tally is configured through environment variables passed to the Docker container
 |----------------|---------|----------------------|
 | `/data` | Persistent storage for the SQLite database and automatic backups | `/mnt/user/appdata/tally` |
 
-**Warning:** Tally runs as a **non-root** user inside the container. The host directory you mount at `/data` must be writable by that user, or Tally cannot create or open its database and the container will fail to start. On Unraid, `/mnt/user/appdata/` paths are writable by default; on a plain Linux host, make the data directory writable by the container user before starting.
+**Warning:** Tally runs as a **non-root** user (ID `999`) inside the container. The host directory you mount at `/data` must be writable by that user, or Tally cannot create or open its database and the container will not start. This is not automatic on any platform, Unraid included: a folder Docker creates for a missing path is owned by `root`. Before the first start, run `sudo chown -R 999:999 <your data folder>` on the host (on Unraid the template's default folder is `/mnt/user/appdata/tally/data`). If the folder is not writable, Tally exits at startup with a message naming the folder and the exact command; see [Getting Started](getting-started.md).
 
 ---
 
