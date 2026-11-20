@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session, joinedload
 from ..database import get_db
 from .. import models, schemas
 from ..auth import get_current_user, require_owner
+from .. import money
 from ..money import TRANSFER_LEG_TYPES, flow_filter
+from ..type_repair import REASON_USER, plain_row_blocker, retype_on_sign_flip
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
@@ -173,7 +175,7 @@ def _reset_transfer_pair_sibling(tx: models.Transaction, db: Session) -> None:
         models.Transaction.id != tx.id,
     ).all()
     for sib in siblings:
-        sib.transaction_type = "income" if sib.amount > 0 else "expense"
+        sib.transaction_type = money.type_for_amount(sib.amount)
         sib.transfer_pair_id = None
 
 
@@ -274,12 +276,14 @@ def transaction_summary(
         account_id=account_id, flow_only=True,
         date_from=date_from, date_to=date_to,
     )
+    # v1.4.7: split by TYPE as signed sums, the same rule as the dashboard, so the
+    # two pages always agree. A refund (positive 'expense') reduces expenses.
     income = money_q.with_entities(
         func.coalesce(func.sum(models.Transaction.amount), 0.0)
-    ).filter(models.Transaction.amount > 0).scalar() or 0.0
+    ).filter(models.Transaction.transaction_type.in_(money.INCOME_TYPES)).scalar() or 0.0
     expenses = money_q.with_entities(
         func.coalesce(func.sum(models.Transaction.amount), 0.0)
-    ).filter(models.Transaction.amount < 0).scalar() or 0.0
+    ).filter(money.spend_filter(models.Transaction.transaction_type)).scalar() or 0.0
 
     unverified_count = _apply_tx_filters(
         db.query(models.Transaction),
@@ -287,7 +291,7 @@ def transaction_summary(
     ).count()
 
     income = float(income)
-    expenses = abs(float(expenses))   # report expenses as a positive magnitude
+    expenses = 0.0 - float(expenses)   # outflow as a positive figure; 0.0 - avoids "-0.0"
     return {
         "income": income,
         "expenses": expenses,
@@ -397,11 +401,16 @@ def create_transaction(
     account = db.query(models.Account).filter(models.Account.id == payload.account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    # transaction_type comes from the payload ('expense' or 'income').
-    # We pass it explicitly via model_dump() rather than relying on the SQLAlchemy
-    # column default, which is not applied to rows on ALTER-added columns.
+    # transaction_type comes from the payload ('expense' or 'income') when the
+    # client sends one; the web form always does. When it is omitted it is set by
+    # sign rather than left to the column default, which used to file every
+    # positive API-created row as spend (v1.4.7 condition 7). An explicit
+    # positive 'expense' is honoured: that is how a refund is recorded.
+    data = payload.model_dump()
+    if data.get("transaction_type") is None:
+        data["transaction_type"] = money.type_for_amount(data["amount"])
     tx = models.Transaction(
-        **payload.model_dump(),
+        **data,
         source="manual",   # manual entries are always estimates
         is_verified=False,
     )
@@ -440,7 +449,7 @@ def bulk_delete_transactions(
             for sib in siblings:
                 if sib.id in delete_id_set:
                     continue  # sibling is also being deleted; no need to reset it
-                sib.transaction_type = "income" if sib.amount > 0 else "expense"
+                sib.transaction_type = money.type_for_amount(sib.amount)
                 sib.transfer_pair_id = None
     db.query(models.ImportDraftRow).filter(models.ImportDraftRow.duplicate_of.in_(ids)).update(
         {"duplicate_of": None}, synchronize_session=False
@@ -568,8 +577,16 @@ def link_transfer_pair(
     if tx_a.transfer_pair_id is not None or tx_b.transfer_pair_id is not None:
         raise HTTPException(status_code=409, detail="One or more transactions are already part of a transfer pair")
 
-    if tx_a.transaction_type == "transfer" or tx_b.transaction_type == "transfer":
-        raise HTTPException(status_code=409, detail="One or more transactions are already part of a transfer pair")
+    # v1.4.7: only two plain, unlinked income/expense rows can be paired. Pairing
+    # overwrites the type, so pairing a debt payment or a goal-linked row would
+    # strand its link (the debt or goal balance stays moved with no record why).
+    for tx in (tx_a, tx_b):
+        blocker = plain_row_blocker(tx, db)
+        if blocker:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Transaction {tx.id} is {blocker}. Unlink it first, then pair the two transactions.",
+            )
 
     # Use tx_a's id as the shared grouping key
     tx_a.transaction_type = "transfer"
@@ -602,7 +619,9 @@ def unlink_transfer_pair(
 ):
     """
     Unlink both sides of a transfer pair.
-    Both transactions are reset to 'expense' type and their transfer_pair_id is cleared.
+    Each leg returns to a plain row typed by its sign (money in → income, money
+    out → expense) and its transfer_pair_id is cleared. Before v1.4.7 both legs
+    were reset to 'expense', which filed the incoming leg as spend.
     """
     tx = db.query(models.Transaction).filter(models.Transaction.id == tx_id).first()
     if not tx:
@@ -618,12 +637,12 @@ def unlink_transfer_pair(
     ).first()
 
     # Reset this transaction
-    tx.transaction_type = "expense"
+    tx.transaction_type = money.type_for_amount(tx.amount)
     tx.transfer_pair_id = None
 
     # Reset the paired transaction if it exists
     if pair_tx:
-        pair_tx.transaction_type = "expense"
+        pair_tx.transaction_type = money.type_for_amount(pair_tx.amount)
         pair_tx.transfer_pair_id = None
 
     db.commit()
@@ -718,9 +737,60 @@ def unlink_savings_withdrawal(
         goal.is_completed = False  # reversal means goal is no longer complete
 
     db.delete(contribution)
-    tx.transaction_type = "expense"
+    tx.transaction_type = money.type_for_amount(tx.amount)
 
     db.commit()
+
+
+@router.post("/{tx_id}/retype", response_model=schemas.TransactionResponse)
+def retype_transaction(
+    tx_id: int,
+    payload: schemas.RetypeRequest,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_owner),
+):
+    """Set a plain row to income or expense (the Income/Expense toggle, v1.4.7).
+
+    A dedicated endpoint rather than a ``transaction_type`` field on the general
+    PATCH, so the general edit path still cannot touch the type and this one can
+    only ever choose between the two flow types, on an unlinked row. Every change
+    is recorded in ``transaction_type_changes`` with reason ``user``, which is how
+    the start-up check tells a deliberate refund (a positive row set to Expense)
+    from a defect.
+    """
+    tx = db.query(models.Transaction).filter(models.Transaction.id == tx_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    blocker = plain_row_blocker(tx, db)
+    if blocker:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This transaction is {blocker}, so its type is set by that link. Unlink it first.",
+        )
+
+    changing = tx.transaction_type != payload.transaction_type
+    # Choosing Expense for a money-in row that is already an Expense confirms it
+    # as a refund. The type does not change, but the 'user' entry is what stops
+    # the start-up warning for that row. Logged once.
+    confirming_refund = (
+        not changing
+        and payload.transaction_type == "expense"
+        and tx.amount > 0
+        and db.query(models.TransactionTypeChange)
+              .filter_by(transaction_id=tx.id, reason=REASON_USER).first() is None
+    )
+    if changing or confirming_refund:
+        db.add(models.TransactionTypeChange(
+            transaction_id=tx.id,
+            from_type=tx.transaction_type,
+            to_type=payload.transaction_type,
+            reason=REASON_USER,
+        ))
+        tx.transaction_type = payload.transaction_type
+        db.commit()
+    db.refresh(tx)
+    return attach_allocations(tx, db)
 
 
 @router.get("/{tx_id}", response_model=schemas.TransactionResponse)
@@ -762,8 +832,12 @@ def update_transaction(
                 detail="Imported (verified) transactions cannot be edited. Delete and re-import if needed.",
             )
 
+    old_amount = tx.amount
     for field, value in updates.items():
         setattr(tx, field, value)
+    # v1.4.7: an edit that moves a plain row between money in and money out
+    # re-types it to match (logged as 'sign-flip'); linked rows are left alone.
+    retype_on_sign_flip(db, tx, old_amount)
     db.commit()
     db.refresh(tx)
     return tx
@@ -871,7 +945,7 @@ def batch_update_allocations(
         tx.debt_id = None
 
     # Reset transaction type to a neutral baseline; phase 3 may upgrade it
-    tx.transaction_type = "income" if tx.amount > 0 else "expense"
+    tx.transaction_type = money.type_for_amount(tx.amount)
 
     # ── PHASE 3: apply the new allocations ─────────────────────────────────────
     is_withdrawal = tx.amount < 0  # debit transactions allocate to goals as withdrawals
@@ -1154,6 +1228,6 @@ def unlink_transaction_from_debt(
     db.delete(payment)
 
     tx.debt_id = None
-    tx.transaction_type = "expense"
+    tx.transaction_type = money.type_for_amount(tx.amount)
 
     db.commit()

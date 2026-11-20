@@ -2,7 +2,7 @@
 
 Tally is a self-hosted personal finance web application for households. It runs as a single Docker container and gives you full control of your financial data — no third-party services, no subscriptions, no data leaving your server.
 
-This documentation covers Tally v1.4.6.
+This documentation covers Tally v1.4.7.
 
 ---
 
@@ -50,4 +50,4 @@ This documentation covers Tally v1.4.6.
 
 ## Version
 
-This documentation covers **Tally v1.4.6**. Tally follows semantic versioning. Breaking changes will be noted in each document section where applicable.
+This documentation covers **Tally v1.4.7**. Tally follows semantic versioning. Breaking changes will be noted in each document section where applicable.

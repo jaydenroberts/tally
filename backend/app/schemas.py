@@ -9,11 +9,29 @@ from pydantic import BaseModel, field_validator, model_validator
 # ---------------------------------------------------------------------------
 
 def _check_finite(v: Any) -> Any:
-    """Reject NaN and Infinity values on float fields."""
-    if v is not None and isinstance(v, (int, float)):
-        v = float(v)
-        if math.isnan(v) or math.isinf(v):
-            raise ValueError("Value must be a finite number (NaN and Infinity are not allowed)")
+    """Reject NaN and Infinity values on float fields.
+
+    Runs before pydantic parses the value, so it must also look at strings:
+    pydantic accepts "Infinity", "inf", "NaN" and "1e999" as floats, and before
+    v1.4.7 those walked straight past a check that only inspected numbers.
+    A string that is not a number at all is left for pydantic to reject.
+    """
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        try:
+            candidate = float(v)
+        except OverflowError:   # an integer too large for a float is not finite
+            candidate = math.inf
+    elif isinstance(v, (str, bytes)):
+        try:
+            candidate = float(v)
+        except (TypeError, ValueError):
+            return v
+    else:
+        return v
+    if math.isnan(candidate) or math.isinf(candidate):
+        raise ValueError("Value must be a finite number (NaN and Infinity are not allowed)")
     return v
 
 
@@ -251,7 +269,8 @@ class TransactionCreate(BaseModel):
     amount: float
     category_id: Optional[int] = None
     notes: Optional[str] = None
-    transaction_type: Literal['expense', 'income'] = 'expense'
+    # Omitted → set by the sign of the amount (see create_transaction).
+    transaction_type: Optional[Literal['expense', 'income']] = None
     # source and is_verified are set by the backend; not accepted from clients
 
     _validate_amount = field_validator("amount", mode="before")(_check_finite)
@@ -267,6 +286,12 @@ class TransactionUpdate(BaseModel):
     # transaction_type intentionally excluded — set only via link/unlink endpoints
 
     _validate_amount = field_validator("amount", mode="before")(_check_finite)
+
+
+class RetypeRequest(BaseModel):
+    """Body of POST /api/transactions/{id}/retype — the Income/Expense toggle.
+    Only the two flow types; balance-sheet types are set by their links."""
+    transaction_type: Literal['expense', 'income']
 
 
 class AllocationView(BaseModel):

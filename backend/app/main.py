@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .database import engine, SessionLocal, Base
-from . import backup, models
+from . import backup, models, type_repair
 from .auth import hash_password
 from .routers import auth, users, accounts, transactions, categories, budgets, savings, debt, imports, recurring, chat, chat_sessions, dashboard, data
 
@@ -396,6 +396,16 @@ def run_startup_migrations(db: Session) -> None:
             log.info("[M-003] Removed %d duplicate imported transaction(s)", dupes_removed)
         log.info("[M-003] One-time dedup cleanup complete; marker recorded")
 
+    # [M-012] v1.4.7 transaction-type repair. MUST stay LAST: it reads columns and
+    # tables the migrations above add to older databases (transfer_pair_id from
+    # M-007, schema_migrations from M-003). One-shot behind its own marker, all in
+    # one transaction; on any failure it rolls back and raises, so the app does not
+    # start. See app/type_repair.py for the predicate and the reverse SQL.
+    type_repair.run_m012(db)
+    # Every boot: warn (never fix) about unlinked positive rows typed as spend that
+    # a person did not set that way.
+    type_repair.check_untyped_credits(db)
+
 
 # ---------------------------------------------------------------------------
 # In-process daily recurring-transaction trigger (BACKLOG-025)
@@ -523,7 +533,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tally",
     description="Self-hosted personal finance for households",
-    version="1.4.6",
+    version="1.4.7",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

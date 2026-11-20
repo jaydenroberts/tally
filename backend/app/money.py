@@ -85,3 +85,20 @@ def is_flow(transaction_type: Optional[str]) -> bool:
 def is_spend(transaction_type: Optional[str]) -> bool:
     """Python-side equivalent of :func:`spend_filter`."""
     return transaction_type is None or transaction_type in SPEND_TYPES
+
+
+def is_income(transaction_type: Optional[str]) -> bool:
+    """True for rows that count as household income."""
+    return transaction_type in INCOME_TYPES
+
+
+def type_for_amount(amount: float) -> str:
+    """The flow type a row gets when nothing more is known than its sign.
+
+    Every code path that creates a plain row, or returns a row to a plain state
+    (unlinking it from a transfer, a debt or a goal), must use this. Money in is
+    income, money out (and zero) is spend. A person can still re-type a single row
+    afterwards — a refund is a positive ``expense`` — but no code path may guess
+    that on their behalf.
+    """
+    return "income" if amount is not None and amount > 0 else "expense"

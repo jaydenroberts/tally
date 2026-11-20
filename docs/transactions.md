@@ -12,7 +12,7 @@ Transactions are displayed in a paginated table with the following columns:
 - **Description** — the transaction description (from import or manual entry)
 - **Account** — which account the transaction belongs to
 - **Category** — spending category (clickable to edit inline — see below)
-- **Amount** — positive for income/credits, negative for expenses/debits
+- **Amount** — positive for money in, negative for money out. This usually also tells you Income from Expense, but a refund is money in (positive) stored as an **Expense** — see [Income or expense](#income-or-expense) below.
 - **Status** — Verified or Estimate badge
 - **Actions** — row-level action buttons
 
@@ -60,18 +60,22 @@ Click once to sort ascending, click again to sort descending. An arrow indicator
 
 ## Adding a Transaction
 
-Click the **+ Expense** button (floating action button, bottom right) to add a new expense transaction manually.
+Click **+ Add** at the top of the Transactions page to open the **Add transaction** form.
+Choose **− Expense**, **+ Income**, or **↔ Transfer** at the top of the form — a transfer
+has its own fields and is covered under [Adding a Transfer](#adding-a-transfer) below.
 
-Fill in:
-- Date
-- Description
+For an expense or income, fill in:
 - Account
+- Amount (enter as a positive number — Tally stores an expense as negative and income as
+  positive)
 - Category
-- Amount (enter as a positive number — Tally stores expenses as negatives internally)
+- Date, description and notes — click **More options** to show them (an income entry
+  shows its description field without that extra click)
 
-Click **Save** to add the transaction.
+Click **Add expense** or **Add income** to save the transaction.
 
-**Note:** Only owners can create, edit, or delete transactions.
+**Note:** Only owners can create, edit, or delete transactions. A manually added
+transaction is saved as an **Estimate** until a bank import matches and verifies it.
 
 ---
 
@@ -80,14 +84,52 @@ Click **Save** to add the transaction.
 Transfers move money between two of your accounts. They are excluded from budget calculations so they do not distort spending figures.
 
 To add a transfer:
-1. Click the **↔ Transfer** toggle on the floating action button (bottom right)
+1. Click **+ Add**, then choose **↔ Transfer** at the top of the form
 2. Select the **From** account and **To** account
-3. Enter the date and amount
-4. Click **Save**
+3. Enter the amount and, optionally, the date and a description
+4. Click **Create transfer**
 
 A transfer creates two linked transactions — a debit on the From account and a credit on the To account. Both display a **↔ Transfer** badge. Deleting one side of a transfer does not delete the other.
 
-You can also link two existing transactions as a transfer pair using the **↔ Link Transfer** button on a transaction row.
+### Linking two existing transactions as a transfer
+
+If you import statements from two of your accounts, a payment between them arrives
+twice: money out of one account and money in to the other. For example, paying your
+credit card from your bank account shows as a debit on the bank statement and a credit
+on the card statement. Tally cannot tell on its own that these are the same money
+moving, so the credit is counted as income until you link them.
+
+1. On the Transactions page, tick the checkbox on both transactions (they must be on
+   the same page; use the account or date filters to bring them together).
+2. Click **Link as transfer** in the bar above the list. The button only becomes active
+   when the two are on different accounts, one is money out and the other money in, and
+   neither is already linked to a debt, a savings goal or another transfer.
+3. Check both rows in the confirmation box and click **Link as transfer**.
+
+Both transactions then show a **Transfer** badge and stop counting as income or
+spending. To undo it, open either transaction and click **Unlink transfer**: each one
+goes back to income (money in) or expense (money out).
+
+⚠️ Do not use this for a refund. A refund is money coming back for something you bought;
+see [Income or expense](#income-or-expense) below.
+
+---
+
+## Income or expense
+
+Every ordinary transaction is either **Income** or **Expense**. Imports and new entries
+set this from the sign: money in is Income, money out is Expense.
+
+The one case that needs you is a **refund**. A refund is money in, so Tally first files
+it as Income. To have it reduce your spending instead:
+
+1. Click the transaction to open it.
+2. Under **Type**, click **Expense**.
+
+The refund then reduces your spending, and the budget of its category, in the month the
+refund arrived (not the month of the original purchase). Click **Income** to change it
+back. Transactions linked to a debt, a savings goal or a transfer show no toggle: their
+type follows the link, so remove the link first.
 
 ---
 

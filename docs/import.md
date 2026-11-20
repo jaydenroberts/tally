@@ -90,6 +90,11 @@ an estimate and the imported bank amount differs, the row goes to Review, and
 confirming it updates both the transaction and the linked debt balance to the bank's
 figure.
 
+If any row's amount or date can't be read — including a statement cell that reads as
+"Infinity" or "NaN" rather than a number — Tally stops the import at this step and
+lists the affected rows instead of guessing. Exclude those rows or fix the file and
+re-upload.
+
 ## Step 5 — Confirmation Results
 
 After you confirm, Tally displays a summary of what happened:

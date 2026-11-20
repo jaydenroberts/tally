@@ -142,14 +142,20 @@ export default function Dashboard() {
           <div style={{ ...dashStyles.card, padding: 0 }}>
             <div style={{ ...dashStyles.heroHeader, ...(isMobile && { flexDirection: 'column', gap: 10 }) }}>
               <div>
-                <div style={dashStyles.cardLabel}>Net worth</div>
+                {/* v1.4.7: honest label. This is the sum of the balances typed in on the
+                    Accounts page; importing transactions does not change it. A derived
+                    net worth is v1.5.0 work. */}
+                <div style={dashStyles.cardLabel}>Account balances</div>
                 <div style={dashStyles.heroValue}>{formatCurrency(summary.netWorth)}</div>
+                <div style={dashStyles.heroChangeNote} data-testid="balance-source-note">
+                  Sum of the balances entered on Accounts. Imports do not update it.
+                </div>
                 <div style={dashStyles.heroChange}>
                   <Pill tone={summary.netWorthChange >= 0 ? 'positive' : 'negative'}>
                     <Icon name={summary.netWorthChange >= 0 ? 'arrowUp' : 'arrowDown'} size={10} stroke={2.5}/>
                     {summary.netWorthChange >= 0 ? '+' : ''}{formatCurrency(summary.netWorthChange)}
                   </Pill>
-                  <span style={dashStyles.heroChangeNote}>vs. last month</span>
+                  <span style={dashStyles.heroChangeNote}>net this month</span>
                 </div>
               </div>
               <div style={dashStyles.rangeSelector}>

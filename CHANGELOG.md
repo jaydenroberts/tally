@@ -4,6 +4,58 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
+## [1.4.7] - 2026-11-20
+
+Money correctness. Income and spending are now told apart by what a transaction *is*, not by whether its amount is positive or negative, so a refund can reduce your spending instead of counting as income. To make that safe, this release first repairs the transactions already in your database, and records every row it changes.
+
+### Fixed
+
+- **Imported transactions are now labelled.** Before this release every imported row was stored as an expense, whatever its sign. Money in is now stored as income and money out as an expense. The recurring-transaction generator, the coach, unlinking a transfer, and adding a transaction through the API without a type all follow the same rule.
+- **Income and spending are split by type everywhere.** The dashboard, the Transactions page totals, the monthly chart and the budget figures now all use the same rule: income is the total of income transactions and spending is the total of expense transactions. Before, the dashboard and the Transactions page used the sign while the Budgets page used the type, so the two could disagree.
+- **The dashboard's budget tiles now count refunds** the same way the Budgets page always has.
+- **Unlinking a transfer now puts each half back correctly.** Before, both halves became expenses, so the money-in half was counted as spending.
+- **An amount of "Infinity" or "NaN" can no longer be stored**, whether typed into the API or sitting in a cell of an imported statement. A statement cell like that is now treated as an unreadable amount, as any other junk cell is.
+- **The dashboard no longer calls a hand-entered number "Net worth".** The card is now labelled **Account balances**, and says that it is the sum of the balances you entered on the Accounts page and that imports do not update it. The figure under it is now labelled "net this month", which is what it always was. The AI coach is told the same thing about those balances. A balance worked out from your transactions is planned for v1.5.0.
+- **Tally now stops with one clear message when the data folder isn't writable**, naming the exact fix, instead of failing with a database error buried in a stack trace.
+- **Opening AI Coach without a provider configured now says so and names the settings to add** — for example `AI_PROVIDER=anthropic` together with `AI_API_KEY` — instead of a generic error.
+
+### Added
+
+- **Link two existing transactions as a transfer.** Tick two transactions on the Transactions page and click **Link as transfer**, for example the bank-side and card-side halves of a credit-card payment. A confirmation shows both rows first. Both then stop counting as income or spending. Open either one and click **Unlink transfer** to undo it. Tally refuses to link a transaction that is already tied to a debt, a savings goal or another transfer.
+- **An Income/Expense choice on each transaction.** Open a transaction and use **Type** to change it. This is how you record a refund: set it to **Expense** and it reduces your spending. Transactions tied to a debt, a savings goal or a transfer have no toggle, because their type follows that link.
+- **Changing a transaction's amount between money out and money in now updates its type to match.** Edit an amount from negative to positive and it becomes income; from positive to negative and it becomes an expense. You can switch it back with the Income/Expense toggle. Transactions tied to a debt, a savings goal or a transfer keep their type. Each automatic change is listed in `transaction_type_changes` with the reason `sign-flip`.
+- **A record of type changes.** A new table, `transaction_type_changes`, lists every transaction whose type was changed by the repair below or by you with the toggle. It only adds information; nothing existing is altered.
+- **Tally images are now published for ARM64 as well as amd64** — for example a Raspberry Pi 4/5 running a 64-bit OS, or another ARM-based server. Docker picks the right image automatically.
+
+### What the upgrade changes in your data
+
+On the first start of 1.4.7, Tally looks for transactions that are **money in, typed as an expense, and not linked** to a transfer, a debt or a savings goal. Before this release those were stored that way by mistake. It changes each one to **income** and lists it in `transaction_type_changes`, with the reason it was found: from an import, from a recurring transaction, or other. The startup log shows how many it changed for each reason, with the lowest and highest transaction number and the total amount. If nothing needed changing it says so.
+
+- **Your dashboard income and spending, the Transactions page totals and the monthly chart do not change.** Those figures already counted these rows as income, because they went by the sign.
+- **On the Budgets page and in the coach's budget view, a category's spending can go up.** Those two screens already went by the type, so a money-in row typed as an expense was being subtracted from its category as if it were a refund. Now that it is income, it no longer is. If one of those rows really was a refund, open it and set its type back to **Expense**.
+- **A refund reduces spending in the month it arrives**, not the month of the original purchase.
+- A transaction that was typed as income but has a negative amount (only possible through the coach or the API) now reduces income instead of counting as spending. Your net figure is the same either way.
+- The repair runs once, as a single step. If anything goes wrong part-way, it is undone completely, nothing is changed, and Tally will not start; the next start tries again.
+
+### Before you upgrade, and if you need to go back
+
+- **Make sure your data folder has room for one more copy of your database.** Before the repair runs, Tally writes and verifies a snapshot at `/data/backups/pre-1.4.7.db` and will not start if it cannot. **Do not set `PRE_MIGRATION_BACKUP=off` for this upgrade**: that switch skips the snapshot, and this is a release that changes your data.
+- **Keep `pre-1.4.7.db` until you are happy with the new figures.** To go back to it: stop Tally, set the image back to `1.4.6`, put the snapshot in place of `tally.db` (moving any `tally.db-wal` and `tally.db-shm` files aside too), make it writable by the container, and start Tally. The full steps are in [Backup & Restore](docs/backup-restore.md#restoring-from-a-backup). ⚠️ **Restoring the snapshot loses everything you entered or imported after the upgrade**, because the snapshot is your database as it was just before it.
+- **To undo just the repair** without losing later work, stop Tally and run this against the database, then start Tally again. Leave the `M-012` row in `schema_migrations` in place, or the next start will repeat the repair:
+
+  ```sql
+  UPDATE transactions SET transaction_type = 'expense' WHERE transaction_type = 'income' AND id IN (SELECT transaction_id FROM transaction_type_changes WHERE reason LIKE 'M-012/%');
+  ```
+
+- **If you run 1.4.6 against this database after upgrading and then come back to 1.4.7**, neither the snapshot nor the repair runs a second time: the snapshot for 1.4.7 already exists and the repair is recorded as done. Anything 1.4.6 imported in between is stored the old way. Tally does not change those rows, but on every start it logs a warning listing any money-in transaction typed as an expense that you did not set that way yourself, so you can find them and fix each one with the toggle: choose **Income**, or choose **Expense** if it really is a refund (even if it already shows Expense). Either choice stops the warning for that transaction.
+
+### Notes
+
+- **The 1.4.5 known limitation is resolved.** A refund no longer has to read as income.
+- Paying a credit card from your bank account still arrives as two separate transactions, and the card-side one is counted as income until you link the pair with **Link as transfer**. Recognising those automatically needs a way to mark accounts as your own, which is planned for v1.5.0.
+
+---
+
 ## [1.4.6] - 2026-09-25
 
 A dependency and platform release: every layer underneath Tally moves to a current version, and no application logic changed. The value of a release like this is that any bug reported afterwards has exactly one place it can have come from.
@@ -60,7 +112,7 @@ Backup and export, plus corrections to how spending and income are counted. This
 ### Notes
 
 - **Your trend chart will change if you record debt payments.** Those months will read higher than before. The previous figures were too low, because a payment against a debt was being counted as spending. Headline income and spend figures are unchanged.
-- **Known limitation.** Income and spending are still separated by whether an amount is positive or negative rather than by its type, so a refund still reads as income instead of reducing spending. Fixing this properly requires the import pipeline to label the rows it creates first, and is tracked for a later release.
+- **Known limitation.** Income and spending are still separated by whether an amount is positive or negative rather than by its type, so a refund still reads as income instead of reducing spending. Fixing this properly requires the import pipeline to label the rows it creates first, and is tracked for a later release. *Resolved in 1.4.7.*
 - Upgrade is safe and in-place. No manual steps, and the new snapshot runs automatically.
 
 ---
