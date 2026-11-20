@@ -315,6 +315,7 @@ def _execute_tool(
                 "type": a.account_type,
                 "institution": a.institution,
                 "balance": _sanitize_float(a.balance),
+                "balance_note": "balances as entered on the Accounts page, not derived from transactions; imports do not update them",
                 "currency": a.currency,
             }
             for a in accounts
@@ -745,7 +746,7 @@ def _build_system_prompt(
             .all()
         )
         if accounts:
-            lines.append("## Accounts")
+            lines.append("## Accounts (balances as entered on the Accounts page, not derived from transactions; imports do not update them)")
             for a in accounts:
                 lines.append(f"- {a.name} ({a.account_type or 'account'}): {a.currency} {_sanitize_float(a.balance):,.2f}")
             lines.append("")
@@ -765,7 +766,7 @@ def _build_system_prompt(
         )
         total_balance = sum(_sanitize_float(a.balance) for a in accounts)
         lines.append(f"## Summary")
-        lines.append(f"- Total balance across {len(accounts)} account(s): {total_balance:,.2f}")
+        lines.append(f"- Total balance across {len(accounts)} account(s): {total_balance:,.2f} (balances as entered on the Accounts page, not derived from transactions; imports do not update them)")
 
         # Spending total for current month
         spend_raw = (

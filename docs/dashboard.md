@@ -8,7 +8,11 @@ The Dashboard is the first page you see after logging in. It provides a snapshot
 
 The top section of the Dashboard shows your overall balance summary:
 
-- **Total balance** — the sum of all active account balances. Credit card balances are negative (money owed), bank and savings balances are positive.
+- **Account balances** — the sum of all active account balances. Credit card balances are negative (money owed), bank and savings balances are positive.
+  These are the balances you typed in on the **Accounts** page. Importing or adding
+  transactions does **not** change them, so update an account's balance by hand when you
+  want this figure to be current. A balance worked out from your transactions is planned
+  for a later release. The figure under it is this month's income minus spending.
 - **Individual account balances** — each account is listed with its current balance and account type.
 
 Balances are shown in the currency you configured in **Settings → General**. The currency symbol is applied globally; Tally does not do currency conversion.
