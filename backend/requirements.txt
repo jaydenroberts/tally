@@ -54,7 +54,7 @@ aiofiles==25.1.0
 pandas==3.0.5
 pdfplumber==0.11.10
 pdfminer.six>=20251230,<20260601
-python-dateutil==2.9.0.post0
+python-dateutil==4.0.0
 # anthropic 1.x and openai 3.x both replaced httpx with httpx2, Pydantic's
 # maintained fork of httpx. Pinned explicitly rather than left transitive:
 # anthropic 1.6.0 asks for httpx2>=2.0.0,<3 and openai 3.14.1 asks for
