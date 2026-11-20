@@ -77,7 +77,7 @@ python-dateutil==2.9.0.post0
 # its only dependents. Because there is no separate httpx module left, the old
 # warning against calling httpx2's alias_httpx() no longer applies.
 httpx2==2.13.0
-anthropic==1.6.0
+anthropic==2.9.0
 openai==3.14.1
 rapidfuzz==3.14.6
 pytest==9.1.1
