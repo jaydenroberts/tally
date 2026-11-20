@@ -9,11 +9,29 @@ from pydantic import BaseModel, field_validator, model_validator
 # ---------------------------------------------------------------------------
 
 def _check_finite(v: Any) -> Any:
-    """Reject NaN and Infinity values on float fields."""
-    if v is not None and isinstance(v, (int, float)):
-        v = float(v)
-        if math.isnan(v) or math.isinf(v):
-            raise ValueError("Value must be a finite number (NaN and Infinity are not allowed)")
+    """Reject NaN and Infinity values on float fields.
+
+    Runs before pydantic parses the value, so it must also look at strings:
+    pydantic accepts "Infinity", "inf", "NaN" and "1e999" as floats, and before
+    v1.4.7 those walked straight past a check that only inspected numbers.
+    A string that is not a number at all is left for pydantic to reject.
+    """
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        try:
+            candidate = float(v)
+        except OverflowError:   # an integer too large for a float is not finite
+            candidate = math.inf
+    elif isinstance(v, (str, bytes)):
+        try:
+            candidate = float(v)
+        except (TypeError, ValueError):
+            return v
+    else:
+        return v
+    if math.isnan(candidate) or math.isinf(candidate):
+        raise ValueError("Value must be a finite number (NaN and Infinity are not allowed)")
     return v
 
 

@@ -243,6 +243,12 @@ def _normalise_amount(raw):
     except (InvalidOperation, ValueError):
         return None
 
+    # Decimal happily parses "Infinity", "inf" and "NaN". A statement cell holding
+    # one of those is not an amount, so treat it like any other unparseable cell
+    # rather than committing a non-finite number (v1.4.7).
+    if not value.is_finite():
+        return None
+
     # AUDIT-03: apply the detected sign as -abs(value), never a bare negation.
     # A Dr suffix or accounting parens means "this is negative" — if the numeric
     # body ALSO carried a "-" (e.g. "-48.56 Dr" or "(-48.56)"), a bare `-value`
