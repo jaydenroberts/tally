@@ -275,12 +275,14 @@ def transaction_summary(
         account_id=account_id, flow_only=True,
         date_from=date_from, date_to=date_to,
     )
+    # v1.4.7: split by TYPE as signed sums, the same rule as the dashboard, so the
+    # two pages always agree. A refund (positive 'expense') reduces expenses.
     income = money_q.with_entities(
         func.coalesce(func.sum(models.Transaction.amount), 0.0)
-    ).filter(models.Transaction.amount > 0).scalar() or 0.0
+    ).filter(models.Transaction.transaction_type.in_(money.INCOME_TYPES)).scalar() or 0.0
     expenses = money_q.with_entities(
         func.coalesce(func.sum(models.Transaction.amount), 0.0)
-    ).filter(models.Transaction.amount < 0).scalar() or 0.0
+    ).filter(money.spend_filter(models.Transaction.transaction_type)).scalar() or 0.0
 
     unverified_count = _apply_tx_filters(
         db.query(models.Transaction),
@@ -288,7 +290,7 @@ def transaction_summary(
     ).count()
 
     income = float(income)
-    expenses = abs(float(expenses))   # report expenses as a positive magnitude
+    expenses = 0.0 - float(expenses)   # outflow as a positive figure; 0.0 - avoids "-0.0"
     return {
         "income": income,
         "expenses": expenses,

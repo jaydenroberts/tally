@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
 from ..auth import get_current_user
-from ..money import flow_filter, spend_filter
+from ..money import flow_filter, is_income, is_spend, spend_filter
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -67,15 +67,18 @@ def get_dashboard_summary(
         )
         .all()
     )
-    # NOTE (BACKLOG-052): income/spend are split by sign, not by
-    # transaction_type, so a refund reads as income rather than reducing spend.
-    # It cannot be split by type until imports.py stamps a type on the rows it
-    # creates — today every imported row lands as 'expense' regardless of sign,
-    # so trusting the type here would reclassify imported income as spend.
-    month_income = sum(t.amount for t in month_txs if t.amount > 0)
-    month_spent = abs(sum(t.amount for t in month_txs if t.amount < 0))
+    # v1.4.7 (BACKLOG-052): split by TYPE, as signed sums. Income is the sum of
+    # income-typed rows; spend is the negated sum of spend-typed rows. Where a
+    # row's sign and type agree this gives exactly the old sign-split figures.
+    # Where they disagree it does the right thing: a refund (a positive row typed
+    # 'expense') reduces spend instead of counting as income, and a reversed
+    # salary (a negative 'income' row) reduces income. Safe only because the
+    # importer now stamps a type and M-012 repaired the rows it did not.
+    month_income = sum(t.amount for t in month_txs if is_income(t.transaction_type))
+    month_spent = 0.0 - sum(t.amount for t in month_txs if is_spend(t.transaction_type))
 
-    # Net worth change = this month's net (income minus expenses)
+    # This month's net (income minus spend). Under signed sums this equals the
+    # plain sum of every flow row, which is what each history point below is.
     net_worth_change = month_income - month_spent
 
     # ── Net worth history — last 12 monthly nets ─────────────────────────────
@@ -118,19 +121,22 @@ def get_dashboard_summary(
 
     budget_categories = []
     for b in active_budgets:
-        spent_row = (
-            db.query(func.coalesce(func.sum(func.abs(models.Transaction.amount)), 0))
+        # Signed sum over spend-typed rows, the same rule as the Budgets page
+        # (budgets.py): a refund in the category reduces its spend. Before v1.4.7
+        # this tile ignored refunds while the Budgets page subtracted them.
+        net_row = (
+            db.query(func.coalesce(func.sum(models.Transaction.amount), 0))
             .join(models.Account)
             .filter(
                 models.Account.is_active == True,
                 models.Transaction.category_id == b.category_id,
                 models.Transaction.date >= month_start,
                 models.Transaction.date <= today,
-                models.Transaction.amount < 0,
                 spend_filter(models.Transaction.transaction_type),
             )
             .scalar()
         )
+        spent_row = max(0.0, -float(net_row))
         budget_categories.append({
             "name": b.category.name if b.category else "Other",
             "spent": round(float(spent_row), 2),
