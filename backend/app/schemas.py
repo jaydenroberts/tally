@@ -288,6 +288,12 @@ class TransactionUpdate(BaseModel):
     _validate_amount = field_validator("amount", mode="before")(_check_finite)
 
 
+class RetypeRequest(BaseModel):
+    """Body of POST /api/transactions/{id}/retype — the Income/Expense toggle.
+    Only the two flow types; balance-sheet types are set by their links."""
+    transaction_type: Literal['expense', 'income']
+
+
 class AllocationView(BaseModel):
     """One leg of a transaction's link state — either a savings goal contribution
     (positive amount), a savings goal withdrawal (negative amount), or a debt

@@ -87,7 +87,45 @@ To add a transfer:
 
 A transfer creates two linked transactions — a debit on the From account and a credit on the To account. Both display a **↔ Transfer** badge. Deleting one side of a transfer does not delete the other.
 
-You can also link two existing transactions as a transfer pair using the **↔ Link Transfer** button on a transaction row.
+### Linking two existing transactions as a transfer
+
+If you import statements from two of your accounts, a payment between them arrives
+twice: money out of one account and money in to the other. For example, paying your
+credit card from your bank account shows as a debit on the bank statement and a credit
+on the card statement. Tally cannot tell on its own that these are the same money
+moving, so the credit is counted as income until you link them.
+
+1. On the Transactions page, tick the checkbox on both transactions (they must be on
+   the same page; use the account or date filters to bring them together).
+2. Click **Link as transfer** in the bar above the list. The button only becomes active
+   when the two are on different accounts, one is money out and the other money in, and
+   neither is already linked to a debt, a savings goal or another transfer.
+3. Check both rows in the confirmation box and click **Link as transfer**.
+
+Both transactions then show a **Transfer** badge and stop counting as income or
+spending. To undo it, open either transaction and click **Unlink transfer**: each one
+goes back to income (money in) or expense (money out).
+
+⚠️ Do not use this for a refund. A refund is money coming back for something you bought;
+see [Income or expense](#income-or-expense) below.
+
+---
+
+## Income or expense
+
+Every ordinary transaction is either **Income** or **Expense**. Imports and new entries
+set this from the sign: money in is Income, money out is Expense.
+
+The one case that needs you is a **refund**. A refund is money in, so Tally first files
+it as Income. To have it reduce your spending instead:
+
+1. Click the transaction to open it.
+2. Under **Type**, click **Expense**.
+
+The refund then reduces your spending, and the budget of its category, in the month the
+refund arrived (not the month of the original purchase). Click **Income** to change it
+back. Transactions linked to a debt, a savings goal or a transfer show no toggle: their
+type follows the link, so remove the link first.
 
 ---
 

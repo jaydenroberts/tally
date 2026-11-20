@@ -12,6 +12,7 @@ from .. import models, schemas
 from ..auth import get_current_user, require_owner
 from .. import money
 from ..money import TRANSFER_LEG_TYPES, flow_filter
+from ..type_repair import REASON_USER
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
@@ -535,6 +536,34 @@ def create_transfer(
     )
 
 
+def _plain_row_blocker(tx: models.Transaction, db: Session) -> Optional[str]:
+    """Why ``tx`` is not a plain income/expense row, or None if it is.
+
+    Pairing a transfer or re-typing a row overwrites ``transaction_type``. On a
+    row linked to a debt or a savings goal that strands the link (the debt
+    balance or goal balance stays moved while the row stops saying why), so both
+    actions refuse anything that is not a plain, unlinked income/expense row
+    (v1.4.7, BACKLOG-053 warning). The person unlinks it first, then retries.
+    """
+    if tx.transfer_pair_id is not None or tx.transaction_type in TRANSFER_LEG_TYPES:
+        return "already part of a transfer"
+    if tx.debt_id is not None or tx.transaction_type == "debt_payment" or (
+        db.query(models.DebtPayment.id)
+        .filter(models.DebtPayment.transaction_id == tx.id)
+        .first() is not None
+    ):
+        return "linked to a debt"
+    if tx.savings_goal_id is not None or (
+        db.query(models.SavingsContribution.id)
+        .filter(models.SavingsContribution.transaction_id == tx.id)
+        .first() is not None
+    ):
+        return "linked to a savings goal"
+    if tx.transaction_type not in money.FLOW_TYPES:
+        return f"typed '{tx.transaction_type}', not income or expense"
+    return None
+
+
 @router.post("/link-transfer-pair", response_model=schemas.TransferResponse)
 def link_transfer_pair(
     payload: schemas.LinkTransferPairRequest,
@@ -576,8 +605,16 @@ def link_transfer_pair(
     if tx_a.transfer_pair_id is not None or tx_b.transfer_pair_id is not None:
         raise HTTPException(status_code=409, detail="One or more transactions are already part of a transfer pair")
 
-    if tx_a.transaction_type == "transfer" or tx_b.transaction_type == "transfer":
-        raise HTTPException(status_code=409, detail="One or more transactions are already part of a transfer pair")
+    # v1.4.7: only two plain, unlinked income/expense rows can be paired. Pairing
+    # overwrites the type, so pairing a debt payment or a goal-linked row would
+    # strand its link (the debt or goal balance stays moved with no record why).
+    for tx in (tx_a, tx_b):
+        blocker = _plain_row_blocker(tx, db)
+        if blocker:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Transaction {tx.id} is {blocker}. Unlink it first, then pair the two transactions.",
+            )
 
     # Use tx_a's id as the shared grouping key
     tx_a.transaction_type = "transfer"
@@ -731,6 +768,46 @@ def unlink_savings_withdrawal(
     tx.transaction_type = money.type_for_amount(tx.amount)
 
     db.commit()
+
+
+@router.post("/{tx_id}/retype", response_model=schemas.TransactionResponse)
+def retype_transaction(
+    tx_id: int,
+    payload: schemas.RetypeRequest,
+    db: Session = Depends(get_db),
+    _: models.User = Depends(require_owner),
+):
+    """Set a plain row to income or expense (the Income/Expense toggle, v1.4.7).
+
+    A dedicated endpoint rather than a ``transaction_type`` field on the general
+    PATCH, so the general edit path still cannot touch the type and this one can
+    only ever choose between the two flow types, on an unlinked row. Every change
+    is recorded in ``transaction_type_changes`` with reason ``user``, which is how
+    the start-up check tells a deliberate refund (a positive row set to Expense)
+    from a defect.
+    """
+    tx = db.query(models.Transaction).filter(models.Transaction.id == tx_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    blocker = _plain_row_blocker(tx, db)
+    if blocker:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This transaction is {blocker}, so its type is set by that link. Unlink it first.",
+        )
+
+    if tx.transaction_type != payload.transaction_type:
+        db.add(models.TransactionTypeChange(
+            transaction_id=tx.id,
+            from_type=tx.transaction_type,
+            to_type=payload.transaction_type,
+            reason=REASON_USER,
+        ))
+        tx.transaction_type = payload.transaction_type
+        db.commit()
+    db.refresh(tx)
+    return attach_allocations(tx, db)
 
 
 @router.get("/{tx_id}", response_model=schemas.TransactionResponse)

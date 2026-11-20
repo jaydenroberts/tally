@@ -55,7 +55,7 @@ function Pill({ children, tone = 'neutral' }) {
 // ─── Filter bar ──────────────────────────────────────────────────────────────
 const SEGMENTS = ['All', 'Unverified', 'Income', 'Expenses', 'Transfers']
 
-function FilterBar({ segment, onSegmentChange, unverifiedCount, selectedSum, selectedCount, onBulkDelete, onClearSelection }) {
+function FilterBar({ segment, onSegmentChange, unverifiedCount, selectedSum, selectedCount, onBulkDelete, onClearSelection, pairCheck, onPair }) {
   const { formatCurrency } = useCurrency()
   return (
     <div style={{
@@ -106,6 +106,22 @@ function FilterBar({ segment, onSegmentChange, unverifiedCount, selectedSum, sel
           >
             Clear
           </button>
+          {selectedCount === 2 && pairCheck && (
+            <button
+              onClick={pairCheck.ok ? onPair : undefined}
+              disabled={!pairCheck.ok}
+              title={pairCheck.ok ? 'Mark these two as one transfer between your own accounts' : pairCheck.reason}
+              style={{
+                padding: '5px 12px', borderRadius: 7, fontSize: 12, fontWeight: 600,
+                cursor: pairCheck.ok ? 'pointer' : 'not-allowed',
+                background: pairCheck.ok ? 'var(--bg-hover)' : 'transparent',
+                color: pairCheck.ok ? 'var(--text)' : 'var(--text-faint)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              Link as transfer
+            </button>
+          )}
           <button
             onClick={onBulkDelete}
             style={{
@@ -464,8 +480,131 @@ function AddAllocationPicker({ tx, currentRefs, goals, debts, defaultAmount, onA
   )
 }
 
+// ─── Transfer pairing (BACKLOG-053, v1.4.7) ──────────────────────────────────
+// Client-side precheck for "Link as transfer". The server enforces the same
+// rules (and also refuses rows linked to a goal contribution, which the list
+// does not show), so this only decides whether the button is offered.
+const PLAIN_TYPES = new Set(['income', 'expense'])
+
+function pairCheck(a, b) {
+  if (!a || !b) return { ok: false, reason: 'Select two transactions on this page' }
+  if (a.account_id === b.account_id) return { ok: false, reason: 'The two transactions must be on different accounts' }
+  if (Math.abs(a.amount) < 0.005 || Math.abs(b.amount) < 0.005) return { ok: false, reason: 'Neither transaction can be zero' }
+  if ((a.amount > 0) === (b.amount > 0)) return { ok: false, reason: 'One must be money out and the other money in' }
+  for (const t of [a, b]) {
+    if (t.transfer_pair_id != null || t.transaction_type === 'transfer') return { ok: false, reason: `"${t.description}" is already part of a transfer` }
+    if (t.debt_id != null || t.transaction_type === 'debt_payment') return { ok: false, reason: `"${t.description}" is linked to a debt. Unlink it first` }
+    if (t.savings_goal_id != null || t.transaction_type === 'savings_transfer') return { ok: false, reason: `"${t.description}" is linked to a savings goal. Unlink it first` }
+    if (!PLAIN_TYPES.has(t.transaction_type)) return { ok: false, reason: `"${t.description}" is not an income or expense transaction` }
+  }
+  return { ok: true }
+}
+
+function PairRow({ tx }) {
+  const { formatCurrency } = useCurrency()
+  return (
+    <div data-testid="pair-row" style={{
+      display: 'grid', gridTemplateColumns: '1fr auto', gap: 4,
+      padding: '10px 12px', marginBottom: 8,
+      background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8,
+    }}>
+      <span style={{ fontSize: 13, color: 'var(--text)', fontWeight: 600 }}>{tx.description}</span>
+      <span style={{ fontSize: 13, fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: tx.amount >= 0 ? 'var(--positive)' : 'var(--text)' }}>
+        {formatCurrency(tx.amount)}
+      </span>
+      <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{formatDate(tx.date)} · {tx.account_name}</span>
+    </div>
+  )
+}
+
+// Type section of the drawer. A plain row gets the Income/Expense toggle; a
+// transfer leg gets "Unlink transfer"; a row whose type comes from a debt or a
+// goal link says so (it changes when that link changes, not here).
+function TypeSection({ tx, pairedTx, onRetype, onUnpair }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const run = async (fn) => {
+    setBusy(true); setErr(null)
+    try { await fn() } catch (e) {
+      setErr(e?.response?.data?.detail ?? e?.message ?? 'Update failed')
+    } finally { setBusy(false) }
+  }
+  const label = { fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }
+  const hasLinks = (tx.allocations ?? []).length > 0 || tx.debt_id != null || tx.savings_goal_id != null
+
+  let body
+  if (tx.transfer_pair_id != null || tx.transaction_type === 'transfer') {
+    body = (
+      <>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>
+          Transfer between your own accounts. It does not count as income or spending.
+        </div>
+        {pairedTx
+          ? <PairRow tx={pairedTx}/>
+          : <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 8 }}>The other half of this transfer is not on this page.</div>}
+        <Button variant="secondary" disabled={busy} onClick={() => run(() => onUnpair(tx))}>
+          {busy ? 'Unlinking…' : 'Unlink transfer'}
+        </Button>
+      </>
+    )
+  } else if (PLAIN_TYPES.has(tx.transaction_type) && !hasLinks) {
+    const option = (value, text) => {
+      const active = tx.transaction_type === value
+      return (
+        <button
+          key={value}
+          role="radio"
+          aria-checked={active}
+          disabled={busy}
+          onClick={() => !active && run(() => onRetype(tx, value))}
+          style={{
+            flex: 1, padding: '7px 10px', fontSize: 13, fontWeight: 600,
+            cursor: active ? 'default' : 'pointer',
+            background: active ? 'var(--bg-hover)' : 'transparent',
+            color: active ? 'var(--text)' : 'var(--text-muted)',
+            border: `1px solid ${active ? 'var(--border-strong, var(--border))' : 'var(--border)'}`,
+            borderRadius: 6,
+          }}
+        >{text}</button>
+      )
+    }
+    body = (
+      <>
+        <div role="radiogroup" aria-label="Transaction type" style={{ display: 'flex', gap: 6 }}>
+          {option('income', 'Income')}
+          {option('expense', 'Expense')}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 6, lineHeight: 1.5 }}>
+          {tx.amount > 0 && tx.transaction_type === 'expense'
+            ? 'Counted as a refund: it reduces your spending in the month it arrived.'
+            : tx.amount > 0
+              ? 'Money in counts as income. If this is a refund, choose Expense so it reduces your spending instead. If it is a payment between your own accounts, select both halves on the list and use Link as transfer.'
+              : 'Money out counts as spending.'}
+        </div>
+      </>
+    )
+  } else {
+    body = (
+      <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+        {tx.transaction_type === 'debt_payment' || tx.debt_id != null
+          ? 'Debt payment. Its type follows the debt link; remove the link below to change it.'
+          : tx.transaction_type === 'savings_transfer' || tx.savings_goal_id != null
+            ? 'Savings movement. Its type follows the goal link; remove the link below to change it.'
+            : 'Its type follows the links below.'}
+      </div>
+    )
+  }
+  return (
+    <div data-testid="type-section" style={{ padding: '16px 24px', borderBottom: '1px solid var(--border)' }}>
+      <div style={label}>Type</div>
+      {body}
+      {err && <div style={{ fontSize: 11, color: 'var(--negative)', marginTop: 6 }}>{err}</div>}
+    </div>
+  )
+}
+
 // ─── Link drawer ─────────────────────────────────────────────────────────────
-function LinkDrawer({ tx, goals, debts, categories = [], onClose, onSaveAllocations, onUpdateCategory, isMobile = false }) {
+function LinkDrawer({ tx, goals, debts, categories = [], onClose, onSaveAllocations, onUpdateCategory, pairedTx = null, onRetype, onUnpair, isMobile = false }) {
   const { formatCurrency } = useCurrency()
   const [catSaving, setCatSaving] = useState(false)
   const [catError, setCatError] = useState(null)
@@ -546,6 +685,10 @@ function LinkDrawer({ tx, goals, debts, categories = [], onClose, onSaveAllocati
           ✕
         </button>
       </header>
+
+      {onRetype && onUnpair && (
+        <TypeSection tx={tx} pairedTx={pairedTx} onRetype={onRetype} onUnpair={onUnpair}/>
+      )}
 
       <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--border)' }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
@@ -826,6 +969,9 @@ export default function Transactions() {
   const [lastSelectedId, setLastSelectedId] = useState(null)
   const [confirmDelete,  setConfirmDelete]  = useState(null)
   const [deleting,       setDeleting]       = useState(false)
+  const [confirmPair,    setConfirmPair]    = useState(null)   // [txA, txB] awaiting confirmation
+  const [pairing,        setPairing]        = useState(false)
+  const [pairError,      setPairError]      = useState(null)
 
   const pageCount = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
 
@@ -919,6 +1065,51 @@ export default function Transactions() {
     () => filtered.filter(t => selectedIds.has(t.id)).reduce((a, t) => a + t.amount, 0),
     [filtered, selectedIds]
   )
+
+  // "Link as transfer" is offered when exactly two rows on this page are selected.
+  const selectedPair = useMemo(() => {
+    if (selectedIds.size !== 2) return null
+    const rows = filtered.filter(t => selectedIds.has(t.id))
+    return rows.length === 2 ? rows : null
+  }, [filtered, selectedIds])
+  const selectedPairCheck = useMemo(
+    () => (selectedIds.size === 2 ? pairCheck(...(selectedPair ?? [])) : null),
+    [selectedIds, selectedPair]
+  )
+
+  const handlePairConfirmed = async () => {
+    if (!confirmPair) return
+    setPairing(true)
+    setPairError(null)
+    try {
+      await client.post('/transactions/link-transfer-pair', {
+        transaction_a_id: confirmPair[0].id,
+        transaction_b_id: confirmPair[1].id,
+      })
+      setConfirmPair(null)
+      setSelectedIds(new Set())
+      setLastSelectedId(null)
+      setRefreshKey(k => k + 1)
+    } catch (e) {
+      setPairError(e?.response?.data?.detail ?? e?.message ?? 'Linking failed')
+    } finally {
+      setPairing(false)
+    }
+  }
+
+  const handleUnpair = async (tx) => {
+    await client.delete(`/transactions/${tx.id}/link-transfer-pair`)
+    setOpenTx(null)
+    setRefreshKey(k => k + 1)
+  }
+
+  const handleRetype = async (tx, transactionType) => {
+    const { data } = await client.post(`/transactions/${tx.id}/retype`, { transaction_type: transactionType })
+    const updated = normalizeTx(data, accountNameMap, debtMap)
+    setTransactions(prev => prev.map(t => t.id === tx.id ? updated : t))
+    setOpenTx(updated)
+    setRefreshKey(k => k + 1)   // the MTD income/expense cards depend on the type
+  }
 
   // Reset to the first page whenever the segment changes; clear page selection too.
   const handleSegmentChange = (s) => {
@@ -1090,6 +1281,8 @@ export default function Transactions() {
             selectedCount={selectedIds.size}
             onBulkDelete={() => setConfirmDelete({ ids: [...selectedIds] })}
             onClearSelection={() => { setSelectedIds(new Set()); setLastSelectedId(null) }}
+            pairCheck={selectedPairCheck}
+            onPair={() => { setPairError(null); setConfirmPair(selectedPair) }}
           />
 
           <StatsStrip stats={stats}/>
@@ -1134,8 +1327,37 @@ export default function Transactions() {
           onClose={() => setOpenTx(null)}
           onSaveAllocations={handleSaveAllocations}
           onUpdateCategory={handleUpdateCategory}
+          pairedTx={openTx.transfer_pair_id != null
+            ? transactions.find(t => t.transfer_pair_id === openTx.transfer_pair_id && t.id !== openTx.id) ?? null
+            : null}
+          onRetype={handleRetype}
+          onUnpair={handleUnpair}
           isMobile={isMobile}
         />
+      )}
+
+      {confirmPair && (
+        <Modal title="Link these two as a transfer?" onClose={() => !pairing && setConfirmPair(null)}>
+          <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 14, lineHeight: 1.5 }}>
+            Use this when money moved between two of your own accounts, for example paying a
+            credit card from your bank account. Both transactions will stop counting as income
+            or spending.
+          </p>
+          {confirmPair.map(t => <PairRow key={t.id} tx={t}/>)}
+          <p style={{ color: 'var(--warning)', fontSize: 12, margin: '10px 0 18px', lineHeight: 1.5 }}>
+            ⚠️ Not for refunds. A refund is money coming back for something you bought: open it and
+            set its type to Expense instead. You can unlink a transfer later from either transaction.
+          </p>
+          {pairError && (
+            <div style={{ fontSize: 12, color: 'var(--negative)', marginBottom: 12 }}>{pairError}</div>
+          )}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <Button variant="secondary" onClick={() => setConfirmPair(null)} disabled={pairing}>Cancel</Button>
+            <Button variant="primary" onClick={handlePairConfirmed} disabled={pairing}>
+              {pairing ? 'Linking…' : 'Link as transfer'}
+            </Button>
+          </div>
+        </Modal>
       )}
 
       {showAdd && (
