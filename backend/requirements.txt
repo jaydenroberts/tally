@@ -1,4 +1,4 @@
-fastapi==0.141.1
+fastapi==0.163.1
 # Pinned explicitly rather than left to fastapi's range, so the version that
 # ships is the version that was tested. fastapi 0.141.1 requires only
 # starlette>=0.46.0 (read from its package metadata, 2026-09-18), so this line
@@ -14,7 +14,7 @@ fastapi==0.141.1
 # image scan to zero fixable CRITICAL or HIGH, so that waiver file has been
 # deleted. Verified 2026-09-19 by scanning the built image with no ignore file
 # at all. Do not pin back to 0.x without reinstating the waiver.
-starlette==1.6.0
+starlette==1.10.0
 uvicorn[standard]==0.53.0
 sqlalchemy==2.0.54
 pydantic==2.13.5
