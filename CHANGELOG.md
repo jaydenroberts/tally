@@ -16,6 +16,8 @@ Money correctness. Income and spending are now told apart by what a transaction 
 - **Unlinking a transfer now puts each half back correctly.** Before, both halves became expenses, so the money-in half was counted as spending.
 - **An amount of "Infinity" or "NaN" can no longer be stored**, whether typed into the API or sitting in a cell of an imported statement. A statement cell like that is now treated as an unreadable amount, as any other junk cell is.
 - **The dashboard no longer calls a hand-entered number "Net worth".** The card is now labelled **Account balances**, and says that it is the sum of the balances you entered on the Accounts page and that imports do not update it. The figure under it is now labelled "net this month", which is what it always was. The AI coach is told the same thing about those balances. A balance worked out from your transactions is planned for v1.5.0.
+- **Tally now stops with one clear message when the data folder isn't writable**, naming the exact fix, instead of failing with a database error buried in a stack trace.
+- **Opening AI Coach without a provider configured now says so and names the settings to add** — for example `AI_PROVIDER=anthropic` together with `AI_API_KEY` — instead of a generic error.
 
 ### Added
 
@@ -23,6 +25,7 @@ Money correctness. Income and spending are now told apart by what a transaction 
 - **An Income/Expense choice on each transaction.** Open a transaction and use **Type** to change it. This is how you record a refund: set it to **Expense** and it reduces your spending. Transactions tied to a debt, a savings goal or a transfer have no toggle, because their type follows that link.
 - **Changing a transaction's amount between money out and money in now updates its type to match.** Edit an amount from negative to positive and it becomes income; from positive to negative and it becomes an expense. You can switch it back with the Income/Expense toggle. Transactions tied to a debt, a savings goal or a transfer keep their type. Each automatic change is listed in `transaction_type_changes` with the reason `sign-flip`.
 - **A record of type changes.** A new table, `transaction_type_changes`, lists every transaction whose type was changed by the repair below or by you with the toggle. It only adds information; nothing existing is altered.
+- **Tally images are now published for ARM64 as well as amd64** — for example a Raspberry Pi 4/5 running a 64-bit OS, or another ARM-based server. Docker picks the right image automatically.
 
 ### What the upgrade changes in your data
 

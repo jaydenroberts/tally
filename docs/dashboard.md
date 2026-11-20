@@ -57,6 +57,23 @@ A range selector lets you switch the window shown between **1M**, **3M**, **6M**
 
 ---
 
+## Budget Progress
+
+The **This month** card shows **Budget used** — this month's total spending as a
+percentage of your combined monthly budget limits — with the amount spent against those
+limits and the days left in the month underneath. Total spending includes categories that
+have no budget.
+
+Next to the accounts table (below it on a narrow screen), a **Budget progress** card lists
+each category with a monthly budget, with its own progress bar. A category that passes its limit also appears under **Needs your
+attention** near the top of the page, with a link to **Budgets**.
+
+Both use the same rule as the [Budgets](budgets.md) page: only expense transactions count,
+and a refund — money in, typed as an **Expense** — reduces the figure instead of being
+counted as separate income.
+
+---
+
 ## Status Badges
 
 Tally uses a colour-coded badge system throughout the UI:
@@ -73,9 +90,8 @@ Tally uses a colour-coded badge system throughout the UI:
 
 ## What the Dashboard Does Not Show
 
-The Dashboard is intentionally minimal. It does not show:
+The Dashboard is intentionally minimal. Beyond the budget summary above, it does not show:
 
-- Budget progress (see [Budgets](budgets.md))
 - Savings goal progress (see [Savings](savings.md))
 - Debt balances (see [Debt](debt.md))
 - AI coaching (see [AI Coach](ai-coach.md))

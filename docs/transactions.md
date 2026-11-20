@@ -12,7 +12,7 @@ Transactions are displayed in a paginated table with the following columns:
 - **Description** — the transaction description (from import or manual entry)
 - **Account** — which account the transaction belongs to
 - **Category** — spending category (clickable to edit inline — see below)
-- **Amount** — positive for income/credits, negative for expenses/debits
+- **Amount** — positive for money in, negative for money out. This usually also tells you Income from Expense, but a refund is money in (positive) stored as an **Expense** — see [Income or expense](#income-or-expense) below.
 - **Status** — Verified or Estimate badge
 - **Actions** — row-level action buttons
 
@@ -60,18 +60,22 @@ Click once to sort ascending, click again to sort descending. An arrow indicator
 
 ## Adding a Transaction
 
-Click the **+ Expense** button (floating action button, bottom right) to add a new expense transaction manually.
+Click **+ Add** at the top of the Transactions page to open the **Add transaction** form.
+Choose **− Expense**, **+ Income**, or **↔ Transfer** at the top of the form — a transfer
+has its own fields and is covered under [Adding a Transfer](#adding-a-transfer) below.
 
-Fill in:
-- Date
-- Description
+For an expense or income, fill in:
 - Account
+- Amount (enter as a positive number — Tally stores an expense as negative and income as
+  positive)
 - Category
-- Amount (enter as a positive number — Tally stores expenses as negatives internally)
+- Date, description and notes — click **More options** to show them (an income entry
+  shows its description field without that extra click)
 
-Click **Save** to add the transaction.
+Click **Add expense** or **Add income** to save the transaction.
 
-**Note:** Only owners can create, edit, or delete transactions.
+**Note:** Only owners can create, edit, or delete transactions. A manually added
+transaction is saved as an **Estimate** until a bank import matches and verifies it.
 
 ---
 
@@ -80,10 +84,10 @@ Click **Save** to add the transaction.
 Transfers move money between two of your accounts. They are excluded from budget calculations so they do not distort spending figures.
 
 To add a transfer:
-1. Click the **↔ Transfer** toggle on the floating action button (bottom right)
+1. Click **+ Add**, then choose **↔ Transfer** at the top of the form
 2. Select the **From** account and **To** account
-3. Enter the date and amount
-4. Click **Save**
+3. Enter the amount and, optionally, the date and a description
+4. Click **Create transfer**
 
 A transfer creates two linked transactions — a debit on the From account and a credit on the To account. Both display a **↔ Transfer** badge. Deleting one side of a transfer does not delete the other.
 

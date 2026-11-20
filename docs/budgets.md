@@ -84,6 +84,8 @@ Tally only counts **expense** transactions in budgets. The following are exclude
 
 This means your budget figures reflect actual spending, not money movements between your own accounts.
 
+A refund is money in but typed as an **Expense** (see [Income or expense](transactions.md#income-or-expense)), so it reduces the category's spend in the month it arrives — not the month of the original purchase.
+
 ---
 
 ## Tips
