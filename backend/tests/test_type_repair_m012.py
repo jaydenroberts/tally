@@ -1,5 +1,5 @@
 """
-M-012 — the v1.4.7 transaction-type repair (BASTION conditions 1-6, 8).
+M-012 — the v1.4.7 transaction-type repair: v1.4.7 repair conditions.
 
 Every test here runs against its own file-backed SQLite database, created the
 way a real install creates it, because the properties under test are about

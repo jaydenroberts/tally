@@ -20,7 +20,7 @@ every *unlinked positive* row still typed ``'expense'`` to ``'income'``:
 
 It does not look at ``source``: no screen in Tally before v1.4.7 let a person
 store a positive ``expense`` on purpose, so every such row is one of the defects
-above, whichever path produced it (BASTION, 2026-11-19).
+above, whichever path produced it.
 
 Each re-typed row is written to ``transaction_type_changes`` with a reason:
 ``M-012/import``, ``M-012/recurring`` (notes start with "Auto-generated from

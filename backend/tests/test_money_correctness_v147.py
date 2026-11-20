@@ -265,7 +265,7 @@ def test_api_create_honours_an_explicit_refund(client, db, auth_headers, test_ac
 
 
 # ---------------------------------------------------------------------------
-# Edits that change the sign (operator-approved addition, 2026-11-20)
+# Sign-flip edits
 # ---------------------------------------------------------------------------
 
 def _changes(db, tx_id, reason=None):
