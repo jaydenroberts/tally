@@ -44,7 +44,7 @@ On the first start of 1.4.7, Tally looks for transactions that are **money in, t
   UPDATE transactions SET transaction_type = 'expense' WHERE transaction_type = 'income' AND id IN (SELECT transaction_id FROM transaction_type_changes WHERE reason LIKE 'M-012/%');
   ```
 
-- **If you run 1.4.6 against this database after upgrading and then come back to 1.4.7**, neither the snapshot nor the repair runs a second time: the snapshot for 1.4.7 already exists and the repair is recorded as done. Anything 1.4.6 imported in between is stored the old way. Tally does not change those rows, but on every start it logs a warning listing any money-in transaction typed as an expense that you did not set that way yourself, so you can find them and set each one with the toggle.
+- **If you run 1.4.6 against this database after upgrading and then come back to 1.4.7**, neither the snapshot nor the repair runs a second time: the snapshot for 1.4.7 already exists and the repair is recorded as done. Anything 1.4.6 imported in between is stored the old way. Tally does not change those rows, but on every start it logs a warning listing any money-in transaction typed as an expense that you did not set that way yourself, so you can find them and fix each one with the toggle: choose **Income**, or choose **Expense** if it really is a refund (even if it already shows Expense). Either choice stops the warning for that transaction.
 
 ### Notes
 

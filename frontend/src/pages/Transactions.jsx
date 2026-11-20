@@ -548,18 +548,22 @@ function TypeSection({ tx, pairedTx, onRetype, onUnpair }) {
       </>
     )
   } else if (PLAIN_TYPES.has(tx.transaction_type) && !hasLinks) {
+    // Choosing Expense again on money in that is already an Expense confirms it
+    // as a refund (the server logs it once), so that option stays clickable.
+    const confirmsRefund = (value) => value === 'expense' && tx.amount > 0
     const option = (value, text) => {
       const active = tx.transaction_type === value
+      const clickable = !active || confirmsRefund(value)
       return (
         <button
           key={value}
           role="radio"
           aria-checked={active}
           disabled={busy}
-          onClick={() => !active && run(() => onRetype(tx, value))}
+          onClick={() => clickable && run(() => onRetype(tx, value))}
           style={{
             flex: 1, padding: '7px 10px', fontSize: 13, fontWeight: 600,
-            cursor: active ? 'default' : 'pointer',
+            cursor: clickable ? 'pointer' : 'default',
             background: active ? 'var(--bg-hover)' : 'transparent',
             color: active ? 'var(--text)' : 'var(--text-muted)',
             border: `1px solid ${active ? 'var(--border-strong, var(--border))' : 'var(--border)'}`,

@@ -310,8 +310,8 @@ def check_untyped_credits(db: Session) -> dict:
             "reduce spending instead of counting as income: import=%d, recurring=%d, "
             "other=%d (ids: %s). This happens if an older Tally ran against this "
             "database after v1.4.7. Nothing was changed. Open each one on the "
-            "Transactions page and set it to Income, or to Expense if it really is a "
-            "refund; either choice stops this warning for that row.",
+            "Transactions page and choose Income, or choose Expense if it really is "
+            "a refund; either choice stops this warning for that row.",
             total, counts["import"], counts["recurring"], counts["other"], shown,
         )
     return {"total": total, **counts, "ids": ids}

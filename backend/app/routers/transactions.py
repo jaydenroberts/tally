@@ -769,7 +769,18 @@ def retype_transaction(
             detail=f"This transaction is {blocker}, so its type is set by that link. Unlink it first.",
         )
 
-    if tx.transaction_type != payload.transaction_type:
+    changing = tx.transaction_type != payload.transaction_type
+    # Choosing Expense for a money-in row that is already an Expense confirms it
+    # as a refund. The type does not change, but the 'user' entry is what stops
+    # the start-up warning for that row. Logged once.
+    confirming_refund = (
+        not changing
+        and payload.transaction_type == "expense"
+        and tx.amount > 0
+        and db.query(models.TransactionTypeChange)
+              .filter_by(transaction_id=tx.id, reason=REASON_USER).first() is None
+    )
+    if changing or confirming_refund:
         db.add(models.TransactionTypeChange(
             transaction_id=tx.id,
             from_type=tx.transaction_type,

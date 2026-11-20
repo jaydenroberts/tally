@@ -303,7 +303,9 @@ class TransactionTypeChange(Base):
       ``M-012/import``     an imported credit re-typed from expense to income
       ``M-012/recurring``  a generated recurring credit re-typed likewise
       ``M-012/other``      any other unlinked credit re-typed likewise
-      ``user``             a person used the Income/Expense toggle
+      ``user``             a person used the Income/Expense toggle (choosing
+                           Expense on a money-in row that is already an
+                           Expense logs expense -> expense: a confirmed refund)
 
     ``transaction_id`` is deliberately NOT a foreign key: the log must survive the
     transaction being deleted, and must never block that delete.

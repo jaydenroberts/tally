@@ -613,3 +613,27 @@ def test_coach_account_tool_labels_balances_as_entered(db, auth_headers, test_ac
     user = _owner(db)
     result = chat_router._execute_tool("get_accounts", {}, db, user, user.persona, MONTH_START)
     assert result and all("not derived from transactions" in a["balance_note"] for a in result)
+
+
+def test_choosing_expense_again_confirms_a_refund_and_stops_the_warning(
+        client, db, auth_headers, test_account):
+    """A money-in row already typed Expense (e.g. stored by an older version)
+    is warned about at start-up. Choosing Expense on it confirms it as a refund:
+    the type stays, one 'user' entry is logged, and the warning stops."""
+    stray = _tx(db, test_account, 40.0, ttype="expense", source="import")
+    assert stray.id in type_repair.check_untyped_credits(db)["ids"]
+    r = _retype(client, auth_headers, stray.id, "expense")
+    assert r.status_code == 200, r.text
+    assert r.json()["transaction_type"] == "expense"
+    assert _changes(db, stray.id) == [("expense", "expense", "user")]
+    assert type_repair.check_untyped_credits(db)["total"] == 0
+    # Confirming again logs nothing more.
+    assert _retype(client, auth_headers, stray.id, "expense").status_code == 200
+    assert len(_changes(db, stray.id)) == 1
+
+
+def test_choosing_expense_again_on_money_out_writes_nothing(
+        client, db, auth_headers, test_account):
+    spend = _tx(db, test_account, -40.0, ttype="expense")
+    assert _retype(client, auth_headers, spend.id, "expense").status_code == 200
+    assert _changes(db, spend.id) == []
