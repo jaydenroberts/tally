@@ -45,6 +45,8 @@ A self-hosted personal finance web application for households. Track accounts, t
 
 ## Installation
 
+Images are published for `linux/amd64` and `linux/arm64` (for example a Raspberry Pi 4/5 with a 64-bit OS, or an ARM-based server); Docker picks the right one automatically.
+
 ### Option 1 — Docker run (quick start)
 
 > **Warning:** Tally runs as a **non-root** user inside the container. The host

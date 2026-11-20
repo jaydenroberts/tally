@@ -1,7 +1,16 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 1: Build React frontend
 # ─────────────────────────────────────────────────────────────────────────────
-FROM node:26-alpine AS frontend-builder
+# The frontend build output is plain JS/CSS/HTML, identical on every CPU, so
+# this stage always runs on the build machine's own platform. In a multi-arch
+# build (amd64 + arm64) that means npm and Vite run natively once instead of
+# under slow QEMU emulation for arm64; only the Python stage is per-platform.
+#
+# BUILDPLATFORM is set automatically by BuildKit (docker buildx, Docker
+# Desktop, CI). The legacy builder — plain `docker build` on an engine with no
+# buildx plugin — does not set it, and an empty --platform is a parse error,
+# so fall back to linux/amd64 there. The fallback is never used under BuildKit.
+FROM --platform=${BUILDPLATFORM:-linux/amd64} node:26-alpine AS frontend-builder
 
 WORKDIR /build
 
