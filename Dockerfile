@@ -1,12 +1,28 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 1: Build React frontend
 # ─────────────────────────────────────────────────────────────────────────────
-FROM node:26-alpine AS frontend-builder
+# The frontend build output is plain JS/CSS/HTML, identical on every CPU, so
+# this stage always runs on the build machine's own platform. In a multi-arch
+# build (amd64 + arm64) that means npm and Vite run natively once instead of
+# under slow QEMU emulation for arm64; only the Python stage is per-platform.
+#
+# BUILDPLATFORM is set automatically by BuildKit (docker buildx, Docker
+# Desktop, CI). The legacy builder — plain `docker build` on an engine with no
+# buildx plugin — does not set it, and an empty --platform is a parse error,
+# so fall back to linux/amd64 there. The fallback is never used under BuildKit.
+FROM --platform=${BUILDPLATFORM:-linux/amd64} node:26-alpine AS frontend-builder
 
 WORKDIR /build
 
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install --frozen-lockfile 2>/dev/null || npm install
+# npm ci installs exactly what package-lock.json records and fails if the
+# lockfile and package.json disagree; it never rewrites the lockfile.
+# --ignore-scripts stops dependency lifecycle scripts (preinstall/postinstall)
+# from running at build time — the install-time vector the 2026 npm worms
+# used, and the same posture dependency-audit.yml takes. The built dist is
+# byte-identical with and without scripts on this lockfile (checked when
+# this line landed in v1.4.7).
+RUN npm ci --ignore-scripts
 
 COPY frontend/ .
 RUN npx vite build --outDir /frontend-dist --emptyOutDir

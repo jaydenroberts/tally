@@ -6,7 +6,7 @@ This guide walks you through deploying Tally for the first time — from pulling
 
 ## Prerequisites
 
-- A host running Docker (Unraid, TrueNAS, a Linux server, or any machine with Docker installed)
+- A host running Docker (Unraid, TrueNAS, a Linux server, or any machine with Docker installed) — Tally publishes images for both amd64 and arm64, so this includes Raspberry Pi 4/5 and other 64-bit ARM hosts
 - A terminal or Unraid Docker UI access
 - Port 8092 available on your host (or a port of your choosing)
 - A directory on your host for persistent data (e.g. `/mnt/user/appdata/tally`), **owned by ID 999, the container's non-root user** (see the note under Installation)
