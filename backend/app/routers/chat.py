@@ -39,7 +39,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
-from .. import models, schemas
+from .. import models, schemas, type_repair
 from ..auth import get_current_user
 from ..money import spend_filter
 from ..providers import stream_chat, AI_PROVIDER, AI_BASE_URL
@@ -510,6 +510,7 @@ def _execute_tool(
         updatable = {
             "date", "description", "amount", "category_id", "notes"
         }
+        old_amount = tx.amount
         for field in updatable:
             if field in tool_input and tool_input[field] is not None:
                 value = tool_input[field]
@@ -532,6 +533,9 @@ def _execute_tool(
                     if not cat or (cat.user_id is not None and cat.user_id != current_user.id):
                         return {"error": f"Category {value} not found or not accessible."}
                 setattr(tx, field, value)
+        # v1.4.7: same rule as the PATCH endpoint — a plain row moved between
+        # money in and money out is re-typed to match, logged as 'sign-flip'.
+        type_repair.retype_on_sign_flip(db, tx, old_amount)
         db.commit()
         db.refresh(tx)
         return {"success": True, "transaction_id": tx.id, "amount": tx.amount, "date": tx.date.isoformat()}

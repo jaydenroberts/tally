@@ -33,7 +33,7 @@ from rapidfuzz import fuzz
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from .. import models, money, schemas
+from .. import models, money, schemas, type_repair
 from ..auth import require_owner
 from ..database import get_db
 from ..import_parsers import csv_parser, pdf_parser
@@ -1117,6 +1117,10 @@ def commit_draft(
                 human=human,
             )
             match.amount = row_amount
+            # v1.4.7: the matcher treats a $0 estimate as compatible with either
+            # sign, so a reconcile can move a plain row from money out to money in.
+            # Re-type it to match (logged 'sign-flip'); linked rows are untouched.
+            type_repair.retype_on_sign_flip(db, match, manual_amount)
             # BACKLOG-039: a drifting debt_payment reconcile must keep three figures in
             # lockstep — the transaction amount (just set), the linked DebtPayment.amount,
             # and the debt's current_balance. The lockstep delta is the change in payment
@@ -1277,7 +1281,11 @@ def rollback_import(
     for tx in matched_rows:
         tx.is_verified = False
         if tx.original_amount is not None:
+            reconciled_amount = tx.amount
             tx.amount = tx.original_amount
+            # The reverse of the reconcile above: restoring the estimate's amount
+            # re-types a plain row back if it crosses between money in and out.
+            type_repair.retype_on_sign_flip(db, tx, reconciled_amount)
         # AUDIT-09: if this row's date was overwritten with the bank date on reconcile,
         # restore the estimate's original date (parked in the structured match_note).
         meta = _parse_match_note(tx.match_note)

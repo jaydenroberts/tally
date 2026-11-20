@@ -12,7 +12,7 @@ from .. import models, schemas
 from ..auth import get_current_user, require_owner
 from .. import money
 from ..money import TRANSFER_LEG_TYPES, flow_filter
-from ..type_repair import REASON_USER
+from ..type_repair import REASON_USER, plain_row_blocker, retype_on_sign_flip
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
@@ -536,34 +536,6 @@ def create_transfer(
     )
 
 
-def _plain_row_blocker(tx: models.Transaction, db: Session) -> Optional[str]:
-    """Why ``tx`` is not a plain income/expense row, or None if it is.
-
-    Pairing a transfer or re-typing a row overwrites ``transaction_type``. On a
-    row linked to a debt or a savings goal that strands the link (the debt
-    balance or goal balance stays moved while the row stops saying why), so both
-    actions refuse anything that is not a plain, unlinked income/expense row
-    (v1.4.7, BACKLOG-053 warning). The person unlinks it first, then retries.
-    """
-    if tx.transfer_pair_id is not None or tx.transaction_type in TRANSFER_LEG_TYPES:
-        return "already part of a transfer"
-    if tx.debt_id is not None or tx.transaction_type == "debt_payment" or (
-        db.query(models.DebtPayment.id)
-        .filter(models.DebtPayment.transaction_id == tx.id)
-        .first() is not None
-    ):
-        return "linked to a debt"
-    if tx.savings_goal_id is not None or (
-        db.query(models.SavingsContribution.id)
-        .filter(models.SavingsContribution.transaction_id == tx.id)
-        .first() is not None
-    ):
-        return "linked to a savings goal"
-    if tx.transaction_type not in money.FLOW_TYPES:
-        return f"typed '{tx.transaction_type}', not income or expense"
-    return None
-
-
 @router.post("/link-transfer-pair", response_model=schemas.TransferResponse)
 def link_transfer_pair(
     payload: schemas.LinkTransferPairRequest,
@@ -609,7 +581,7 @@ def link_transfer_pair(
     # overwrites the type, so pairing a debt payment or a goal-linked row would
     # strand its link (the debt or goal balance stays moved with no record why).
     for tx in (tx_a, tx_b):
-        blocker = _plain_row_blocker(tx, db)
+        blocker = plain_row_blocker(tx, db)
         if blocker:
             raise HTTPException(
                 status_code=409,
@@ -790,7 +762,7 @@ def retype_transaction(
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
-    blocker = _plain_row_blocker(tx, db)
+    blocker = plain_row_blocker(tx, db)
     if blocker:
         raise HTTPException(
             status_code=409,
@@ -849,8 +821,12 @@ def update_transaction(
                 detail="Imported (verified) transactions cannot be edited. Delete and re-import if needed.",
             )
 
+    old_amount = tx.amount
     for field, value in updates.items():
         setattr(tx, field, value)
+    # v1.4.7: an edit that moves a plain row between money in and money out
+    # re-types it to match (logged as 'sign-flip'); linked rows are left alone.
+    retype_on_sign_flip(db, tx, old_amount)
     db.commit()
     db.refresh(tx)
     return tx

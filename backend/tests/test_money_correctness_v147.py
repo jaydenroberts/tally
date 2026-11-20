@@ -17,7 +17,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from app import models
+from app import models, type_repair
 from app.routers import chat as chat_router
 from app.routers import recurring as recurring_router
 from app.routers.imports import _normalise_amount
@@ -210,7 +210,28 @@ def _p_api_create_without_type(client, db, headers, acct, amount):
     return db.get(models.Transaction, r.json()["id"])
 
 
+def _e_patch(client, db, headers, acct, amount):
+    """Edit path: the general PATCH moves a plain row to the other sign."""
+    tx = _tx(db, acct, -amount, ttype="income" if -amount > 0 else "expense")
+    r = client.patch(f"/api/transactions/{tx.id}", headers=headers, json={"amount": amount})
+    assert r.status_code == 200, r.text
+    return tx
+
+
+def _e_coach_update(client, db, headers, acct, amount):
+    """Edit path: the coach's update_transaction tool."""
+    tx = _tx(db, acct, -amount, ttype="income" if -amount > 0 else "expense")
+    user = _owner(db)
+    result = chat_router._execute_tool(
+        "update_transaction", {"transaction_id": tx.id, "amount": amount},
+        db, user, user.persona, MONTH_START)
+    assert result.get("success"), result
+    return tx
+
+
 PRODUCERS = [
+    ("edit_patch", _e_patch, (1, -1)),
+    ("edit_coach_update", _e_coach_update, (1, -1)),
     ("importer", _p_importer, (1, -1)),
     ("recurring", _p_recurring, (1, -1)),
     ("transfer_unlink", _p_transfer_unlink, (1, -1)),
@@ -241,6 +262,109 @@ def test_api_create_honours_an_explicit_refund(client, db, auth_headers, test_ac
         "amount": 12.0, "transaction_type": "expense"})
     assert r.status_code == 201
     assert r.json()["transaction_type"] == "expense"
+
+
+# ---------------------------------------------------------------------------
+# Edits that change the sign (operator-approved addition, 2026-11-20)
+# ---------------------------------------------------------------------------
+
+def _changes(db, tx_id, reason=None):
+    q = db.query(models.TransactionTypeChange).filter_by(transaction_id=tx_id)
+    if reason:
+        q = q.filter_by(reason=reason)
+    return [(c.from_type, c.to_type, c.reason) for c in q.order_by(models.TransactionTypeChange.id)]
+
+
+@pytest.mark.parametrize("start,end,expected", [(-40.0, 40.0, "income"), (40.0, -40.0, "expense")])
+def test_sign_flip_is_logged_as_sign_flip(client, db, auth_headers, test_account, start, end, expected):
+    tx = _tx(db, test_account, start, ttype="income" if start > 0 else "expense")
+    r = client.patch(f"/api/transactions/{tx.id}", headers=auth_headers, json={"amount": end})
+    assert r.status_code == 200 and r.json()["transaction_type"] == expected
+    assert _changes(db, tx.id) == [("income" if start > 0 else "expense", expected, "sign-flip")]
+
+
+@pytest.mark.parametrize("start,end,ttype", [(-40.0, -55.0, "expense"), (40.0, 55.0, "income")])
+def test_no_sign_change_means_no_reset(client, db, auth_headers, test_account, start, end, ttype):
+    tx = _tx(db, test_account, start, ttype=ttype)
+    r = client.patch(f"/api/transactions/{tx.id}", headers=auth_headers,
+                     json={"amount": end, "description": "edited"})
+    assert r.status_code == 200 and r.json()["transaction_type"] == ttype
+    assert _changes(db, tx.id) == []
+
+
+@pytest.mark.parametrize("kind", ["transfer", "debt_payment", "savings_transfer", "goal_linked", "debt_child"])
+def test_sign_flip_leaves_linked_and_balance_sheet_rows_alone(client, db, auth_headers, test_account, kind):
+    debt = models.Debt(user_id=_owner(db).id, name="L", original_amount=1, current_balance=1, is_paid_off=False)
+    goal = models.SavingsGoal(user_id=_owner(db).id, name="G", target_amount=1, current_amount=0, is_completed=False)
+    db.add_all([debt, goal])
+    db.commit()
+    kw, ttype = {}, "expense"
+    if kind in ("transfer", "debt_payment", "savings_transfer"):
+        ttype = kind
+    elif kind == "goal_linked":
+        kw = {"savings_goal_id": goal.id}
+    tx = _tx(db, test_account, -30.0, ttype=ttype, **kw)
+    if kind == "debt_child":
+        db.add(models.DebtPayment(debt_id=debt.id, amount=30, balance_after=0, transaction_id=tx.id))
+        db.commit()
+    r = client.patch(f"/api/transactions/{tx.id}", headers=auth_headers, json={"amount": 30.0})
+    assert r.status_code == 200, r.text
+    db.refresh(tx)
+    assert tx.transaction_type == ttype
+    assert _changes(db, tx.id) == []
+
+
+def test_toggled_refund_survives_an_amount_edit(client, db, auth_headers, test_account):
+    refund = _tx(db, test_account, 25.0, ttype="income")
+    assert client.post(f"/api/transactions/{refund.id}/retype", headers=auth_headers,
+                       json={"transaction_type": "expense"}).status_code == 200
+    r = client.patch(f"/api/transactions/{refund.id}", headers=auth_headers, json={"amount": 27.5})
+    assert r.status_code == 200 and r.json()["transaction_type"] == "expense"
+    user = _owner(db)
+    chat_router._execute_tool("update_transaction", {"transaction_id": refund.id, "amount": 26.0},
+                              db, user, user.persona, MONTH_START)
+    db.refresh(refund)
+    assert refund.transaction_type == "expense"
+    assert _changes(db, refund.id) == [("income", "expense", "user")]
+    # ...and the start-up check still treats it as a deliberate refund.
+    assert type_repair.check_untyped_credits(db)["total"] == 0
+
+
+def test_start_up_check_stays_clean_after_sign_flips(client, db, auth_headers, test_account):
+    a = _tx(db, test_account, -10.0)
+    b = _tx(db, test_account, 10.0, ttype="income")
+    client.patch(f"/api/transactions/{a.id}", headers=auth_headers, json={"amount": 10.0})
+    client.patch(f"/api/transactions/{b.id}", headers=auth_headers, json={"amount": -10.0})
+    result = type_repair.check_untyped_credits(db)
+    assert result["total"] == 0, result
+
+
+def test_reconciling_a_zero_estimate_with_a_credit_re_types_it_and_rollback_reverses(
+        client, db, auth_headers, test_account):
+    """The matcher treats a $0 estimate as compatible with either sign, so a
+    reconcile is an edit that can cross from money out to money in."""
+    est = _tx(db, test_account, 0.0, ddate=MONTH_START)
+    est.description = "Example Market"
+    db.commit()
+    csv = f"Date,Description,Amount\n{MONTH_START},Example Market,0.80\n".encode()
+    r = client.post(f"/api/imports?account_id={test_account.id}", headers=auth_headers,
+                    files={"file": ("s.csv", io.BytesIO(csv), "text/csv")})
+    draft_id = r.json()["id"]
+    preview = client.get(f"/api/imports/{draft_id}/preview", headers=auth_headers).json()
+    confirmed = list(preview.get("confident_matches", [])) + [
+        {"row_id": s["row_id"], "candidate_transaction_id": s["candidate_transaction_id"]}
+        for s in preview.get("review_suggestions", [])]
+    assert [c["candidate_transaction_id"] for c in confirmed] == [est.id], preview
+    r = client.post(f"/api/imports/{draft_id}/commit", headers=auth_headers,
+                    json={"confirmed_matches": confirmed})
+    assert r.status_code == 200 and r.json()["matched_count"] == 1, r.text
+    db.refresh(est)
+    assert (est.amount, est.transaction_type) == (0.80, "income")
+
+    assert client.post(f"/api/imports/{draft_id}/rollback", headers=auth_headers).status_code == 200
+    db.refresh(est)
+    assert (est.amount, est.transaction_type) == (0.0, "expense")
+    assert _changes(db, est.id) == [("expense", "income", "sign-flip"), ("income", "expense", "sign-flip")]
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ Money correctness. Income and spending are now told apart by what a transaction 
 
 - **Link two existing transactions as a transfer.** Tick two transactions on the Transactions page and click **Link as transfer**, for example the bank-side and card-side halves of a credit-card payment. A confirmation shows both rows first. Both then stop counting as income or spending. Open either one and click **Unlink transfer** to undo it. Tally refuses to link a transaction that is already tied to a debt, a savings goal or another transfer.
 - **An Income/Expense choice on each transaction.** Open a transaction and use **Type** to change it. This is how you record a refund: set it to **Expense** and it reduces your spending. Transactions tied to a debt, a savings goal or a transfer have no toggle, because their type follows that link.
+- **Changing a transaction's amount between money out and money in now updates its type to match.** Edit an amount from negative to positive and it becomes income; from positive to negative and it becomes an expense. You can switch it back with the Income/Expense toggle. Transactions tied to a debt, a savings goal or a transfer keep their type. Each automatic change is listed in `transaction_type_changes` with the reason `sign-flip`.
 - **A record of type changes.** A new table, `transaction_type_changes`, lists every transaction whose type was changed by the repair below or by you with the toggle. It only adds information; nothing existing is altered.
 
 ### What the upgrade changes in your data

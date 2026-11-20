@@ -54,12 +54,17 @@ from __future__ import annotations
 import logging
 import sys
 
+from typing import Optional
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+from . import models, money
 
 MARKER = "M-012"
 RECURRING_NOTES_PREFIX = "Auto-generated from recurring:"
 REASON_USER = "user"
+REASON_SIGN_FLIP = "sign-flip"
 M012_REASONS = ("M-012/import", "M-012/recurring", "M-012/other")
 
 log = logging.getLogger("tally.migrations")
@@ -85,6 +90,70 @@ REASON_SQL = f"""
         ELSE 'M-012/other'
     END
 """
+
+
+def plain_row_blocker(tx: models.Transaction, db: Session) -> Optional[str]:
+    """Why ``tx`` is not a plain income/expense row, or None if it is.
+
+    Pairing a transfer or re-typing a row overwrites ``transaction_type``. On a
+    row linked to a debt or a savings goal that strands the link (the debt
+    balance or goal balance stays moved while the row stops saying why), so both
+    actions refuse anything that is not a plain, unlinked income/expense row
+    (v1.4.7, BACKLOG-053 warning). The person unlinks it first, then retries.
+    """
+    if tx.transfer_pair_id is not None or tx.transaction_type in money.TRANSFER_LEG_TYPES:
+        return "already part of a transfer"
+    if tx.debt_id is not None or tx.transaction_type == "debt_payment" or (
+        db.query(models.DebtPayment.id)
+        .filter(models.DebtPayment.transaction_id == tx.id)
+        .first() is not None
+    ):
+        return "linked to a debt"
+    if tx.savings_goal_id is not None or (
+        db.query(models.SavingsContribution.id)
+        .filter(models.SavingsContribution.transaction_id == tx.id)
+        .first() is not None
+    ):
+        return "linked to a savings goal"
+    if tx.transaction_type not in money.FLOW_TYPES:
+        return f"typed '{tx.transaction_type}', not income or expense"
+    return None
+
+
+def retype_on_sign_flip(db: Session, tx: models.Transaction, old_amount: Optional[float]) -> bool:
+    """Re-type a plain row whose amount an edit just moved between money in and
+    money out. Returns True if the type changed.
+
+    "Money in" and "money out" are the two sides of ``money.type_for_amount``:
+    positive is money in; negative and zero are money out. Only a plain, unlinked
+    income/expense row is touched (``plain_row_blocker``): a transfer leg, a debt
+    payment, a savings movement or any row linked to a debt or goal keeps its type,
+    because that type comes from the link. An edit that stays on the same side
+    never re-types, so a refund a person set with the toggle (a positive
+    'expense') keeps its type when its amount is corrected.
+
+    Each change is logged in ``transaction_type_changes`` with reason
+    ``sign-flip``. The start-up check only skips reason ``user``, so a sign-flip
+    can never hide a row from it; and a sign-flip always lands on the type that
+    matches the sign, so it never creates a row that check would report.
+    The caller commits.
+    """
+    if old_amount is None or tx.amount is None:
+        return False
+    target = money.type_for_amount(tx.amount)
+    if money.type_for_amount(old_amount) == target:
+        return False
+    if plain_row_blocker(tx, db) is not None or tx.transaction_type == target:
+        return False
+    db.add(models.TransactionTypeChange(
+        transaction_id=tx.id,
+        from_type=tx.transaction_type,
+        to_type=target,
+        reason=REASON_SIGN_FLIP,
+    ))
+    tx.transaction_type = target
+    return True
+
 
 
 class TypeRepairError(RuntimeError):
