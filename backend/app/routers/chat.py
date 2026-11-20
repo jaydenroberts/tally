@@ -42,7 +42,7 @@ from ..database import get_db
 from .. import models, schemas, type_repair
 from ..auth import get_current_user
 from ..money import spend_filter
-from ..providers import stream_chat, AI_PROVIDER, AI_BASE_URL
+from ..providers import stream_chat, is_configured, AI_PROVIDER, AI_BASE_URL
 from .chat_sessions import get_owned_session
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -880,6 +880,18 @@ CONVERSATION_MISMATCH_DETAIL = (
     "Reload the session and try again."
 )
 
+# BACKLOG-054: returned as a plain 503 BEFORE any session or message row is
+# written, so an unconfigured install never accumulates empty sessions. This is
+# a configuration state, not a failure — distinct from the AUDIT-13 redacted
+# stream error, which stays generic because it may carry provider detail.
+NO_PROVIDER_DETAIL = (
+    "The AI Coach is not set up yet: no AI provider is configured. "
+    "Set the environment variables for your provider on the container — "
+    "AI_PROVIDER=anthropic or AI_PROVIDER=openai together with AI_API_KEY, or "
+    "AI_PROVIDER=ollama together with AI_BASE_URL — then restart the container. "
+    "See docs/ai-coach.md for the details."
+)
+
 # Directive synthetic tool_result content for orphaned tool_call rows
 # (interrupted before their result was recorded). The directive wording is
 # load-bearing: write-capable tools must not be auto-retried on resume.
@@ -1276,6 +1288,14 @@ async def chat(
             status_code=400,
             detail="No persona assigned to this user. Assign a persona in Settings before using the chat.",
         )
+
+    # ── Provider check (BACKLOG-054) ──────────────────────────────────────────
+    # Before session resolution on purpose: the session row and the user turn
+    # are persisted before the stream starts, and a refusal must leave no
+    # trace. Evaluated per request so a corrected environment needs a restart,
+    # not a redeploy.
+    if not is_configured():
+        raise HTTPException(status_code=503, detail=NO_PROVIDER_DETAIL)
 
     # ── Session resolution (BACKLOG-016) ──────────────────────────────────────
     # Validate the trailing user turn before creating anything so a bad payload

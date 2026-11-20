@@ -27,6 +27,16 @@ def _reset_auth_rate_limits():
     yield
     _auth.reset_rate_limits()
 
+@pytest.fixture(autouse=True)
+def _ai_provider_configured(monkeypatch):
+    """BACKLOG-054: POST /api/chat refuses with 503 when no AI provider is
+    configured. The suite mocks ``stream_chat`` and never contacts a provider,
+    so give every test a placeholder key by default. The BACKLOG-054 tests
+    clear it explicitly to exercise the refusal."""
+    from app import providers
+    monkeypatch.setattr(providers, "AI_API_KEY", providers.AI_API_KEY or "not-a-real-key")
+
+
 TEST_DATABASE_URL = "sqlite:///:memory:"
 
 engine = create_engine(

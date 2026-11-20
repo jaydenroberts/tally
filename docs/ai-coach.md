@@ -99,7 +99,7 @@ The AI Coach sends your financial data (filtered by the persona's data access le
 | OpenAI | Sent to OpenAI's API as part of each conversation, under OpenAI's terms |
 | Ollama (or another local OpenAI-compatible endpoint) | Stays on your own network — nothing leaves your server |
 
-If no API key is available — neither `AI_API_KEY` nor `ANTHROPIC_API_KEY` — no AI request is ever made and nothing leaves your machine. Note that this is governed by the key alone: `AI_PROVIDER` defaults to `anthropic`, so leaving it unset does **not** disable the feature. See below for what that looks like in the app.
+If no AI configuration is present — no `AI_API_KEY`, no `ANTHROPIC_API_KEY`, no `AI_BASE_URL`, and none of the Anthropic SDK's own credential variables such as `ANTHROPIC_AUTH_TOKEN` — no AI request is ever made and nothing leaves your machine. Note that this is governed by those settings alone: `AI_PROVIDER` defaults to `anthropic`, so leaving it unset does **not** disable the feature. A provider can also be reachable with no key at all: `AI_PROVIDER=openai` or `AI_PROVIDER=ollama` pointed at a local or self-hosted endpoint via `AI_BASE_URL` needs no API key. See below for what that looks like in the app.
 
 If you're concerned about privacy but still want AI coaching, use a persona with a lower data access level (**Summary** or **Readonly**), or point `AI_PROVIDER` at a local Ollama instance so nothing leaves your server.
 
@@ -111,7 +111,9 @@ There is no automatic expiry or cleanup — a conversation is kept until you del
 
 ### If You Haven't Configured a Provider
 
-**AI Coach** always appears in the sidebar, whether or not you've set `AI_PROVIDER` or an API key — Tally doesn't hide it based on configuration. If you open it and send a message with no provider configured, you'll get a generic error saying the assistant couldn't finish responding. That's expected: it means no provider is set up, not that something is broken. If you've deliberately left AI turned off, you can ignore it — the rest of Tally is unaffected.
+**AI Coach** always appears in the sidebar, whether or not you've set `AI_PROVIDER` or an API key — Tally doesn't hide it based on configuration. If you open it and send a message with no provider configured, Tally replies that the AI Coach is not set up yet and names the settings it needs: `AI_PROVIDER=anthropic` or `AI_PROVIDER=openai` together with `AI_API_KEY`, or `AI_PROVIDER=ollama` together with `AI_BASE_URL`. Set them on the container and restart it — environment variables are read at startup. Nothing is saved when this happens: no conversation is created and your message is not stored. If you've deliberately left AI turned off, you can ignore it — the rest of Tally is unaffected.
+
+A different message — "The assistant hit an error and couldn't finish responding", with a reference code — means a provider *is* configured but the request to it failed (a wrong key, an unreachable Ollama address, a provider outage). The reference code matches a line in the container log that says what went wrong.
 
 ---
 

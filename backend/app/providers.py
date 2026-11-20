@@ -31,6 +31,34 @@ AI_MODEL    = os.getenv("AI_MODEL", "")
 AI_BASE_URL = os.getenv("AI_BASE_URL", "")
 
 
+# Credentials the Anthropic SDK finds on its own when Tally passes no key.
+_ANTHROPIC_SDK_CREDENTIAL_ENV = (
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_PROFILE",
+    "ANTHROPIC_IDENTITY_TOKEN",
+    "ANTHROPIC_IDENTITY_TOKEN_FILE",
+)
+
+
+def is_configured() -> bool:
+    """BACKLOG-054: is there enough configuration to reach *any* provider?
+
+    Mirrors ``stream_chat`` exactly, so a setup that can chat is never refused:
+
+    * ``openai`` / ``ollama`` go to the OpenAI-compatible client, which works
+      with a key, or with only a base URL (a keyless local server).
+    * Every other value, including an unrecognised one, goes to the Anthropic
+      client, which needs a key: ``AI_API_KEY``/``ANTHROPIC_API_KEY``, or a
+      credential the Anthropic SDK reads from its own environment variables.
+
+    Reads the module globals at call time so tests (and a future runtime
+    reload) can change them without re-importing.
+    """
+    if AI_PROVIDER in ("openai", "ollama"):
+        return bool(AI_API_KEY or AI_BASE_URL)
+    return bool(AI_API_KEY) or any(os.getenv(n) for n in _ANTHROPIC_SDK_CREDENTIAL_ENV)
+
+
 # ---------------------------------------------------------------------------
 # Shared type aliases
 # ---------------------------------------------------------------------------

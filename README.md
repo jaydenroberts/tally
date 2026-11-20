@@ -47,11 +47,21 @@ A self-hosted personal finance web application for households. Track accounts, t
 
 ### Option 1 — Docker run (quick start)
 
-> **Warning:** Tally runs as a **non-root** user inside the container. The host
-> directory you mount at `/data` must be **writable by that user**, or Tally will
-> fail to create its database on first start. On Unraid, `/mnt/user/appdata/...`
-> is writable by default. On a plain Linux host, make the data directory
-> writable by the container's user first (see [Getting Started](docs/getting-started.md)).
+> **Warning:** Tally runs as a **non-root** user (ID `999`) inside the container.
+> The host directory you mount at `/data` must be **writable by that user**, or
+> Tally cannot create its database. This is **not** automatic, on Unraid or
+> anywhere else: if the folder does not exist yet, Docker creates it owned by
+> `root`, and Tally cannot write to it. Before the first start, create the folder
+> and give it to ID 999 on the host:
+>
+> ```bash
+> sudo mkdir -p <your data folder>
+> sudo chown -R 999:999 <your data folder>
+> ```
+>
+> (On Unraid the template's default folder is `/mnt/user/appdata/tally/data`.) If
+> the folder is not writable, Tally stops at startup with a message that names the
+> folder and the exact command to run. See [Getting Started](docs/getting-started.md).
 
 ```bash
 # Generate a secret key
