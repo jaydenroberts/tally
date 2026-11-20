@@ -4,7 +4,7 @@ All notable changes to Tally are documented here. This project follows [Keep a C
 
 ---
 
-## [1.4.7] - 2026-11-19
+## [1.4.7] - 2026-11-20
 
 Money correctness. Income and spending are now told apart by what a transaction *is*, not by whether its amount is positive or negative, so a refund can reduce your spending instead of counting as income. To make that safe, this release first repairs the transactions already in your database, and records every row it changes.
 
