@@ -6,7 +6,14 @@ FROM node:26-alpine AS frontend-builder
 WORKDIR /build
 
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install --frozen-lockfile 2>/dev/null || npm install
+# npm ci installs exactly what package-lock.json records and fails if the
+# lockfile and package.json disagree; it never rewrites the lockfile.
+# --ignore-scripts stops dependency lifecycle scripts (preinstall/postinstall)
+# from running at build time — the install-time vector the 2026 npm worms
+# used, and the same posture dependency-audit.yml takes. The built dist is
+# byte-identical with and without scripts on this lockfile (checked when
+# this line landed in v1.4.7).
+RUN npm ci --ignore-scripts
 
 COPY frontend/ .
 RUN npx vite build --outDir /frontend-dist --emptyOutDir
